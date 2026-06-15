@@ -1,6 +1,8 @@
 # Runtime data may contain OAuth tokens, passwords, cookies and personal data.
 data/*
 !data/.gitkeep
+!data/__init__.py
+!data/paths.py
 
 # Local secrets and environment files
 .env
@@ -46,7 +48,7 @@ coverage.xml
 htmlcov/
 
 # Build and release artifacts
-build/
+temp/
 dist/
 *.egg-info/
 

@@ -13,4 +13,4 @@ jobs:
         with:
           python-version: "3.13"
       - name: Compile Python sources
-        run: python -m compileall -q godisalotachat plugins server run_webbased.py
+        run: python -m compileall -q core data modules shared run_webbased.py

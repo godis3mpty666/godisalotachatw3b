@@ -1,0 +1,24 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Spotis3mptify Overlay</title><link rel="stylesheet" href="/static/css/overlay.css?v=__VERSION__"></head><body class="transparent spotifyCustom">
+<div id="spotifyStage">
+  <div id="bgEl" class="ovEl ovBg" data-el="background"></div>
+  <div id="coverEl" class="ovEl coverEl" data-el="cover"><div class="disc" id="spDisc"></div><img id="spCover" alt=""></div>
+  <div id="titleEl" class="ovEl textEl" data-el="title"><div class="textTrack"><span id="spTitle">Kein Song aktiv</span><span class="textClone" aria-hidden="true"></span></div></div>
+  <div id="artistEl" class="ovEl textEl" data-el="artist"><div class="textTrack"><span id="spArtist"></span><span class="textClone" aria-hidden="true"></span></div></div>
+  <div id="extrasLayer"></div>
+</div>
+<button id="editOverlayBtn">Edit</button>
+<aside id="editPanel">
+  <h2>Spotis3mptify Overlay</h2>
+  <p>Elemente mit der Maus verschieben, an der Ecke vergrößern. Ecke rechts unten zum Resizen.</p>
+  <div class="editBtns">
+    <button id="addTextEl">Text +</button>
+    <button id="addRectEl">Rechteck +</button>
+    <button id="addCircleEl">Kreis +</button>
+    <button id="saveOverlay">Speichern</button>
+    <button id="closeOverlayEdit">Schließen</button>
+  </div>
+  <label class="selectLine">Element auswählen<select id="selectedElement"></select></label>
+  <div id="elementEditor"></div>
+  <div id="saveStatus" style="margin-top:12px;padding:8px;border-radius:8px;display:none;font-size:12px;"></div>
+</aside>
+<script src="/static/js/overlay_spotify.js?v=__VERSION__"></script></body></html>
