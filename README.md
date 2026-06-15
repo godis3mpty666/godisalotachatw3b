@@ -40,4 +40,8 @@ lokale Laufzeitdaten werden nicht versioniert.
 4. `py -m compileall -q godisalotachat plugins server run_webbased.py` ausfuehren.
 5. Pull Request mit einer kurzen Beschreibung und Testhinweisen erstellen.
 
+## Contributors
+
+- [psychoedge](https://github.com/psychoedge)
+
 Historische Versionshinweise stehen in `README.txt`.
