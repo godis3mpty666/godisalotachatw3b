@@ -1,0 +1,58 @@
+# Runtime data may contain OAuth tokens, passwords, cookies and personal data.
+data/*
+!data/.gitkeep
+
+# Local secrets and environment files
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.p12
+*.pfx
+*.crt
+*.cer
+*credentials*.json
+*oauth_cache*.json
+*tokens*.json
+*state*.json
+
+# Browser profiles and session data
+browser_profile*/
+**/browser_profile*/
+**/*_profile/
+**/profile/
+
+# Logs, databases and temporary runtime output
+*.log
+*.sqlite
+*.sqlite3
+*.db
+*.tmp
+*.bak
+logs/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+coverage.xml
+.coverage
+htmlcov/
+
+# Build and release artifacts
+build/
+dist/
+*.egg-info/
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+Desktop.ini

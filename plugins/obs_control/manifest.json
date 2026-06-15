@@ -1,0 +1,6 @@
+{
+  "id": "obs_control",
+  "name": "OBS Control",
+  "version": "1.2.0",
+  "description": "OBS control plugin that uses only the main tool OBS connection. No own OBS login or second websocket."
+}

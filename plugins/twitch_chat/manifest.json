@@ -1,0 +1,6 @@
+{
+  "id": "twitch_chat",
+  "name": "Twitch Chat",
+  "version": "1.7.8",
+  "description": "Twitch IRC chat reader using central main-tool platform auth/settings, with automatic token refresh, reconnect handling, metrics, emotes, and viewer join desktop alerts."
+}

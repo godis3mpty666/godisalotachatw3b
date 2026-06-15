@@ -1,0 +1,6 @@
+{
+  "id": "meld_control",
+  "name": "Meld Control",
+  "version": "1.2.1",
+  "description": "Uses central Meld Studio platform connection settings from the main tool and keeps route/browser settings inside the plugin."
+}

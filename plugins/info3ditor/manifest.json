@@ -1,0 +1,6 @@
+{
+  "id": "info3ditor",
+  "name": "info3ditor",
+  "version": "0.12",
+  "description": "Speichert Streaminfo-Presets und sendet sie an die zentral verbundenen Plattformen."
+}

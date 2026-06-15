@@ -1,0 +1,15 @@
+{
+  "id": "spotis3mptify",
+  "version": "0.07",
+  "routes": [
+    "/overlay/spotify",
+    "/customoverlay",
+    "/browser/title",
+    "/browser/artist",
+    "/browser/song",
+    "/browser/cover",
+    "/browser/line-up",
+    "/browser/line-down"
+  ],
+  "data": "data/plugins/spotis3mptify"
+}

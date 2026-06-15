@@ -1,0 +1,6 @@
+{
+  "id": "kick_chat",
+  "name": "Kick Chat",
+  "version": "2.1.3",
+  "entry": "plugin.py"
+}

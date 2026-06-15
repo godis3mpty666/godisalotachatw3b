@@ -1,0 +1,8 @@
+{
+  "id": "youtube_chat",
+  "name": "YouTube Chat",
+  "version": "1.0.23",
+  "description": "YouTube Live chat reader/writer using central godisalotachat YouTube OAuth data. Stable OAuth handoff, faster startup, resilient live chat lookup and popout web-chat fallback when videos.list is forbidden.",
+  "entry": "plugin.py",
+  "display_name": "YouTube Chat"
+}
