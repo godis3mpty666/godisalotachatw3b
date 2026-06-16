@@ -9,6 +9,7 @@ APP_NAME = "godisalotachat webbased"
 VERSION = APP_VERSION
 
 PLATFORM_ORDER = ["twitch", "tiktok", "youtube", "kick", "spotify", "openai", "meld", "obs"]
+CHAT_INPUT_PLUGIN_IDS = {"twitch_chat", "tiktok_live", "youtube_chat", "kick_chat"}
 CALLBACK_PORT = 5173
 MAIN_PORT = 17890
 OPENAI_API_BASE = "https://api.openai.com/v1"
@@ -262,8 +263,43 @@ class WebbasedPluginHost:
             self.state.messages.append(item)
             if len(self.state.messages) > 300:
                 self.state.messages = self.state.messages[-300:]
+            self._dispatch_chat_message(plugin_id, item)
         except Exception as exc:
             self.log(plugin_id, f"emit_message failed: {exc}")
+
+    def _dispatch_chat_message(self, plugin_id: str, item: dict) -> None:
+        try:
+            source_plugin_id = str(item.get("source_plugin_id") or plugin_id or "").strip()
+            if source_plugin_id not in CHAT_INPUT_PLUGIN_IDS and str(plugin_id or "").strip() not in CHAT_INPUT_PLUGIN_IDS:
+                return
+            message_type = str(item.get("message_type") or "chat").strip().lower()
+            if message_type not in {"chat", "message", "comment"}:
+                return
+            if not str(item.get("text") or "").strip():
+                return
+            targets = []
+            for target_id, plugin in list(getattr(self.state, "plugin_instances", {}).items()):
+                if target_id == source_plugin_id or target_id in CHAT_INPUT_PLUGIN_IDS:
+                    continue
+                handler = getattr(plugin, "on_message", None)
+                if callable(handler):
+                    targets.append((target_id, handler))
+            if not targets:
+                return
+
+            msg = dict(item)
+            msg.setdefault("source_platform", item.get("platform") or "")
+
+            def run_dispatch() -> None:
+                for target_id, handler in targets:
+                    try:
+                        handler(dict(msg))
+                    except Exception as exc:
+                        self.log(target_id, f"on_message failed: {exc}")
+
+            threading.Thread(target=run_dispatch, daemon=True, name="chat-command-dispatch").start()
+        except Exception as exc:
+            self.log("chat-dispatch", f"failed: {exc}")
 
     def emit_metric(self, plugin_id: str, payload: dict) -> None:
         try:
@@ -333,7 +369,7 @@ class WebbasedPluginManager:
         if self.started:
             return
         self.started = True
-        for plugin_id in ("twitch_chat", "tiktok_live", "youtube_chat", "kick_chat", "botalot", "bridg3alot"):
+        for plugin_id in ("twitch_chat", "tiktok_live", "youtube_chat", "kick_chat", "spotis3mptify", "gam3pick3r", "botalot", "bridg3alot"):
             self.start_plugin(plugin_id)
 
     def load_plugin(self, plugin_id: str):
@@ -1308,6 +1344,8 @@ class AppState:
             platform_for_plugin = {"twitch_chat": "twitch", "tiktok_live": "tiktok", "youtube_chat": "youtube", "kick_chat": "kick"}.get(plugin_id)
             if platform_for_plugin and "enabled" not in pcfg:
                 return bool(s.get("platforms", {}).get(platform_for_plugin, {}).get("enabled", False))
+            if plugin_id == "spotis3mptify" and "enabled" not in pcfg:
+                return bool(s.get("platforms", {}).get("spotify", {}).get("enabled", False))
             return bool(pcfg.get("enabled", False))
         except Exception:
             return False

@@ -138,7 +138,7 @@ _migrate_root_data_files_to_subdirs()
 # ======================= DEFAULTS =======================
 CLIENT_ID_DEFAULT              = "YOUR_SPOTIFY_CLIENT_ID_HERE"
 CLIENT_SECRET_DEFAULT          = "YOUR_SPOTIFY_CLIENT_SECRET_HERE"
-PORT_DEFAULT                   = 5173
+PORT_DEFAULT                   = 17891
 SHARED_SECRET_DEFAULT          = ""   # optional header X-Auth for POSTs
 REDIRECT_URI_DEFAULT           = ""
 

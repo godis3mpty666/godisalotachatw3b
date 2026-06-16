@@ -305,13 +305,16 @@ async function renderPlatforms(){
     e.preventDefault();
     const form=a.closest("form");
     const pf=form.dataset.platform;
+    const oauthUrl=`/oauth/start/${a.dataset.platform}/${a.dataset.account}`;
+    const oauthWindow=window.open("about:blank",`oauth_${a.dataset.platform}_${a.dataset.account}`,"width=1000,height=800");
     const fd=new FormData(form);
     settingsCache = settingsCache || await api("/api/settings");
     settingsCache.platforms[pf] = settingsCache.platforms[pf] || {};
     for(const [k,v] of fd.entries()) settingsCache.platforms[pf][k] = (k==="enabled") ? (v==="true") : String(v);
     if(pf === "spotify"){ delete settingsCache.platforms[pf].main; delete settingsCache.platforms[pf].bot; }
     await api("/api/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(settingsCache)});
-    window.open(`/oauth/start/${a.dataset.platform}/${a.dataset.account}`,`oauth_${a.dataset.platform}_${a.dataset.account}`,"width=1000,height=800");
+    if(oauthWindow) oauthWindow.location.href=oauthUrl;
+    else window.open(oauthUrl,`oauth_${a.dataset.platform}_${a.dataset.account}`,"width=1000,height=800");
   });
   $$(".disconnect").forEach(b=>b.onclick=async()=>{await api(`/api/disconnect/${b.dataset.platform}/${b.dataset.account}`,{method:"POST"}); location.reload();});
 }

@@ -21,6 +21,7 @@ from shared.models import PluginStatus
 from shared.plugin_base import PluginHost, ProviderPlugin
 
 PLUGIN_DIR = Path(__file__).resolve().parent
+DEFAULT_API_PORT = 17891
 
 def _main_data_dir(plugin_name: str) -> Path:
     current = Path(__file__).resolve()
@@ -391,7 +392,7 @@ class Spotis3mptifyPlugin(ProviderPlugin):
             {'key': 'autoconnect', 'type': 'bool', 'label': 'Beim App-Start automatisch verbinden', 'default': True, 'tab': 'Allgemein'},
             {'key': 'button_open_dashboard', 'type': 'button', 'label': 'Dashboard', 'button_text': 'Dashboard mit Cover Ã¶ffnen', 'tab': 'Allgemein'},
             {'key': 'button_open_overlay', 'type': 'button', 'label': 'Browseranzeige', 'button_text': 'Browseranzeige Ã¶ffnen', 'tab': 'Allgemein'},
-            {'key': 'port', 'type': 'number', 'label': 'Browser/API Port', 'default': 5173, 'min': 1024, 'max': 65535, 'tab': 'Browser'},
+            {'key': 'port', 'type': 'number', 'label': 'Browser/API Port', 'default': DEFAULT_API_PORT, 'min': 1024, 'max': 65535, 'tab': 'Browser'},
             {'key': 'custom_overlay_url', 'label': 'Browseranzeige URL', 'readonly': True, 'tab': 'Browser'},
             {'key': 'poll_ms', 'type': 'number', 'label': 'NowPlaying Poll ms', 'default': 2000, 'min': 500, 'max': 60000, 'tab': 'Browser'},
             {'key': 'cover_image_size', 'type': 'number', 'label': 'CovergrÃ¶ÃŸe Datei', 'default': 640, 'min': 64, 'max': 640, 'tab': 'Browser'},
@@ -422,8 +423,8 @@ class Spotis3mptifyPlugin(ProviderPlugin):
             'client_id': '',
             'client_secret': '',
             'redirect_uri': '',
-            'port': 5173,
-            'custom_overlay_url': 'http://127.0.0.1:5173/customoverlay',
+            'port': DEFAULT_API_PORT,
+            'custom_overlay_url': f'http://127.0.0.1:{DEFAULT_API_PORT}/customoverlay',
             'poll_ms': 2000,
             'cover_image_size': 640,
             'sr_command': '!sr',
@@ -521,7 +522,10 @@ class Spotis3mptifyPlugin(ProviderPlugin):
 
     def _merged_config(self, settings: dict[str, Any]) -> dict[str, Any]:
         _migrate_legacy_runtime_files()
-        port = int(settings.get('port') or 5173)
+        port = int(settings.get('port') or DEFAULT_API_PORT)
+        if port == 5173:
+            port = DEFAULT_API_PORT
+            settings['port'] = port
         return {
             'enabled': _as_bool(settings.get('enabled'), True),
             'client_id': _safe_text(settings.get('client_id')),
@@ -627,7 +631,9 @@ class Spotis3mptifyPlugin(ProviderPlugin):
             return False, str(exc)
 
     def overlay_url(self) -> str:
-        port = int((self._settings or {}).get('port') or 5173)
+        port = int((self._settings or {}).get('port') or DEFAULT_API_PORT)
+        if port == 5173:
+            port = DEFAULT_API_PORT
         return f'http://127.0.0.1:{port}/customoverlay'
 
     def open_overlay(self) -> None:
@@ -718,7 +724,9 @@ class Spotis3mptifyPlugin(ProviderPlugin):
             self._reply(platform, f'@{username} bitte Song oder Spotify-Link nach {cmd} schreiben.')
 
     def _post_json(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
-        port = int((self._settings or {}).get('port') or 5173)
+        port = int((self._settings or {}).get('port') or DEFAULT_API_PORT)
+        if port == 5173:
+            port = DEFAULT_API_PORT
         url = f'http://127.0.0.1:{port}{path}'
         data = json.dumps(payload, ensure_ascii=False).encode('utf-8')
         req = urllib.request.Request(url, data=data, method='POST')
@@ -787,25 +795,6 @@ class Spotis3mptifyPlugin(ProviderPlugin):
         host = self._host
         if host is None:
             return False
-        # Twitch can already be written centrally by godisalotachat.
-        try:
-            if platform == 'twitch' and hasattr(host, 'send_platform_message'):
-                return bool(host.send_platform_message('twitch', message))
-        except Exception:
-            pass
-        # TikTok writing currently lives in botalot's browser writer. Reuse it instead of rebuilding a second browser login.
-        try:
-            botalot = host.get_plugin('botalot') if hasattr(host, 'get_plugin') else None
-            outputs = getattr(botalot, '_outputs', None)
-            if outputs is not None and hasattr(outputs, 'send_to_source'):
-                settings = dict(getattr(botalot, '_settings', {}) or {})
-                if platform == 'tiktok':
-                    settings.setdefault('write_tiktok', True)
-                if platform == 'twitch':
-                    settings.setdefault('write_twitch', True)
-                return bool(outputs.send_to_source(settings, message, platform))
-        except Exception as exc:
-            self._log(f'Antwort Ã¼ber botalot fehlgeschlagen: {exc}')
         try:
             if hasattr(host, 'send_platform_message'):
                 return bool(host.send_platform_message(platform, message))

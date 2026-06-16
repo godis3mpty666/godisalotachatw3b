@@ -50,8 +50,6 @@ class Bridg3alotPlugin(ProviderPlugin):
         self._recent_messages: dict[str, float] = {}
         self._recent_outbound_lock = threading.Lock()
         self._recent_outbound: dict[str, float] = {}
-        self._host_emit_original = None
-        self._host_emit_filter_installed = False
 
     def settings_schema(self) -> list[dict[str, Any]]:
         def tab(name: str, items: list[dict[str, Any]], *, en: str | None = None) -> list[dict[str, Any]]:
@@ -135,14 +133,11 @@ class Bridg3alotPlugin(ProviderPlugin):
         self._migrate_old_botalot_bridge_settings(self._settings)
         self._apply_platform_settings(self._settings)
         self._enabled = as_bool(self._settings.get('enabled'), True)
-        if self._enabled:
-            self._install_host_emit_filter(host)
         host.set_status(self.plugin_id, PluginStatus('connected' if self._enabled else 'disabled', f'{PLUGIN_NAME}: ' + ('aktiv' if self._enabled else 'deaktiviert')))
         host.log(self.plugin_id, f'{PLUGIN_NAME} gestartet. Bridge: ' + ('aktiv' if as_bool(self._settings.get('bridge_enabled'), True) else 'aus'))
 
     def stop(self, *args, **kwargs) -> None:
         self._enabled = False
-        self._restore_host_emit_filter()
         if self._host is not None:
             self._host.set_status(self.plugin_id, PluginStatus('stopped', 'Stopped'))
 
@@ -469,82 +464,7 @@ class Bridg3alotPlugin(ProviderPlugin):
             return True
         return any(phrase in low_text for phrase in ('the community has crowned ', 'the random picker chose '))
 
-    def _install_host_emit_filter(self, host: Any) -> None:
-        if host is None or self._host_emit_filter_installed:
-            return
-        try:
-            current_emit = getattr(host, 'emit_message')
-        except Exception:
-            return
-        if getattr(host, '_bridg3alot_emit_filter_active', False):
-            return
-        self._host_emit_original = current_emit
-        plugin_self = self
-
-        def bridg3alot_emit_message_filter(plugin_id: str, payload: dict[str, Any]) -> None:
-            try:
-                if plugin_self._handle_host_emit_payload(plugin_id, payload):
-                    return None
-            except Exception as exc:
-                plugin_self._log(f'Host-Emit-Filter Fehler: {exc}')
-            return current_emit(plugin_id, payload)
-
-        try:
-            setattr(host, 'emit_message', bridg3alot_emit_message_filter)
-            setattr(host, '_bridg3alot_emit_filter_active', True)
-            self._host_emit_filter_installed = True
-        except Exception:
-            self._host_emit_original = None
-            self._host_emit_filter_installed = False
-
-    def _restore_host_emit_filter(self) -> None:
-        host = self._host
-        if host is None or not self._host_emit_filter_installed or self._host_emit_original is None:
-            return
-        try:
-            setattr(host, 'emit_message', self._host_emit_original)
-            setattr(host, '_bridg3alot_emit_filter_active', False)
-        except Exception:
-            pass
-        self._host_emit_original = None
-        self._host_emit_filter_installed = False
-
-    def _handle_host_emit_payload(self, plugin_id: str, payload: Any) -> bool:
-        """Return True when payload must be swallowed before Desktop/Browser/Dashboard."""
-        if not self._enabled or not isinstance(payload, dict):
-            return False
-        msg_type = self._message_type(payload)
-        if payload.get('metric_only') or msg_type in {'viewer_count', 'followers_count', 'metric', 'stats', 'live_status', 'is_live'}:
-            return False
-        if msg_type not in {'chat', 'message', 'comment'}:
-            return False
-
-        platform = self._message_platform(plugin_id, payload)
-        username = self._message_username(payload)
-        text = self._message_text(payload)
-        channel = self._message_channel(payload)
-        if not platform or platform not in {'twitch', 'tiktok', 'youtube', 'kick'} or not text:
-            return False
-
-        # Own bridge echoes must not appear again in Desktopwindow, Browserwindow or Dashboard chat.
-        if self._is_recent_outbound_echo(platform, username, text) or self._is_echo_text(text):
-            return True
-
-        # gam3pick3r announces its winner to every enabled platform itself. Do not bridge those read-backs.
-        if self._is_gamepicker_system_text(text):
-            return False
-
-        settings = self._settings_with_platforms(self._settings)
-        if not self._should_read_platform(settings, platform):
-            return False
-        if self._is_recent_duplicate(platform, username, text, ttl=12.0):
-            return False
-
-        self._maybe_bridge_message_async(settings, platform, username, text, channel)
-        return False
-
     def on_message(self, msg: Any) -> None:
-        # Compatibility path for plugins that still call a bridge plugin directly.
         if not self._enabled:
             return
         msg_type = self._message_type(msg)
