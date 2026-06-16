@@ -98,6 +98,8 @@ class TwitchChatPlugin(ThreadedPlugin):
         self._processed_join_names: set[str] = set()
         self._processed_join_seen_at: dict[str, float] = {}
         self._host: PluginHost | None = None
+        self._send_lock = threading.RLock()
+        self._current_channel: str = ''
     def settings_schema(self):
         # Login/auth data now lives in the main tool under Plattformen/Platforms -> Twitch.
         # Keep this plugin overlay limited to Twitch-chat specific behavior only.
@@ -1313,6 +1315,27 @@ class TwitchChatPlugin(ThreadedPlugin):
         except Exception:
             pass
         self._sock = None
+        self._current_channel = ''
+
+    def send_message(self, message: str, settings: dict | None = None, host: PluginHost | None = None):
+        text = self._normalize_chat_text(str(message or '')).replace('\r', ' ').replace('\n', ' ').strip()
+        if not text:
+            return False, 'Twitch message is empty.'
+        channel = self._current_channel or self._clean_channel((settings or {}).get('channel', ''))
+        if not channel:
+            return False, 'Twitch channel is unknown.'
+        sock = self._sock
+        if sock is None:
+            return False, 'Twitch IRC is not connected.'
+        if len(text) > 450:
+            text = text[:447].rstrip() + '...'
+        try:
+            with self._send_lock:
+                sock.sendall(f'PRIVMSG #{channel} :{text}\r\n'.encode('utf-8'))
+            return True, f'Twitch message sent to #{channel}.'
+        except Exception as exc:
+            return False, f'Twitch send failed: {exc}'
+
     def run(self, settings, host: PluginHost):
         self._host = host
         base_settings = dict(settings or {})
@@ -1369,6 +1392,7 @@ class TwitchChatPlugin(ThreadedPlugin):
                     raise RuntimeError(message)
                 reconnect_delay = 3.0
                 host.set_status(self.plugin_id, PluginStatus('connected', f'Reading #{channel} as {username}'))
+                self._current_channel = channel
                 self._maybe_poll_metrics(host, settings, cache, channel, force=True)
                 while not self._stop.is_set():
                     try:
@@ -1460,6 +1484,7 @@ class TwitchChatPlugin(ThreadedPlugin):
                 except Exception:
                     pass
                 self._sock = None
+                self._current_channel = ''
             break
         host.set_status(self.plugin_id, PluginStatus('disconnected', 'IRC stopped.'))
 def create_plugin():

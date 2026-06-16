@@ -323,7 +323,16 @@ class WebbasedPluginHost:
         try:
             plugin = self.state.plugin_instances.get(f"{platform}_chat") or self.state.plugin_instances.get(platform)
             if plugin is not None and hasattr(plugin, "send_message"):
-                return bool(plugin.send_message(message, settings=self.state.plugin_settings(getattr(plugin, "plugin_id", f"{platform}_chat")), host=self))
+                result = plugin.send_message(message, settings=self.state.plugin_settings(getattr(plugin, "plugin_id", f"{platform}_chat")), host=self)
+                if isinstance(result, tuple):
+                    ok = bool(result[0]) if result else False
+                    detail = str(result[1]) if len(result) > 1 else ""
+                    self.log("platform-send", f"{platform}: {detail or ('sent' if ok else 'failed')}")
+                    return ok
+                ok = bool(result)
+                self.log("platform-send", f"{platform}: {'sent' if ok else 'failed'}")
+                return ok
+            self.log("platform-send", f"{platform}: no send_message handler")
         except Exception as exc:
             self.log("platform-send", f"{platform}: {exc}")
         return False

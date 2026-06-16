@@ -813,9 +813,12 @@ class Spotis3mptifyPlugin(ProviderPlugin):
             return False
         try:
             if hasattr(host, 'send_platform_message'):
-                return bool(host.send_platform_message(platform, message))
-        except Exception:
-            pass
+                ok = bool(host.send_platform_message(platform, message))
+                if not ok:
+                    self._log(f'Chat-Antwort an {platform} fehlgeschlagen: {message}')
+                return ok
+        except Exception as exc:
+            self._log(f'Chat-Antwort an {platform} fehlgeschlagen: {exc}')
         return False
 
     def on_settings_button(self, key: str, host: PluginHost | None = None, parent: Any = None) -> bool:
