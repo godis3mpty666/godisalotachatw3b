@@ -83,22 +83,114 @@ class WebbasedPluginHost:
         self.state = state
 
     def platform_settings(self, platform: str) -> dict:
+        """Return normalized central platform configuration for plugins.
+
+        Host is the single source for OAuth/account/token data. Plugins should
+        not keep their own OAuth copies and should only keep plugin-specific
+        behavior settings.
+        """
         try:
-            cfg = dict(self.state.settings().get("platforms", {}).get(platform, {}) or {})
-            cfg.setdefault("main_account", cfg.get("main") or cfg.get("channel") or "")
-            cfg.setdefault("bot_account", cfg.get("bot") or cfg.get("bot_username") or "")
-            cfg.setdefault("channel", cfg.get("main") or cfg.get("main_account") or "")
-            for account, prefix in (("main", "main_"), ("bot", "")):
+            platform = str(platform or "").strip().lower()
+            settings = self.state.settings()
+
+            # Some bridge-style plugins need the complete platform map, while
+            # older plugins ask for one platform at a time. Support both. This
+            # is important for bridg3alot: without the full map it marks every
+            # target as inactive/non-writable and silently skips bridging.
+            if not platform:
+                out = {}
+                for name in PLATFORM_ORDER:
+                    try:
+                        out[name] = self.platform_settings(name)
+                    except Exception:
+                        out[name] = dict(settings.get("platforms", {}).get(name, {}) or {})
+                return out
+
+            cfg = dict(settings.get("platforms", {}).get(platform, {}) or {})
+
+            def clean_account(value):
+                return str(value or "").strip().lstrip("@#").strip()
+
+            if platform in ("twitch", "youtube", "kick"):
+                main = clean_account(
+                    cfg.get("main")
+                    or cfg.get("main_account")
+                    or cfg.get("channel")
+                    or cfg.get("main_username")
+                    or cfg.get("main_channel")
+                    or cfg.get("main_channel_title")
+                    or cfg.get("channel_slug")
+                )
+                bot = clean_account(
+                    cfg.get("bot")
+                    or cfg.get("bot_account")
+                    or cfg.get("bot_username")
+                    or cfg.get("username")
+                    or cfg.get("bot_channel")
+                    or cfg.get("bot_channel_title")
+                )
+                if main:
+                    cfg["main"] = main
+                    cfg["main_account"] = main
+                    cfg["channel"] = main
+                else:
+                    cfg.setdefault("main", "")
+                    cfg.setdefault("main_account", "")
+                    cfg.setdefault("channel", "")
+                if bot:
+                    cfg["bot"] = bot
+                    cfg["bot_account"] = bot
+                    cfg["bot_username"] = bot
+                    cfg["username"] = bot
+                else:
+                    cfg.setdefault("bot", "")
+                    cfg.setdefault("bot_account", "")
+                    cfg.setdefault("bot_username", "")
+                    cfg.setdefault("username", "")
+
+            accounts = ("main",) if platform == "spotify" else ("main", "bot")
+            for account in accounts:
                 token = _json_load(self.state.auth_dir / f"{platform}_{account}.json", {})
                 if not isinstance(token, dict):
                     continue
-                if token.get("access_token"):
-                    cfg[prefix + "access_token"] = token["access_token"]
-                if token.get("refresh_token"):
-                    cfg[prefix + "refresh_token"] = token["refresh_token"]
+                prefix = "" if (platform == "spotify" or account == "bot") else "main_"
+                for key in ("access_token", "refresh_token", "expires_in", "expires_at", "scope", "token_type", "saved_at"):
+                    value = token.get(key)
+                    if value not in (None, ""):
+                        cfg[prefix + key] = value
+                if account == "bot":
+                    # Canonical bot token stays access_token/refresh_token.
+                    # bot_* aliases only exist for legacy call sites.
+                    if token.get("access_token"):
+                        cfg["bot_access_token"] = token.get("access_token")
+                    if token.get("refresh_token"):
+                        cfg["bot_refresh_token"] = token.get("refresh_token")
+
+            # YouTube keeps separate auth files for main and bot. The plugin now
+            # consumes the same canonical shape as Twitch/Kick: main_* for the
+            # broadcaster token and plain access_token/refresh_token for bot.
+            if platform == "youtube":
+                cfg.setdefault("redirect_port", 17566)
+                cfg.setdefault("redirect_url", DEFAULT_REDIRECTS.get("youtube", ""))
+                cfg.setdefault("redirect_uri", DEFAULT_REDIRECTS.get("youtube", ""))
+                cfg.setdefault("main_scopes", DEFAULT_SCOPES.get("youtube", {}).get("main", ""))
+                cfg.setdefault("scopes", DEFAULT_SCOPES.get("youtube", {}).get("bot", ""))
+                if cfg.get("access_token") and not cfg.get("bot_access_token"):
+                    cfg["bot_access_token"] = cfg.get("access_token")
+                if cfg.get("refresh_token") and not cfg.get("bot_refresh_token"):
+                    cfg["bot_refresh_token"] = cfg.get("refresh_token")
             return cfg
         except Exception:
             return {}
+
+    def get_platform_settings(self, platform: str = "") -> dict:
+        return self.platform_settings(platform)
+
+    def get_plugin(self, plugin_id: str):
+        try:
+            return self.state.plugin_instances.get(str(plugin_id))
+        except Exception:
+            return None
 
     def set_status(self, plugin_id: str, status) -> None:
         try:
@@ -137,6 +229,36 @@ class WebbasedPluginHost:
                 "source_plugin_id": str(payload.get("source_plugin_id") or plugin_id),
                 "time": time.strftime("%H:%M:%S"),
             }
+
+            # Safety net for realtime providers that can emit the same event via
+            # multiple websocket channels. This prevents duplicate rows in the
+            # tool's platform chats without blocking a user from repeating the
+            # same message a few seconds later.
+            recent = getattr(self.state, "_recent_chat_emit", None)
+            if not isinstance(recent, dict):
+                recent = {}
+                setattr(self.state, "_recent_chat_emit", recent)
+            now = time.time()
+            try:
+                for key, ts in list(recent.items()):
+                    if now - float(ts or 0.0) > 5.0:
+                        recent.pop(key, None)
+            except Exception:
+                pass
+            dedupe_key = "|".join([
+                item.get("source_plugin_id", ""),
+                item.get("platform", ""),
+                item.get("channel", ""),
+                item.get("user", "").strip().lower(),
+                " ".join(str(item.get("text") or "").split()).lower(),
+                str(item.get("message_type") or "chat").lower(),
+            ])
+            old_ts = recent.get(dedupe_key)
+            if old_ts is not None and now - float(old_ts or 0.0) <= 2.5:
+                self.log(plugin_id, f"duplicate chat row suppressed: {item.get('platform')} {item.get('user')} {str(item.get('text') or '')[:120]}")
+                return
+            recent[dedupe_key] = now
+
             self.state.messages.append(item)
             if len(self.state.messages) > 300:
                 self.state.messages = self.state.messages[-300:]
@@ -211,7 +333,7 @@ class WebbasedPluginManager:
         if self.started:
             return
         self.started = True
-        for plugin_id in ("twitch_chat", "tiktok_live", "youtube_chat", "kick_chat"):
+        for plugin_id in ("twitch_chat", "tiktok_live", "youtube_chat", "kick_chat", "botalot", "bridg3alot"):
             self.start_plugin(plugin_id)
 
     def load_plugin(self, plugin_id: str):
@@ -891,9 +1013,160 @@ class AppState:
         s["version"] = VERSION
         _json_save(self.settings_path, s)
 
+    def _auth_token_ok(self, platform, account="main") -> bool:
+        try:
+            token = _json_load(self.auth_dir / f"{platform}_{account}.json", {})
+            return isinstance(token, dict) and bool(str(token.get("access_token") or token.get("refresh_token") or "").strip())
+        except Exception:
+            return False
+
     def platform_status(self, platform, account="main"):
-        token = self.auth_dir / f"{platform}_{account}.json"
-        return "verbunden" if token.exists() else "nicht verbunden"
+        return "verbunden" if self._auth_token_ok(platform, account) else "nicht verbunden"
+
+    def _plugin_connected_detail(self, plugin_id: str) -> tuple[bool, str]:
+        try:
+            ps = self.plugin_status.get(plugin_id, {}) or {}
+            state = str(ps.get("state") or "").strip().lower()
+            msg = str(ps.get("message") or "").strip()
+            if state in {"connected", "running"}:
+                return True, msg or "Plugin verbunden"
+            return False, msg
+        except Exception:
+            return False, ""
+
+    def _log_line_ts(self, line: str) -> float:
+        try:
+            head = str(line or "")[:19]
+            return time.mktime(time.strptime(head, "%Y-%m-%d %H:%M:%S"))
+        except Exception:
+            return 0.0
+
+    def _recent_auth_error(self, platform: str, *, lines=220, since_ts: float = 0.0) -> str:
+        try:
+            if not self.log_file.exists():
+                return ""
+            txt = self.log_file.read_text(encoding="utf-8", errors="replace")
+            tail = txt.splitlines()[-int(lines):]
+            needle = platform.lower()
+            since_ts = float(since_ts or 0.0)
+            for line in reversed(tail):
+                low = line.lower()
+                if needle not in low:
+                    continue
+                line_ts = self._log_line_ts(line)
+                if since_ts and line_ts and line_ts <= since_ts:
+                    # Alles davor gehört zu einem älteren Auth-Stand. Alte Bad-Request-Zeilen
+                    # dürfen nach erneutem OAuth nicht mehr den aktuellen Status rot färben.
+                    return ""
+                if any(x in low for x in ("status | connected", "using valid cached authorization", "refreshed token", "oauth ok", "oauth gespeichert", "current playback ok")):
+                    return ""
+                if any(x in low for x in ("token failed", "auth failed", "oauth failed", "http error 400", "http error 401", "http error 403", "bad request", "unauthorized", "forbidden")):
+                    return line.split(" | ", 2)[-1].strip()
+        except Exception:
+            return ""
+        return ""
+
+    def spotify_status(self, cfg: dict) -> tuple[bool, str]:
+        try:
+            cfg = cfg if isinstance(cfg, dict) else {}
+            token = _json_load(self.auth_dir / "spotify_main.json", {})
+            if not isinstance(token, dict):
+                token = {}
+            saved_at = float(token.get("saved_at") or cfg.get("saved_at") or 0.0)
+            has_access = bool(str(token.get("access_token") or cfg.get("access_token") or "").strip())
+            has_refresh = bool(str(token.get("refresh_token") or cfg.get("refresh_token") or "").strip())
+            err = self._recent_auth_error("spotify", since_ts=saved_at)
+            if err and not has_access:
+                return False, err
+            if has_access or has_refresh:
+                if err:
+                    # Refresh kann fehlschlagen, während der gerade neu gesetzte Access-Token
+                    # trotzdem funktioniert. Der Status darf dann nicht an einer alten Logzeile kleben.
+                    return True, "OAuth gespeichert · letzter Refresh-Hinweis: " + err
+                detail = str(cfg.get("connection_status") or "OAuth gespeichert").strip()
+                try:
+                    np_candidates = [
+                        self.data / "plugins" / "spotis3mptify" / "nowplaying" / "nowplaying.json",
+                        self.data / "plugins" / "spotis3mptify" / "nowplaying.json",
+                        self.data / "spotis3mptify" / "nowplaying" / "nowplaying.json",
+                        self.data / "spotis3mptify" / "nowplaying.json",
+                    ]
+                    newest = max((p.stat().st_mtime for p in np_candidates if p.exists()), default=0.0)
+                    if newest and time.time() - newest < 180:
+                        detail = "Verbunden · Songinfos kommen rein"
+                except Exception:
+                    pass
+                return True, detail
+            return False, "kein Spotify OAuth gespeichert"
+        except Exception as exc:
+            return False, "Spotify Statusfehler: " + str(exc)
+
+    def live_platform_statuses(self) -> dict:
+        s = self.settings()
+        source = s.get("platforms", {}) if isinstance(s.get("platforms", {}), dict) else {}
+        out = {}
+        plugin_map = {"twitch": "twitch_chat", "tiktok": "tiktok_live", "youtube": "youtube_chat", "kick": "kick_chat"}
+        for p in PLATFORM_ORDER:
+            cfg = dict(source.get(p, {}) or {})
+            enabled = bool(cfg.get("enabled", False))
+            cfg["enabled"] = enabled
+            if not enabled:
+                cfg["status"] = "nicht verbunden"
+                cfg.setdefault("detail", "inaktiv")
+                out[p] = cfg
+                continue
+
+            plugin_id = plugin_map.get(p)
+            if plugin_id:
+                plug_ok, plug_msg = self._plugin_connected_detail(plugin_id)
+                if plug_ok:
+                    cfg["status"] = "verbunden"
+                    cfg["detail"] = plug_msg
+                    if p in {"twitch", "kick", "youtube"}:
+                        cfg["main_status"] = self.platform_status(p, "main")
+                        cfg["bot_status"] = self.platform_status(p, "bot")
+                    out[p] = cfg
+                    continue
+
+            if p == "meld":
+                ok, detail = self.meld_status(cfg)
+                cfg["status"] = "verbunden" if ok else "nicht verbunden"
+                cfg["detail"] = detail
+            elif p == "obs":
+                ok, detail = self.obs_status(cfg)
+                cfg["status"] = "verbunden" if ok else "nicht verbunden"
+                cfg["detail"] = detail
+            elif p == "tiktok":
+                main_ok, _ = self.tiktok_account_status(cfg, "main")
+                bot_ok, _ = self.tiktok_account_status(cfg, "bot")
+                cfg["main_status"] = "verbunden" if main_ok else "nicht verbunden"
+                cfg["bot_status"] = "verbunden" if bot_ok else "nicht verbunden"
+                cfg["status"] = "verbunden" if (main_ok or bot_ok) else "nicht verbunden"
+                cfg["detail"] = "Main OK · Bot OK" if (main_ok and bot_ok) else "Main OK · Bot fehlt" if main_ok else "Bot OK · Main fehlt" if bot_ok else "Main fehlt · Bot fehlt"
+            elif p == "youtube":
+                ok, detail = self.youtube_status(cfg)
+                cfg["status"] = "verbunden" if ok else "nicht verbunden"
+                cfg["detail"] = detail
+                cfg["main_status"] = self.platform_status(p, "main")
+                cfg["bot_status"] = self.platform_status(p, "bot")
+            elif p == "spotify":
+                ok, detail = self.spotify_status(cfg)
+                cfg["status"] = "verbunden" if ok else "nicht verbunden"
+                cfg["detail"] = detail
+            elif p == "openai":
+                api_key = str(cfg.get("api_key") or "").strip()
+                cfg["status"] = "verbunden" if api_key else "nicht verbunden"
+                cfg["detail"] = "API-Key gespeichert" if api_key else "OpenAI API-Key fehlt"
+                cfg.pop("api_key", None)
+            else:
+                main = self.platform_status(p, "main")
+                bot = self.platform_status(p, "bot")
+                cfg["status"] = "verbunden" if (main == "verbunden" or bot == "verbunden") else "nicht verbunden"
+                cfg["main_status"] = main
+                cfg["bot_status"] = bot
+                cfg["detail"] = "Main/Bot OAuth gespeichert" if cfg["status"] == "verbunden" else "kein OAuth gespeichert"
+            out[p] = cfg
+        return out
 
     def _sync_youtube_auth_files(self, cfg: dict) -> bool:
         changed = False
@@ -1592,6 +1865,26 @@ def _safe_dev_settings(value, key=""):
         return [_safe_dev_settings(v) for v in value]
     return value
 
+def _available_dev_log_sources(text, plugin_ids):
+    sources = []
+    seen = set()
+    for line in str(text or "").splitlines():
+        src = _dev_log_source(line)
+        if not src or src in seen:
+            continue
+        seen.add(src)
+        sources.append(src)
+    known_platform_sources = set().union(*DEV_PLATFORM_LOG_SOURCES.values()) if 'DEV_PLATFORM_LOG_SOURCES' in globals() else set()
+    boring = {"start", "listen", "shutdown", "callback-listen", "callback-port-busy", "port_warning", "status", "static missing", "static error"}
+    out = []
+    for src in sorted(sources, key=str.lower):
+        if src in plugin_ids or src in known_platform_sources:
+            continue
+        if src in boring:
+            continue
+        out.append({"id": src, "name": src})
+    return out
+
 DEV_PLATFORM_LOG_SOURCES = {
     "twitch": {"twitch", "twitch_chat"},
     "tiktok": {"tiktok", "tiktok_live", "tiktok_live_alert"},
@@ -1626,6 +1919,29 @@ def _filter_dev_log(text, scope, selected, plugin_ids):
     elif scope == "core":
         lines = [line for line in lines if _dev_log_source(line) not in plugin_ids and not _dev_source_matches(_dev_log_source(line), platform_sources)]
     return "\n".join(lines)
+
+def _dev_plugin_filter_list(st):
+    plugins = []
+    seen = set()
+    try:
+        for item in st.plugin_list():
+            pid = str(item.get("id") or "").strip()
+            if not pid or pid in seen:
+                continue
+            seen.add(pid)
+            plugins.append({"id": pid, "name": str(item.get("name") or pid)})
+    except Exception:
+        pass
+    try:
+        txt = st.log_file.read_text(encoding="utf-8") if st.log_file.exists() else ""
+        for item in _available_dev_log_sources(txt, seen):
+            pid = str(item.get("id") or "").strip()
+            if pid and pid not in seen:
+                seen.add(pid)
+                plugins.append(item)
+    except Exception:
+        pass
+    return plugins
 
 CHAT_PLATFORM_PLUGINS = {
     "twitch": "twitch_chat",
@@ -1745,63 +2061,59 @@ class Handler(BaseHTTPRequestHandler):
             return self._page("desktop_chat.html")
 
         if path == "/api/status":
-            s = st.settings()
-            plats = s.get("platforms", {})
-            for p in PLATFORM_ORDER:
-                if p == "meld":
-                    cfg = plats.setdefault(p, {})
-                    ok, detail = st.meld_status(cfg)
-                    cfg["status"] = "verbunden" if ok else "nicht verbunden"
-                    cfg["detail"] = detail
-                elif p == "obs":
-                    cfg = plats.setdefault(p, {})
-                    ok, detail = st.obs_status(cfg)
-                    cfg["status"] = "verbunden" if ok else "nicht verbunden"
-                    cfg["detail"] = detail
-                elif p == "tiktok":
-                    cfg = plats.setdefault(p, {})
-                    main_ok, main_detail = st.tiktok_account_status(cfg, "main")
-                    bot_ok, bot_detail = st.tiktok_account_status(cfg, "bot")
-                    ok = main_ok and bot_ok
-                    detail = "Main OK · Bot OK" if ok else "Main OK · Bot fehlt" if main_ok else "Bot OK · Main fehlt" if bot_ok else "Main fehlt · Bot fehlt"
-                    login_state_changed = False
-                    if main_ok and not bool(cfg.get("main_login_ok")):
-                        cfg["main_login_ok"] = True
-                        login_state_changed = True
-                    if bot_ok and not bool(cfg.get("bot_login_ok")):
-                        cfg["bot_login_ok"] = True
-                        login_state_changed = True
-                    if login_state_changed:
-                        st.save_settings(s)
-                    cfg["status"] = "verbunden" if ok else "nicht verbunden"
-                    cfg["detail"] = detail
-                    cfg["main_status"] = "verbunden" if main_ok else "nicht verbunden"
-                    cfg["bot_status"] = "verbunden" if bot_ok else "nicht verbunden"
-                elif p == "youtube":
-                    cfg = plats.setdefault(p, {})
-                    ok, detail = st.youtube_status(cfg)
-                    cfg["status"] = "verbunden" if ok else "nicht verbunden"
-                    cfg["detail"] = detail
-                    cfg["main_status"] = "verbunden" if str(cfg.get("main_access_token") or "").strip() else "nicht verbunden"
-                    cfg["bot_status"] = "verbunden" if str(cfg.get("access_token") or "").strip() else "nicht verbunden"
-                elif p == "spotify":
-                    plats.setdefault(p, {})["status"] = st.platform_status(p, "main")
-                elif p == "openai":
-                    cfg = plats.setdefault(p, {})
-                    ok, detail = st.openai_status(cfg)
-                    cfg["status"] = "verbunden" if ok else "nicht verbunden"
-                    cfg["detail"] = detail
-                    cfg.pop("api_key", None)
-                else:
-                    main = st.platform_status(p, "main")
-                    bot = st.platform_status(p, "bot")
-                    plats.setdefault(p, {})["status"] = "verbunden" if (main == "verbunden" or bot == "verbunden") else "nicht verbunden"
-                    plats[p]["main_status"] = main
-                    plats[p]["bot_status"] = bot
+            try:
+                plats = st.live_platform_statuses()
+            except Exception as exc:
+                st.log("status", "failed", exc)
+                plats = {p: {"enabled": False, "status": "nicht verbunden", "detail": str(exc)} for p in PLATFORM_ORDER}
             self._json({"version": VERSION, "uptime": int(time.time()-st.started), "port": st.port, "platforms": plats, "plugins": st.plugin_list()})
             return
         if path == "/api/settings":
             self._json(st.settings())
+            return
+        m_plugin_settings = re.match(r"^/api/plugins/([^/]+)/settings$", path)
+        if m_plugin_settings:
+            plugin_id = urllib.parse.unquote(m_plugin_settings.group(1)).strip()
+            schema = []
+            defaults = {}
+            plugin = None
+            load_error = ""
+            try:
+                plugin = st.plugin_manager.load_plugin(plugin_id)
+            except Exception as exc:
+                load_error = str(exc)
+                st.log(plugin_id or "plugins", "settings plugin load failed", exc)
+            if plugin is not None:
+                try:
+                    if hasattr(plugin, "settings_schema"):
+                        try:
+                            schema = plugin.settings_schema(language="de", ui_language="de")
+                        except TypeError:
+                            schema = plugin.settings_schema()
+                except Exception as exc:
+                    st.log(plugin_id, "settings_schema failed", exc)
+                    schema = []
+                try:
+                    if hasattr(plugin, "default_settings"):
+                        defaults = plugin.default_settings()
+                        if not isinstance(defaults, dict):
+                            defaults = {}
+                except Exception:
+                    defaults = {}
+            values = st.plugin_settings(plugin_id, plugin)
+            if not schema:
+                merged_keys = []
+                for source in (defaults, values):
+                    if isinstance(source, dict):
+                        for key in source.keys():
+                            if key not in merged_keys and not str(key).startswith("_"):
+                                merged_keys.append(key)
+                schema = []
+                for key in merged_keys:
+                    val = values.get(key, defaults.get(key) if isinstance(defaults, dict) else "")
+                    typ = "bool" if isinstance(val, bool) else ("number" if isinstance(val, (int, float)) and not isinstance(val, bool) else "text")
+                    schema.append({"key": key, "label": key, "type": typ})
+            self._json({"ok": True, "plugin_id": plugin_id, "schema": schema or [], "defaults": defaults, "values": values, "status": st.plugin_status.get(plugin_id, {}), "load_error": load_error})
             return
         if path == "/api/debug":
             try:
@@ -1830,10 +2142,11 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/dev/info":
             settings = st.settings()
-            platforms = {}
-            for name in PLATFORM_ORDER:
-                cfg = settings.get("platforms", {}).get(name, {})
-                platforms[name] = {"enabled": bool(cfg.get("enabled", False)), "status": str(cfg.get("status") or "nicht verbunden")}
+            try:
+                platforms = st.live_platform_statuses()
+            except Exception as exc:
+                st.log("dev", "status failed", exc)
+                platforms = {name: {"enabled": bool(settings.get("platforms", {}).get(name, {}).get("enabled", False)), "status": "nicht verbunden", "detail": str(exc)} for name in PLATFORM_ORDER}
             try:
                 usage = shutil.disk_usage(st.base)
                 disk_free = usage.free
@@ -1860,7 +2173,7 @@ class Handler(BaseHTTPRequestHandler):
                 "platforms": platforms,
                 "log_filters": {
                     "platforms": PLATFORM_ORDER,
-                    "plugins": [{"id": str(item.get("id") or ""), "name": str(item.get("name") or item.get("id") or "")} for item in st.plugin_list()],
+                    "plugins": _dev_plugin_filter_list(st),
                 },
             })
             return
@@ -1905,21 +2218,13 @@ class Handler(BaseHTTPRequestHandler):
             base = f"http://127.0.0.1:{st.port}"
             settings = st.settings()
             spotify_redirect = settings.get("platforms", {}).get("spotify", {}).get("redirect_uri") or f"http://127.0.0.1:{CALLBACK_PORT}/callback"
-            heartbeat_age = 999999.0
-            try:
-                if st.last_ui_heartbeat > 0:
-                    heartbeat_age = max(0.0, time.time() - st.last_ui_heartbeat)
-            except Exception:
-                pass
             self._json({
                 "version": VERSION,
                 "port": st.port,
                 "base_url": base,
                 "callback_port": CALLBACK_PORT,
                 "spotify_redirect_uri": spotify_redirect,
-                "port_warning": "",
-                "ui_heartbeat_enabled": bool(getattr(st, "ui_heartbeat_enabled", False)),
-                "ui_heartbeat_age": heartbeat_age
+                "port_warning": ""
             })
             return
         if path.startswith("/api/tiktok/open/"):
@@ -2016,6 +2321,36 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
         data = self._read_json()
+
+        m_plugin_settings = re.match(r"^/api/plugins/([^/]+)/settings$", path)
+        if m_plugin_settings:
+            plugin_id = urllib.parse.unquote(m_plugin_settings.group(1)).strip()
+            try:
+                current = st.settings()
+                current.setdefault("plugins", {})
+                old_cfg = current["plugins"].get(plugin_id, {})
+                if not isinstance(old_cfg, dict):
+                    old_cfg = {}
+                incoming = data.get("values") if isinstance(data, dict) and isinstance(data.get("values"), dict) else (data if isinstance(data, dict) else {})
+                new_cfg = dict(old_cfg)
+                new_cfg.update(incoming)
+                current["plugins"][plugin_id] = new_cfg
+                st.save_settings(current)
+                old_plugin = st.plugin_instances.get(plugin_id)
+                if old_plugin is not None:
+                    try: old_plugin.stop(wait=True)
+                    except TypeError:
+                        try: old_plugin.stop()
+                        except Exception: pass
+                    except Exception as exc:
+                        st.log(plugin_id, "stop before settings restart failed", exc)
+                    st.plugin_instances.pop(plugin_id, None)
+                st.plugin_manager.start_plugin(plugin_id)
+                self._json({"ok": True, "plugin_id": plugin_id, "values": st.plugin_settings(plugin_id)})
+            except Exception as exc:
+                st.log(plugin_id or "plugins", "save settings failed", exc)
+                self._json({"ok": False, "error": str(exc)}, 500)
+            return
 
         if path == "/api/settings":
             current = st.settings()
@@ -2327,8 +2662,22 @@ class Handler(BaseHTTPRequestHandler):
                 token = fresh
             return token
         except Exception as e:
-            try: STATE.log("spotify token failed", str(e))
-            except Exception: pass
+            try:
+                now = time.time()
+                last = float(getattr(STATE, "_spotify_token_fail_logged_at", 0.0) or 0.0)
+                if now - last > 30:
+                    STATE._spotify_token_fail_logged_at = now
+                    STATE.log("spotify token failed", str(e))
+            except Exception:
+                pass
+            try:
+                # Wenn ein Access-Token vorhanden ist, geben wir ihn als letzten Versuch zurück.
+                # Spotify kann noch damit antworten, auch wenn ein Refresh gerade wegen falscher
+                # Client-Daten 400 liefert. Der erfolgreiche Player-Request korrigiert dann Status/Log.
+                if isinstance(token, dict) and str(token.get("access_token") or "").strip():
+                    return token
+            except Exception:
+                pass
             return None
 
     def _spotify_current_from_api(self):
@@ -2355,6 +2704,14 @@ class Handler(BaseHTTPRequestHandler):
             images = (item.get("album") or {}).get("images") or []
             cover = images[0].get("url") if images else ""
             out = {"title": title, "artist": artists, "album": album, "cover": cover, "active": bool(title), "source": "Spotify"}
+            try:
+                now = time.time()
+                last = float(getattr(STATE, "_spotify_current_ok_logged_at", 0.0) or 0.0)
+                if out.get("active") and now - last > 120:
+                    STATE._spotify_current_ok_logged_at = now
+                    STATE.log("spotify", "status", "connected", "current playback OK")
+            except Exception:
+                pass
             try:
                 npdir = STATE.data / "plugins" / "spotis3mptify" / "nowplaying"
                 npdir.mkdir(parents=True, exist_ok=True)
@@ -2837,6 +3194,9 @@ class Handler(BaseHTTPRequestHandler):
             elif platform == "spotify":
                 updates.update({"access_token": access, "refresh_token": refresh or cfg.get("refresh_token", ""), "scopes": str(token.get("scope") or cfg.get("scopes") or DEFAULT_SCOPES["spotify"]["main"]), "saved_at": int(time.time()), "connection_status": "Verbunden"})
             self._save_platform_updates(platform, updates)
+            if platform == "spotify":
+                try: st.log("spotify", "status", "connected", "OAuth gespeichert")
+                except Exception: pass
             if platform == "twitch":
                 try:
                     old = st.plugin_instances.get("twitch_chat")

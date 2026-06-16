@@ -26,7 +26,7 @@ SEARCH_URL = 'https://www.googleapis.com/youtube/v3/search'
 class YouTubeChatPlugin(ThreadedPlugin):
     plugin_id = 'youtube_chat'
     display_name = 'YouTube Chat'
-    version = '1.0.23'
+    version = '1.1.1'
     description = 'YouTube Live chat reader/writer using central OAuth with slow live detection.'
 
     def __init__(self) -> None:
@@ -48,6 +48,8 @@ class YouTubeChatPlugin(ThreadedPlugin):
         self._web_api_key = ''
         self._web_continuation = ''
         self._web_client_version = '2.20240601.00.00'
+        self._host: PluginHost | None = None
+        self._broadcast_type_all_supported: bool | None = None
 
     def settings_schema(self):
         # Login/auth is intentionally only in the main tool under Platforms -> YouTube.
@@ -122,48 +124,86 @@ class YouTubeChatPlugin(ThreadedPlugin):
         except Exception:
             return 0.0
 
-    def _host_platform_settings(self, host: PluginHost | None, platform: str = 'youtube') -> dict[str, Any]:
+    def _host_platform_settings(self, host: PluginHost | None = None) -> dict[str, Any]:
+        host = host or self._host
         if host is None:
             return {}
-        for name in ('platform_settings', 'get_platform_settings'):
+        for name in ('get_platform_settings', 'platform_settings'):
             fn = getattr(host, name, None)
-            if callable(fn):
-                try:
-                    data = fn(platform)
-                except TypeError:
-                    try:
-                        all_data = fn()
-                        data = all_data.get(platform, {}) if isinstance(all_data, dict) else {}
-                    except Exception:
-                        data = {}
-                except Exception:
-                    data = {}
+            if not callable(fn):
+                continue
+            try:
+                data = fn('youtube')
                 if isinstance(data, dict):
                     return dict(data)
+            except Exception:
+                pass
         return {}
 
-    def _merge_platform_settings(self, settings: dict | None, host: PluginHost | None = None) -> dict[str, Any]:
-        merged = dict(settings or {})
-        platform = self._host_platform_settings(host, 'youtube')
-        if not platform:
-            return merged
+    def _effective_settings(self, settings: dict[str, Any] | None = None, host: PluginHost | None = None) -> dict[str, Any]:
+        # Same principle as Twitch/Kick: the host/platform tab is the source for
+        # OAuth, account names and tokens. Plugin settings are only YouTube-chat
+        # behaviour knobs and must not overwrite central auth data with stale values.
+        platform = self._host_platform_settings(host)
+        merged: dict[str, Any] = dict(platform or {})
 
-        merged['read_enabled'] = self._as_bool(platform.get('read_enabled'), self._as_bool(platform.get('read'), True))
-        merged['write_enabled'] = self._as_bool(platform.get('write_enabled'), self._as_bool(platform.get('write'), True))
-        merged['autoconnect'] = self._as_bool(platform.get('autoconnect'), self._as_bool(merged.get('autoconnect'), False))
-        merged['main_account'] = self._clean_account(platform.get('main_account') or platform.get('channel') or platform.get('live_channel') or merged.get('main_account') or '')
-        merged['bot_account'] = self._clean_account(platform.get('bot_account') or platform.get('bot_username') or platform.get('username') or merged.get('bot_account') or '')
-        for key in (
-            'client_id', 'client_secret',
-            'access_token', 'refresh_token',
-            'main_access_token', 'main_refresh_token',
-            'main_channel_id', 'broadcaster_channel_id', 'bot_channel_id',
-            'live_chat_id',
-        ):
-            value = platform.get(key)
-            if value not in (None, ''):
-                merged[key] = str(value).strip()
+        local_keys = {
+            'startup_skip_backlog',
+            'viewer_count_enabled',
+            'live_check_interval_seconds',
+            'autoconnect',
+        }
+        if isinstance(settings, dict):
+            for key in local_keys:
+                if key in settings and settings.get(key) is not None:
+                    merged[key] = settings.get(key)
+
+        merged['read_enabled'] = self._as_bool(
+            merged.get('read_enabled'),
+            self._as_bool(merged.get('read'), True),
+        )
+        merged['write_enabled'] = self._as_bool(
+            merged.get('write_enabled'),
+            self._as_bool(merged.get('write'), True),
+        )
+        merged['autoconnect'] = self._as_bool(merged.get('autoconnect'), False)
+
+        main = self._clean_account(
+            merged.get('main')
+            or merged.get('main_account')
+            or merged.get('channel')
+            or merged.get('main_channel_title')
+            or ''
+        )
+        bot = self._clean_account(
+            merged.get('bot')
+            or merged.get('bot_account')
+            or merged.get('bot_username')
+            or merged.get('username')
+            or merged.get('bot_channel_title')
+            or ''
+        )
+        if main:
+            merged['main'] = main
+            merged['main_account'] = main
+            merged['channel'] = main
+        if bot:
+            merged['bot'] = bot
+            merged['bot_account'] = bot
+            merged['bot_username'] = bot
+            merged['username'] = bot
+
+        # Canonical bot token aliases. Host keeps bot token in access_token; older
+        # call sites may still ask for bot_access_token. Do not create fake tokens.
+        if merged.get('access_token') and not merged.get('bot_access_token'):
+            merged['bot_access_token'] = merged.get('access_token')
+        if merged.get('refresh_token') and not merged.get('bot_refresh_token'):
+            merged['bot_refresh_token'] = merged.get('refresh_token')
         return merged
+
+    def _merge_platform_settings(self, settings: dict | None, host: PluginHost | None = None) -> dict[str, Any]:
+        # Backwards-compatible wrapper for existing internal calls.
+        return self._effective_settings(settings if isinstance(settings, dict) else {}, host)
 
     def _token_for(self, settings: dict[str, Any], kind: str) -> str:
         if kind == 'main':
@@ -312,37 +352,60 @@ class YouTubeChatPlugin(ThreadedPlugin):
             return ' · '.join(bits) if bits else str(exc)
         return str(exc)
 
-    def _broadcasts_for_status(self, settings: dict[str, Any], status: str) -> list[dict[str, Any]]:
-        attempts: list[dict[str, Any]] = []
+    def _broadcasts_for_status(self, settings: dict[str, Any], status: str, *, allow_broadcast_type: bool = False) -> list[dict[str, Any]]:
+        # IMPORTANT: liveBroadcasts.list accepts exactly one filter parameter.
+        # Older code sent both `mine=true` and `broadcastStatus=active`, which
+        # Google rejects with incompatibleParameters. Keep the request quota-low
+        # by making one owner-scoped request and filtering the lifecycle locally.
         base = {
             'part': 'snippet,contentDetails,status',
-            'broadcastStatus': status,
             'mine': 'true',
             'maxResults': 10,
         }
-        # broadcastType=all is useful, but some YouTube projects reject it with
-        # HTTP 400. Try it once, then retry the clean minimal request. Never use
-        # a request without broadcastStatus; YouTube rejects that and it caused
-        # the old Bad Request loop.
-        with_type = dict(base)
-        with_type['broadcastType'] = 'all'
-        attempts.append(with_type)
-        attempts.append(base)
+        attempts: list[dict[str, Any]] = [base]
+        # Manual send fallback only: broadcastType is optional and still cheap,
+        # but do not use it in the background path unless explicitly allowed.
+        if allow_broadcast_type and self._broadcast_type_all_supported is not False:
+            with_type = dict(base)
+            with_type['broadcastType'] = 'all'
+            attempts.append(with_type)
+
+        def _status_matches(item: dict[str, Any]) -> bool:
+            wanted = str(status or '').strip().lower()
+            if wanted in {'', 'all'}:
+                return True
+            st = item.get('status') if isinstance(item.get('status'), dict) else {}
+            sn = item.get('snippet') if isinstance(item.get('snippet'), dict) else {}
+            life = str((st or {}).get('lifeCycleStatus') or '').strip().lower()
+            actual_start = str((sn or {}).get('actualStartTime') or '').strip()
+            actual_end = str((sn or {}).get('actualEndTime') or '').strip()
+            if wanted == 'active':
+                return life in {'live', 'testing', 'livestarting'} or bool(actual_start and not actual_end)
+            if wanted == 'upcoming':
+                return life in {'created', 'ready', 'teststarting'} and not actual_start
+            if wanted == 'completed':
+                return life in {'complete', 'completed', 'revoked'} or bool(actual_end)
+            return True
 
         last_error = ''
         for params in attempts:
             try:
                 data = self._request_json_auth(settings, 'main', LIVE_BROADCASTS_URL, params=params, timeout=7.0)
                 rows = data.get('items') if isinstance(data, dict) else None
+                if params.get('broadcastType') == 'all':
+                    self._broadcast_type_all_supported = True
+                clean_rows = [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
                 self._last_lookup_error = ''
-                return [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
+                return [row for row in clean_rows if _status_matches(row)]
             except urllib.error.HTTPError as exc:
                 last_error = self._http_error_short(exc)
+                if params.get('broadcastType') == 'all' and int(getattr(exc, 'code', 0) or 0) == 400:
+                    self._broadcast_type_all_supported = False
                 continue
             except Exception as exc:
                 last_error = str(exc)
                 break
-        self._last_lookup_error = f'liveBroadcasts.list failed for status={status}: {last_error}' if last_error else ''
+        self._last_lookup_error = f'liveBroadcasts.list failed for owned broadcasts: {last_error}' if last_error else ''
         return []
 
     def _get_broadcast_video_id(self, item: dict[str, Any]) -> str:
@@ -721,10 +784,10 @@ class YouTubeChatPlugin(ThreadedPlugin):
         # Main path: this is the broadcaster-owned live endpoint and it usually exposes
         # snippet.liveChatId directly. Never turn lookup 400s into plugin errors; OAuth
         # can be valid while no current chat is resolvable yet.
-        rows = self._broadcasts_for_status(settings, 'active')
+        rows = self._broadcasts_for_status(settings, 'active', allow_broadcast_type=False)
         if not rows and allow_fallback_all:
             # Manual send fallback only: ask for all broadcasts and filter live/testing rows locally.
-            rows = self._broadcasts_for_status(settings, 'all')
+            rows = self._broadcasts_for_status(settings, 'all', allow_broadcast_type=True)
 
         candidates = sorted(rows, key=self._broadcast_sort_key)
         for item in candidates:

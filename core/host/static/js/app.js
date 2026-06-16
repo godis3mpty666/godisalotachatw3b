@@ -15,7 +15,13 @@ function nav(active){
 function shell(active, title, sub, body){
   $("#app").innerHTML = `<div class="layout">${nav(active)}<main class="content"><div class="top"><div><h2>${title}</h2><div class="sub">${sub||""}</div></div></div>${body}</main></div>`;
 }
-async function api(url, opts){ const r=await fetch(url,{cache:"no-store",...(opts||{})}); return r.json(); }
+async function api(url, opts){
+  const r=await fetch(url,{cache:"no-store",...(opts||{})});
+  let data=null;
+  try{ data=await r.json(); }catch(e){ data={ok:false,error:String(e||"Ungültige JSON-Antwort")}; }
+  if(!r.ok){ data.ok=false; data.http_status=r.status; data.error=data.error||`HTTP ${r.status}`; }
+  return data;
+}
 async function loadAll(){ settingsCache=await api("/api/settings"); statusCache=await api("/api/status"); return {settings:settingsCache,status:statusCache};}
 function esc(s){return String(s??"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[m]));}
 function userColor(platform,user){let h=2166136261;for(const c of `${platform}:${user}`){h^=c.charCodeAt(0);h=Math.imul(h,16777619)}return `hsl(${Math.abs(h)%360} 78% 68%)`;}
@@ -44,7 +50,7 @@ function updatePlatformCard(p,cfg){
   const txt = el.querySelector(".statusText");
   const details = el.querySelector(".cardDetails");
   if(dot) dot.classList.toggle("ok", ok);
-  if(txt) txt.textContent = ok ? "Verbunden" : "Bereit";
+  if(txt) txt.textContent = ok ? "Verbunden" : (cfg.enabled ? "Nicht verbunden" : "Inaktiv");
   if(details && (p === "meld" || p === "obs" || p === "tiktok" || p === "openai")) details.textContent = cfg.detail || "";
 }
 let meldDashboardPoll = null;
@@ -330,9 +336,87 @@ async function renderOverlays(){
   shell("overlays","Overlay URLs","Wichtig sind Chat Browser und eine komplette Spotis3mptify-Overlay-URL. Einzelquellen bleiben nur für alte Setups erhalten.",`<section class="card">${data.groups.map(g=>`<div class="urlGroup"><h3>${esc(g.title)}</h3>${g.items.map(i=>`<div class="urlItem"><b>${esc(i.name)}</b><div class="urlBox">${esc(i.url)}</div><button class="copy" data-url="${esc(i.url)}">Kopieren</button></div>`).join("")}</div>`).join("")}</section>`);
   $$(".copy").forEach(b=>b.onclick=()=>navigator.clipboard.writeText(b.dataset.url));
 }
+function pluginStateClass(state){
+  const st=String(state||"").toLowerCase();
+  if(["connected","running"].includes(st)) return "ok";
+  if(["error","failed"].includes(st)) return "bad";
+  return "";
+}
+function schemaLabel(field){return field.label || field.label_de || field.name || field.key || "";}
+function schemaTab(field){return field.tab || field.tab_de || field.ui_tab || field.ui_tab_de || "Allgemein";}
+function renderPluginField(field, values){
+  const key=String(field.key||field.name||"");
+  const type=String(field.type||field.kind||"text").toLowerCase();
+  const label=esc(schemaLabel(field));
+  const help=field.help||field.help_de||"";
+  const value=values?.[key];
+  if(!key && (type==="separator" || type==="section")) return `<div class="settingsSeparator">${label}</div>`;
+  if(type==="separator" || type==="section") return `<div class="settingsSeparator">${label}</div>`;
+  if(!key) return "";
+  const readonly=field.readonly||field.disabled;
+  const ro=readonly?"readonly disabled":"";
+  const helpHtml=help?`<div class="hint">${esc(help)}</div>`:"";
+  if(type==="bool" || type==="boolean" || type==="checkbox"){
+    const checked=(value===true||String(value).toLowerCase()==="true"||String(value)==="1")?"checked":"";
+    return `<label class="settingsBool"><input name="${esc(key)}" type="checkbox" ${checked} ${readonly?"disabled":""}><span>${label}</span></label>${helpHtml}`;
+  }
+  const opts=field.options||field.choices||field.values;
+  if((type==="select" || Array.isArray(opts)) && Array.isArray(opts)){
+    const options=opts.map(o=>{
+      const v=typeof o==="object"?(o.value??o.id??o.key??o.label):o;
+      const l=typeof o==="object"?(o.label??o.name??v):o;
+      return `<option value="${esc(v)}" ${String(value??"")===String(v)?"selected":""}>${esc(l)}</option>`;
+    }).join("");
+    return `<label><div>${label}</div><select name="${esc(key)}" ${readonly?"disabled":""}>${options}</select></label>${helpHtml}`;
+  }
+  const inputType=(type==="number"||type==="int"||type==="float")?"number":(type==="password"?"password":"text");
+  return `<label><div>${label}</div><input name="${esc(key)}" type="${inputType}" value="${esc(value??field.default??"")}" ${ro} placeholder="${esc(field.placeholder||"")}"></label>${helpHtml}`;
+}
+function collectPluginSettings(form, schema){
+  const values={};
+  for(const field of (schema||[])){
+    const key=String(field.key||field.name||"");
+    if(!key || field.readonly || field.disabled || String(field.type||"").toLowerCase()==="separator") continue;
+    const el=form.elements[key];
+    if(!el) continue;
+    const type=String(field.type||"").toLowerCase();
+    if(type==="bool"||type==="boolean"||type==="checkbox") values[key]=!!el.checked;
+    else if(type==="number"||type==="int") values[key]=parseInt(el.value||"0",10)||0;
+    else if(type==="float") values[key]=parseFloat(el.value||"0")||0;
+    else values[key]=String(el.value??"");
+  }
+  return values;
+}
+async function openPluginSettings(pluginId){
+  const mount=$("#pluginSettingsMount");
+  if(!mount) return;
+  mount.innerHTML=`<section class="card pluginSettingsCard"><h3>Settings laden...</h3></section>`;
+  const d=await api(`/api/plugins/${encodeURIComponent(pluginId)}/settings`);
+  if(!d.ok){mount.innerHTML=`<section class="card pluginSettingsCard"><h3>Settings</h3><div class="warnBox">${esc(d.error||"Konnte Settings nicht laden")}</div></section>`;return;}
+  const schema=d.schema||[];
+  const values=d.values||{};
+  const tabs=[...new Set(schema.map(schemaTab))];
+  const groups=tabs.length?tabs:["Allgemein"];
+  const body=groups.map(tab=>`<div class="pluginSettingsGroup"><h4>${esc(tab)}</h4><div class="pluginSettingsFields">${schema.filter(f=>schemaTab(f)===tab || (!tabs.length&&true)).map(f=>renderPluginField(f,values)).join("")}</div></div>`).join("");
+  mount.innerHTML=`<section class="card pluginSettingsCard"><div class="pluginSettingsHead"><div><h3>${esc(d.plugin_id)} Settings</h3><div class="small">Wird in data/settings.json unter plugins/${esc(d.plugin_id)} gespeichert und danach neu gestartet.</div></div><button type="button" class="secondary" id="pluginSettingsClose">Schließen</button></div><form id="pluginSettingsForm">${body||"<div class='small'>Dieses Plugin hat kein Settings-Schema.</div>"}<div class="btnLine"><button type="submit">Speichern & neu starten</button><button type="button" class="secondary" id="pluginSettingsCancel">Abbrechen</button><span class="small" id="pluginSettingsResult"></span></div></form></section>`;
+  $("#pluginSettingsClose").onclick=()=>mount.innerHTML="";
+  $("#pluginSettingsCancel").onclick=()=>mount.innerHTML="";
+  $("#pluginSettingsForm").onsubmit=async(ev)=>{
+    ev.preventDefault();
+    const result=$("#pluginSettingsResult");
+    result.textContent="Speichere...";
+    const values=collectPluginSettings(ev.currentTarget,schema);
+    const out=await api(`/api/plugins/${encodeURIComponent(pluginId)}/settings`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({values})});
+    result.textContent=out.ok?"Gespeichert und neu gestartet.":`Fehler: ${out.error||"unbekannt"}`;
+    if(out.ok) setTimeout(renderPlugins,700);
+  };
+  mount.scrollIntoView({behavior:"smooth",block:"start"});
+}
 async function renderPlugins(){
   const s=await api("/api/status");
-  shell("plugins","Plugins","Ordnerstruktur wie beim regulären Tool: plugins/ und data/plugins/ sind vorhanden.",`<div class="pluginGrid">${s.plugins.map(p=>`<section class="card"><h3>${esc(p.name)}</h3><div class="small">${esc(p.description||"")}</div><div class="btnLine"><button class="secondary">Bereit</button></div></section>`).join("")}</div>`);
+  const cards=(s.plugins||[]).map(p=>`<section class="card pluginCard"><div class="pluginHead"><h3>${esc(p.name)}</h3><span class="pluginState ${pluginStateClass(p.state)}">${esc(p.state||"ready")}</span></div><div class="small">${esc(p.description||"")}</div><div class="small pluginStatusText">${esc(p.status||p.message||"Bereit")}</div><div class="btnLine"><button type="button" class="pluginSettingsBtn" data-plugin="${esc(p.id)}">Settings</button><a class="btn secondary" href="/dev" title="Logs im DEV-Bereich prüfen">Logs</a></div></section>`).join("");
+  shell("plugins","Plugins","Hier stellst du jedes gefundene Plugin direkt ein. Der alte nutzlose Bereit-Button ist weg.",`<div id="pluginSettingsMount"></div><div class="pluginGrid">${cards}</div>`);
+  $$(".pluginSettingsBtn").forEach(b=>b.onclick=()=>openPluginSettings(b.dataset.plugin));
 }
 function formatBytes(value){
   let n=Number(value||0); const units=["B","KB","MB","GB"];
@@ -378,23 +462,40 @@ async function renderDev(){
     $("#devPluginFilters").classList.toggle("visible",scope==="plugins"||scope==="plugin");
     refreshLog();
   };
+  let lastFilterSignature="";
   const renderLogFilters=(d)=>{
     const platforms=d.log_filters?.platforms||[];
     const plugins=d.log_filters?.plugins||[];
+    const sig=JSON.stringify({platforms,plugins});
+    if(sig===lastFilterSignature) return;
+    lastFilterSignature=sig;
+    const current={...devLogFilter};
     $("#devLogFilters").innerHTML=[
-      `<button type="button" class="secondary devFilter active" data-scope="all">Alle</button>`,
+      `<button type="button" class="secondary devFilter" data-scope="all">Alle</button>`,
       `<button type="button" class="secondary devFilter" data-scope="core">Main / Core</button>`,
       ...platforms.map(p=>`<button type="button" class="secondary devFilter" data-scope="platform" data-id="${esc(p)}">${esc(platformLabel(p))}</button>`),
       `<button type="button" class="secondary devFilter" data-scope="plugins">Plugins</button>`
     ].join("");
     $("#devPluginFilters").innerHTML=plugins.map(p=>`<button type="button" class="secondary devFilter" data-scope="plugin" data-id="${esc(p.id)}">${esc(p.name)}</button>`).join("");
-    $$(".devFilter").forEach(b=>b.onclick=()=>setLogFilter(b.dataset.scope,b.dataset.id||"",b.textContent.trim()));
+    $$(".devFilter").forEach(b=>{
+      b.onclick=()=>setLogFilter(b.dataset.scope,b.dataset.id||"",b.textContent.trim());
+      b.classList.toggle("active",b.dataset.scope===current.scope&&(b.dataset.id||"")===(current.id||""));
+    });
+    $("#devPluginFilters").classList.toggle("visible",current.scope==="plugins"||current.scope==="plugin");
   };
-  let filtersReady=false;
   let devLogRequest=0;
   const refreshInfo=async()=>{
-    const [d,liveStatus]=await Promise.all([api("/api/dev/info"),api("/api/status")]);
-    if(!filtersReady){renderLogFilters(d);filtersReady=true;}
+    const d=await api("/api/dev/info");
+    let liveStatus={platforms:d.platforms||{}};
+    try{
+      const s=await api("/api/status");
+      if(s && s.platforms) liveStatus=s;
+    }catch(e){}
+    if(d && d.error){
+      $("#devRuntime").innerHTML=`<div><b>Fehler</b><span>${esc(d.error)}</span></div>`;
+      return;
+    }
+    renderLogFilters(d);
     $("#devRuntime").innerHTML=[
       ["Version",d.version],["Uptime",formatUptime(d.uptime)],["Port",d.port],["PID",d.pid],
       ["Python",d.python],["Modus",d.frozen?"EXE":"Source"],["Arbeitsordner",d.cwd],["Executable",d.executable],
@@ -414,6 +515,7 @@ async function renderDev(){
     const query=`?scope=${encodeURIComponent(requested.scope)}&id=${encodeURIComponent(requested.id)}`;
     const d=await api("/api/dev/log"+query);
     if(requestId!==devLogRequest||requested.scope!==devLogFilter.scope||requested.id!==devLogFilter.id)return;
+    if(d && d.error){ box.value=`Log laden fehlgeschlagen: ${d.error}`; return; }
     box.value=d.log||"";
     $("#devLogMeta").textContent=`${requested.label} · Serverfilter: ${d.scope||"all"}${d.id?" / "+d.id:""} · ${d.lines||0} Zeilen · ${formatBytes(d.bytes)} gesamt · bereinigte Anzeige · ${new Date().toLocaleTimeString()}`;
     if(!keepPosition||atBottom) box.scrollTop=box.scrollHeight;

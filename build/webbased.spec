@@ -1,35 +1,10 @@
 # -*- mode: python ; coding: utf-8 -*-
 
 from pathlib import Path
-import sys
 
 
 SPEC_DIR = Path(SPECPATH).resolve()
 PROJECT_ROOT = SPEC_DIR.parent if SPEC_DIR.name.lower() == "build" else SPEC_DIR
-
-PY_ROOT = Path(sys.base_prefix).resolve()
-TK_SOURCE_CANDIDATES = [
-    PY_ROOT / "tcl",
-    Path(r"C:\pinokio\bin\miniconda\Library\lib"),
-    Path(r"C:\pinokio\bin\miniconda\Library\mingw64\lib"),
-]
-TK_DATA = []
-for candidate in TK_SOURCE_CANDIDATES:
-    if (candidate / "tcl8.6" / "init.tcl").is_file() and (candidate / "tk8.6" / "tk.tcl").is_file():
-        TK_DATA = [
-            (str(candidate / "tcl8.6"), "_tcl_data"),
-            (str(candidate / "tk8.6"), "_tk_data"),
-        ]
-        break
-
-TKINTER_PACKAGE = PY_ROOT / "Lib" / "tkinter"
-TKINTER_DATA = [(str(TKINTER_PACKAGE), "tkinter")] if TKINTER_PACKAGE.is_dir() else []
-
-TK_BINARIES = []
-for name in ("_tkinter.pyd", "tcl86t.dll", "tk86t.dll"):
-    path = PY_ROOT / "DLLs" / name
-    if path.is_file():
-        TK_BINARIES.append((str(path), "."))
 
 # Wichtig:
 # - data NICHT in PyInstaller packen. Laufzeitdaten/Tokens/Profile werden neben die EXE kopiert.
@@ -38,17 +13,17 @@ for name in ("_tkinter.pyd", "tcl86t.dll", "tk86t.dll"):
 a = Analysis(
     [str(PROJECT_ROOT / 'run_webbased.py')],
     pathex=[str(PROJECT_ROOT)],
-    binaries=TK_BINARIES,
+    binaries=[],
     datas=[
         (str(PROJECT_ROOT / 'core'), 'core'),
         (str(PROJECT_ROOT / 'shared'), 'shared'),
-        *TKINTER_DATA,
-        *TK_DATA,
+        # Nur die Data-Python-Helfer packen, NICHT den ganzen data-Ordner mit Tokens/Caches.
+        (str(PROJECT_ROOT / 'data' / '__init__.py'), 'data'),
+        (str(PROJECT_ROOT / 'data' / 'paths.py'), 'data'),
     ],
     hiddenimports=[
-        'tkinter',
-        '_tkinter',
         'requests',
+        'websocket',
         'websockets',
         'TikTokLive',
         'TikTokLive.events',

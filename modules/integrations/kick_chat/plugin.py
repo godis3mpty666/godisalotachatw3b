@@ -30,7 +30,7 @@ except Exception:  # pragma: no cover
 class KickChatPlugin(ThreadedPlugin):
     plugin_id = 'kick_chat'
     display_name = 'Kick Chat'
-    version = '2.1.3'
+    version = '2.1.4'
     description = 'Kick chat reader/writer. OAuth and tokens are provided only by godisalotachat.'
 
     DEFAULT_WS_URL = 'wss://ws-us2.pusher.com/app/32cbd69e4b950bf97679?protocol=7&client=js&version=8.4.0&flash=false'
@@ -708,10 +708,20 @@ class KickChatPlugin(ThreadedPlugin):
         if is_live is not None:
             self._emit_is_live(host, channel, is_live)
 
-    def _emit_chat_item(self, host: PluginHost, channel: str, item: dict[str, Any], seen: set[str]):
-        mid = str(item.get('id') or item.get('message_id') or item.get('uuid') or '')
-        if mid and mid in seen:
-            return
+    def _emit_chat_item(self, host: PluginHost, channel: str, item: dict[str, Any], seen: dict[str, float]):
+        # Kick/Pusher can deliver the same chat line more than once when we subscribe
+        # to multiple legacy/realtime channel names for compatibility. Dedupe both
+        # by the official message id and by a short-lived normalized fallback
+        # signature, because not every payload variant carries the same id field.
+        now = time.time()
+        try:
+            for key, ts in list(seen.items()):
+                if now - float(ts or 0.0) > 30.0:
+                    seen.pop(key, None)
+        except Exception:
+            pass
+
+        mid = str(item.get('id') or item.get('message_id') or item.get('uuid') or '').strip()
 
         sender = item.get('sender') or item.get('user') or item.get('chat_sender') or {}
         if not isinstance(sender, dict):
@@ -726,8 +736,20 @@ class KickChatPlugin(ThreadedPlugin):
 
         if not content and not emotes:
             return
+
+        text_key = re.sub(r'\s+', ' ', (raw_content or content or '').strip().lower())
+        keys: list[str] = []
         if mid:
-            seen.add(mid)
+            keys.append(f'id:{mid}')
+        if username and text_key:
+            keys.append(f'sig:{self._clean_login(username)}:{text_key}')
+
+        for key in keys:
+            old_ts = seen.get(key)
+            if old_ts is not None and now - float(old_ts or 0.0) <= 10.0:
+                return
+        for key in keys:
+            seen[key] = now
 
         self._append_diag(f'MESSAGE {username}: {(raw_content or content)[:220]}')
         host.emit_message(self.plugin_id, {
@@ -746,7 +768,7 @@ class KickChatPlugin(ThreadedPlugin):
             'parts': fragments,
         })
 
-    def _handle_ws_message(self, raw: str, host: PluginHost, channel: str, seen: set[str], ws_send=None):
+    def _handle_ws_message(self, raw: str, host: PluginHost, channel: str, seen: dict[str, float], ws_send=None):
         try:
             msg = json.loads(raw)
         except Exception:
@@ -833,7 +855,7 @@ class KickChatPlugin(ThreadedPlugin):
         return channels
 
     def _run_with_websocket_client(self, ws_url: str, chatroom_id: int, host: PluginHost, settings: dict[str, Any], channel: str, viewer_poll_interval: float, channel_id: int | None = None):
-        seen: set[str] = set()
+        seen: dict[str, float] = {}
         ws = websocket.create_connection(ws_url, timeout=15)
         ws.settimeout(10)
         raw_frame_count = 0
@@ -878,7 +900,7 @@ class KickChatPlugin(ThreadedPlugin):
                 ws.close()
 
     async def _run_with_websockets_async(self, ws_url: str, chatroom_id: int, host: PluginHost, settings: dict[str, Any], channel: str, viewer_poll_interval: float, channel_id: int | None = None):
-        seen: set[str] = set()
+        seen: dict[str, float] = {}
         async with websockets.connect(ws_url, ping_interval=None, close_timeout=5) as ws:
             self._status_short(host, 'connecting', f'Kick websocket connected | room {chatroom_id}')
             raw_frame_count = 0
@@ -1048,14 +1070,15 @@ class KickChatPlugin(ThreadedPlugin):
     def send_message(self, message: str, settings: dict[str, Any] | None = None, host: PluginHost | None = None):
         host = host or self._host
         effective = self._effective_settings(settings, host)
-        # Preferred path: Maintool owns writing, refresh and bot/main selection.
-        if host is not None and callable(getattr(host, 'send_platform_message', None)):
-            try:
-                ok = bool(host.send_platform_message('kick', message, use_bot=True, sender=self.plugin_id))
-                return ok, 'Kick message sent via host.' if ok else 'Kick host send failed.'
-            except Exception as exc:
-                self._append_diag(f'Host send failed, trying direct token fallback: {exc}')
-        return self._send_direct_with_token(message, effective, use_bot=True)
+
+        # Important: this method is the endpoint that WebbasedPluginHost.send_platform_message()
+        # calls for Kick. Calling host.send_platform_message('kick', ...) from here
+        # recurses back into this same method and blocks bridge messages from Twitch,
+        # YouTube or TikTok. So Kick writes directly with the central OAuth token
+        # mirrored through host.platform_settings().
+        ok, detail = self._send_direct_with_token(message, effective, use_bot=True)
+        self._append_diag(detail)
+        return ok, detail
 
 
 def create_plugin():

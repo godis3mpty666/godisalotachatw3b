@@ -564,3 +564,20 @@ button.secondary{
     font-size:clamp(20px,4vw,28px);
   }
 }
+
+.pluginCard{display:flex;flex-direction:column;gap:10px}
+.pluginHead{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
+.pluginHead h3{margin:0}
+.pluginState{border:1px solid rgba(255,255,255,.14);background:#242944;color:#dce2ff;border-radius:999px;padding:5px 9px;font-size:11px;font-weight:900;text-transform:uppercase}
+.pluginState.ok{background:rgba(46,233,135,.12);border-color:rgba(46,233,135,.35);color:var(--green)}
+.pluginState.bad{background:rgba(255,85,119,.12);border-color:rgba(255,85,119,.35);color:var(--red)}
+.pluginStatusText{margin-top:auto;overflow-wrap:anywhere}
+.pluginSettingsCard{margin-bottom:18px;border-color:rgba(134,92,255,.45)}
+.pluginSettingsHead{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;margin-bottom:14px}
+.pluginSettingsGroup{border:1px solid rgba(255,255,255,.08);border-radius:14px;background:rgba(255,255,255,.03);padding:14px;margin:12px 0}
+.pluginSettingsFields{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;align-items:end}
+.pluginSettingsFields .hint{margin-top:-4px;grid-column:1/-1}
+.settingsSeparator{grid-column:1/-1;color:#bfc7ef;font-weight:900;border-bottom:1px solid rgba(255,255,255,.10);padding:8px 0 6px;margin-top:4px}
+.settingsBool{display:flex;align-items:center;gap:10px;min-height:42px;background:rgba(8,10,22,.45);border:1px solid rgba(255,255,255,.08);border-radius:12px;padding:10px 12px}
+.settingsBool input{width:auto;flex:0 0 auto}
+.settingsBool span{font-weight:800;color:#dce2ff}
