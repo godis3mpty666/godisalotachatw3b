@@ -112,6 +112,22 @@ def _as_bool(value: Any, default: bool = False) -> bool:
 def _safe_text(value: Any) -> str:
     return str(value or '').strip()
 
+def _spotify_expires_at(data: dict[str, Any]) -> float:
+    try:
+        explicit = float(data.get('expires_at') or 0)
+    except Exception:
+        explicit = 0.0
+    if explicit > 0:
+        return explicit
+    try:
+        saved_at = float(data.get('saved_at') or 0)
+        expires_in = float(data.get('expires_in') or 0)
+        if saved_at > 0 and expires_in > 0:
+            return saved_at + expires_in
+    except Exception:
+        pass
+    return 0.0
+
 
 
 
@@ -481,7 +497,7 @@ class Spotis3mptifyPlugin(ProviderPlugin):
             merged['redirect_uri'] = _safe_text(spotify.get('redirect_uri'))
             merged['spotify_access_token'] = _safe_text(spotify.get('access_token'))
             merged['spotify_refresh_token'] = _safe_text(spotify.get('refresh_token'))
-            merged['spotify_expires_at'] = spotify.get('expires_at') or 0
+            merged['spotify_expires_at'] = _spotify_expires_at(spotify)
             merged['spotify_scope'] = _safe_text(spotify.get('scope') or spotify.get('scopes'))
         return merged
 
@@ -831,4 +847,5 @@ class Spotis3mptifyPlugin(ProviderPlugin):
 
 def create_plugin() -> Spotis3mptifyPlugin:
     return Spotis3mptifyPlugin()
+
 

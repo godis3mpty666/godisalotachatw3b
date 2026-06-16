@@ -159,6 +159,14 @@ class WebbasedPluginHost:
                     value = token.get(key)
                     if value not in (None, ""):
                         cfg[prefix + key] = value
+                if token.get("access_token") and not token.get("expires_at"):
+                    try:
+                        saved_at = float(token.get("saved_at") or 0)
+                        expires_in = float(token.get("expires_in") or 0)
+                        if saved_at > 0 and expires_in > 0:
+                            cfg[prefix + "expires_at"] = saved_at + expires_in
+                    except Exception:
+                        pass
                 if account == "bot":
                     # Canonical bot token stays access_token/refresh_token.
                     # bot_* aliases only exist for legacy call sites.
