@@ -760,9 +760,9 @@ class Spotis3mptifyPlugin(ProviderPlugin):
                 return
             title = str(res.get('title') or '').strip()
             artist = str(res.get('artist') or '').strip()
-            msg = f'@{username} queued: {artist} â€” {title}'.strip()
+            msg = f'@{username} queued: {artist} - {title}'.strip()
             self._reply(platform, msg)
-            self._log(f'SR OK: {username}@{platform} -> {artist} â€” {title}')
+            self._log(f'SR OK: {username}@{platform} -> {artist} - {title}')
         except urllib.error.HTTPError as exc:
             body = ''
             try:
