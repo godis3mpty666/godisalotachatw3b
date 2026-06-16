@@ -1,4 +1,4 @@
-# File: spotis3mptify_core.py
+﻿# File: spotis3mptify_core.py
 from __future__ import annotations
 import http.server, socketserver, threading, time, os, re, urllib.parse, urllib.request, urllib.error
 import json, random, sys, socket, ssl, select, base64, hashlib, shutil, subprocess
@@ -140,7 +140,7 @@ CLIENT_ID_DEFAULT              = "YOUR_SPOTIFY_CLIENT_ID_HERE"
 CLIENT_SECRET_DEFAULT          = "YOUR_SPOTIFY_CLIENT_SECRET_HERE"
 PORT_DEFAULT                   = 5173
 SHARED_SECRET_DEFAULT          = ""   # optional header X-Auth for POSTs
-REDIRECT_URI_DEFAULT           = ""   # auto: http://127.0.0.1:<PORT>/callback
+REDIRECT_URI_DEFAULT           = ""
 
 TOKENS_DIR_DEFAULT             = AUTH_DIR
 
@@ -169,7 +169,7 @@ ASYNC_COVER_FETCH_DEFAULT      = True
 LOG_VERBOSE_DEFAULT            = True
 LOG_SLOW_MS_DEFAULT            = 500
 LOG_DEDUP_SEC_DEFAULT          = 30
-LOG_NP_ON_CHANGE_DEFAULT       = False  # keine NP-Change-Logs, außer man will sie
+LOG_NP_ON_CHANGE_DEFAULT       = False  # keine NP-Change-Logs, auÃŸer man will sie
 
 NOWPLAYING_ENABLE_FILES_DEFAULT = True
 NOWPLAYING_POLL_MS_DEFAULT     = 2000
@@ -208,7 +208,7 @@ TWITCH_BOT_TOKEN_OVERRIDE_DEFAULT  = ""
 
 # --- Twitch NowPlaying announce defaults (NEU) ---
 TWITCH_NP_ON_CHANGE_DEFAULT      = False
-TWITCH_NP_FORMAT_DEFAULT         = "🎶 Now Playing: {artist} — {title}"
+TWITCH_NP_FORMAT_DEFAULT         = "ðŸŽ¶ Now Playing: {artist} â€” {title}"
 TWITCH_NP_COOLDOWN_SEC_DEFAULT   = 60
 
 # ---------- OBS WebSocket v5 defaults ----------
@@ -237,6 +237,7 @@ PORT            = PORT_DEFAULT
 SHARED_SECRET   = SHARED_SECRET_DEFAULT
 TOKENS_DIR      = TOKENS_DIR_DEFAULT
 REDIRECT_URI_OV = REDIRECT_URI_DEFAULT
+CENTRAL_SPOTIFY_TOKENS: dict[str, Any] = {}
 
 COOLDOWN_MINUTES        = COOLDOWN_MINUTES_DEFAULT
 PLAYLIST_PREFIX         = PLAYLIST_PREFIX_DEFAULT
@@ -558,18 +559,24 @@ def _cached_api_call(cache_key, func, *args, **kwargs):
     _API_CACHE[cache_key] = (res, now)
     return res
 
-# ======================= Spotify OAuth & API =======================
-def _read_tokens(): return _load_json(_p_tokens(), {"access_token": None, "refresh_token": None, "expires_at": 0})
-def _write_tokens(tok): _save_json(_p_tokens(), tok)
+# ======================= Spotify API auth from central platform settings =======================
+def _read_tokens():
+    if CENTRAL_SPOTIFY_TOKENS:
+        return dict(CENTRAL_SPOTIFY_TOKENS)
+    return {"access_token": None, "refresh_token": None, "expires_at": 0}
+
+def _write_tokens(tok):
+    CENTRAL_SPOTIFY_TOKENS.clear()
+    CENTRAL_SPOTIFY_TOKENS.update(dict(tok or {}))
+
 def _is_authorized(): t = _read_tokens(); return bool(t.get("refresh_token") or t.get("access_token"))
-def _redirect_uri(): return (REDIRECT_URI_OV.strip() or f"http://127.0.0.1:{PORT}/callback")
 
 def _ensure_access_token():
     tok = _read_tokens()
     if tok.get("access_token") and (tok.get("expires_at", 0) - 30) > _now():
         return tok["access_token"]
     if not tok.get("refresh_token"):
-        raise RuntimeError("Not authorized. Open /login in your browser.")
+        raise RuntimeError("Spotify is not authorized in the core Platforms page.")
     try:
         data = urllib.parse.urlencode({
             "grant_type": "refresh_token",
@@ -787,7 +794,7 @@ def _create_playlist(at, name, desc):
     if pid:
         try:
             url = ((r.get("external_urls") or {}).get("spotify")) or f"https://open.spotify.com/playlist/{pid}"
-            logi(f"Spotify created playlist confirmed: '{name}' · {url}")
+            logi(f"Spotify created playlist confirmed: '{name}' Â· {url}")
         except Exception:
             pass
     return pid
@@ -898,7 +905,7 @@ def _find_and_adopt_existing_playlist(at, desired_name, user_display):
         current_me = _get_me_id(at)
         targets = {desired_name.strip().lower(),
                    f"Spotis3mptify - {user_display}".lower(),
-                   f"Spotis3mptify – {user_display}".lower()}
+                   f"Spotis3mptify â€“ {user_display}".lower()}
         while url:
             r = _api("GET", url, at, params=params if url.endswith("/me/playlists") else None, quiet=True, quiet_codes={401,403,404})
             if int((r or {}).get("_http_error_code") or 0):
@@ -994,7 +1001,7 @@ def _get_or_create_user_playlist(at, user_display_raw):
     info = _playlist_get_info(at, pid)
     url = (((info.get("external_urls") or {}).get("spotify")) or f"https://open.spotify.com/playlist/{pid}")
     total = ((info.get("tracks") or {}).get("total"))
-    logi(f"{action} playlist '{desired}' for @{user} · id={pid} · tracks={total if total is not None else '?'} · {url}")
+    logi(f"{action} playlist '{desired}' for @{user} Â· id={pid} Â· tracks={total if total is not None else '?'} Â· {url}")
 
     # Cover upload happens AFTER saving the playlist mapping. If Spotify rejects the image
     # upload, requests and playlist creation must still work.
@@ -1340,7 +1347,7 @@ def _update_nowplaying_files(meta, download_cover: bool):
         _atomic_write_text(_p_np_artist(), meta.get("artist",""))
         _atomic_write_text(_p_np_title(),  meta.get("title",""))
         _atomic_write_text(_p_np_album(),  meta.get("album",""))
-        _atomic_write_text(_p_np_combo(),  f"{meta.get('artist','')} — {meta.get('title','')}")
+        _atomic_write_text(_p_np_combo(),  f"{meta.get('artist','')} â€” {meta.get('title','')}")
         provider = (meta.get("provider") or "spotify").strip().lower()
         accent = meta.get("accent") or ("#FF0033" if provider in ("youtube", "ytmusic") else "#1DB954")
         _atomic_write_text(_p_np_url(),    meta.get("url",""))
@@ -1349,14 +1356,14 @@ def _update_nowplaying_files(meta, download_cover: bool):
         
         cov = (meta.get("covers") or {})
         
-        # VERBESSERUNG: Synchroner Download des Covers für sofortige Verfügbarkeit
+        # VERBESSERUNG: Synchroner Download des Covers fÃ¼r sofortige VerfÃ¼gbarkeit
         if download_cover:
             cover_url_640 = cov.get("url_640","")
             cover_url_target = cov.get(f"url_{COVER_IMAGE_SIZE}","") or cov.get("url_300","")
             
-            # Priorisiere das aktuelle Cover für sofortigen Download
+            # Priorisiere das aktuelle Cover fÃ¼r sofortigen Download
             if cover_url_target:
-                # Synchroner Download für das Haupt-Cover
+                # Synchroner Download fÃ¼r das Haupt-Cover
                 try:
                     if _download_cover_with_marker(COVER_IMAGE_SIZE, cover_url_target):
                         logi(f"Cover downloaded synchron: {cover_url_target}")
@@ -1365,7 +1372,7 @@ def _update_nowplaying_files(meta, download_cover: bool):
                     # Fallback: Asynchron versuchen
                     _THREAD_POOL.submit(_download_to, _p_cover(COVER_IMAGE_SIZE), cover_url_target)
             
-            # 640px Cover asynchron (wird weniger dringend benötigt)
+            # 640px Cover asynchron (wird weniger dringend benÃ¶tigt)
             if cover_url_640:
                 _THREAD_POOL.submit(_download_cover_with_marker, 640, cover_url_640)
         
@@ -1455,7 +1462,7 @@ def _set_youtube_nowplaying(meta: dict):
                 _download_to_if_source_changed(_p_yt_thumb(), _p_yt_thumb_src(), thumb)
             except Exception:
                 _THREAD_POOL.submit(_download_to_if_source_changed, _p_yt_thumb(), _p_yt_thumb_src(), thumb)
-        _log_throttled("INFO", "yt_np_changed", f"youtube nowplaying: {out.get('artist','')} — {out.get('title','')}", 10)
+        _log_throttled("INFO", "yt_np_changed", f"youtube nowplaying: {out.get('artist','')} â€” {out.get('title','')}", 10)
         return {"ok": True, "nowplaying": out}
     except Exception as e:
         _yt_log(f"YouTube nowplaying sync failed: {e}", "WARN")
@@ -1634,7 +1641,7 @@ html,body{{margin:0;width:100%;height:100%;background:transparent;overflow:hidde
 img{{width:100%;height:100%;object-fit:cover;border-radius:50%;display:block;animation:spin 9s linear infinite;}}
 .fallback{{width:100%;height:100%;border-radius:50%;display:flex;align-items:center;justify-content:center;background:#111;color:#fff;font:900 28px Nuishock,Nulshock,Square,"Arial Black",Impact,sans-serif;animation:spin 9s linear infinite;}}
 @keyframes spin{{from{{transform:rotate(0deg)}}to{{transform:rotate(360deg)}}}}
-</style></head><body><div class="wrap"><img id="cover" src="{img_src}" onerror="this.style.display='none';document.getElementById('fallback').style.display='flex'"><div id="fallback" class="fallback" style="display:none">♪</div></div><script>
+</style></head><body><div class="wrap"><img id="cover" src="{img_src}" onerror="this.style.display='none';document.getElementById('fallback').style.display='flex'"><div id="fallback" class="fallback" style="display:none">â™ª</div></div><script>
 let lastVersion={version!r};
 async function pollCover(){{
   try{{
@@ -1752,16 +1759,16 @@ def _np_poll_once(at, force=False):
             NOWPLAYING["updated_at"] = _now()
             NOWPLAYING["files"] = {"artist": _p_np_artist(), "title": _p_np_title(), "album": _p_np_album(), "combo": _p_np_combo(), "url": _p_np_url(), f"cover_{COVER_IMAGE_SIZE}": _p_cover(COVER_IMAGE_SIZE)}
         
-        # VERBESSERUNG: Bei JEDER Änderung oder force die Files updaten
+        # VERBESSERUNG: Bei JEDER Ã„nderung oder force die Files updaten
         if track_changed or cover_changed or force:
             _update_nowplaying_files(meta, download_cover=need_cover)
             if LOG_NP_ON_CHANGE:
-                _log_throttled("INFO", "nowplaying_changed", f"nowplaying: {meta.get('artist','')} — {meta.get('title','')}", 10)
+                _log_throttled("INFO", "nowplaying_changed", f"nowplaying: {meta.get('artist','')} â€” {meta.get('title','')}", 10)
             
-            # VERBESSERUNG: OBS Cover immer bei Track-Wechsel aktualisieren, aber mit Verzögerung für Cover-Download
+            # VERBESSERUNG: OBS Cover immer bei Track-Wechsel aktualisieren, aber mit VerzÃ¶gerung fÃ¼r Cover-Download
             if track_changed and OBS_WS_ENABLED:
                 def _delayed_obs_update():
-                    # Kurze Verzögerung um Cover-Download zu ermöglichen
+                    # Kurze VerzÃ¶gerung um Cover-Download zu ermÃ¶glichen
                     time.sleep(0.5)
                     try:
                         _obs_update_cover_display()
@@ -1774,7 +1781,7 @@ def _np_poll_once(at, force=False):
             if track_changed and TWITCH_NP_ON_CHANGE:
                 _announce_nowplaying_to_twitch(meta)
                 
-            # VERBESSERUNG: Auto Filter Sequence mit etwas mehr Verzögerung
+            # VERBESSERUNG: Auto Filter Sequence mit etwas mehr VerzÃ¶gerung
             if OBS_FILTER_AUTO_ON_NP_CHANGE and track_changed:
                 def _auto_obs_sequence():
                     try:
@@ -1858,7 +1865,7 @@ def _async_add_to_user_playlist(user_norm, track_id, track_uri, rid="sr#"):
             url = (((info.get("external_urls") or {}).get("spotify")) or f"https://open.spotify.com/playlist/{pid}")
             total = ((info.get("tracks") or {}).get("total"))
             snap = (add_res or {}).get("snapshot_id") or ""
-            logi(f"{rid} saved to user playlist for @{user_norm} · tracks={total if total is not None else '?'} · snapshot={snap[:10]} · {url}")
+            logi(f"{rid} saved to user playlist for @{user_norm} Â· tracks={total if total is not None else '?'} Â· snapshot={snap[:10]} Â· {url}")
         else:
             _log_throttled("INFO", f"playlist_track_exists:{track_id}", f"{rid} track already exists in playlist for @{user_norm}", 300)
     except Exception as e:
@@ -1899,7 +1906,7 @@ def _playlist_key_for_user(user_display):
 
 def _clean_sr_query(text):
     s = (text or "")
-    # Entfernt unsichtbare Unicode-Format-/Steuerzeichen, die aus Chat-Exports mitkommen können.
+    # Entfernt unsichtbare Unicode-Format-/Steuerzeichen, die aus Chat-Exports mitkommen kÃ¶nnen.
     s = "".join(ch for ch in s if ((ch >= " " and ch != "\x7f") or ch in "\t\r\n"))
     s = re.sub(r"[\u200b-\u200f\u2060\ufeff\u034f]", "", s)
     s = re.sub(r"\s+", " ", s).strip()
@@ -2147,16 +2154,16 @@ def _yt_search_web(query):
         meta=_yt_fetch_video(vid, check_embed=True)
         if not meta: continue
         if meta.get('embed_ok') is True:
-            _yt_log(f"Search picked embeddable result: {vid} — {meta.get('title','')}")
+            _yt_log(f"Search picked embeddable result: {vid} â€” {meta.get('title','')}")
             return meta
         if meta.get('embed_ok') is False:
-            _yt_log(f"Search skipped blocked result: {vid} — {meta.get('title','')}", "WARN")
+            _yt_log(f"Search skipped blocked result: {vid} â€” {meta.get('title','')}", "WARN")
         if meta.get('embed_ok') is None and first_unknown is None:
             first_unknown=meta
         if len(seen) >= 15:
             break
     if first_unknown:
-        _yt_log(f"Search fallback picked unchecked result: {first_unknown.get('video_id')} — {first_unknown.get('title','')}", "WARN")
+        _yt_log(f"Search fallback picked unchecked result: {first_unknown.get('video_id')} â€” {first_unknown.get('title','')}", "WARN")
     else:
         _yt_log("Search found no usable YouTube result", "WARN")
     return first_unknown
@@ -2186,7 +2193,7 @@ def _yt_resolve(qraw):
     if mx and dur and dur>mx:
         _yt_log(f"Resolve blocked by duration: {dur}s > max {mx}s", "WARN")
         return None,f'Video too long ({dur//60}:{dur%60:02d}, max {mx//60}:{mx%60:02d})'
-    _yt_log(f"Resolve OK: {meta.get('video_id')} — {meta.get('title','')}")
+    _yt_log(f"Resolve OK: {meta.get('video_id')} â€” {meta.get('title','')}")
     return meta,None
 
 
@@ -2252,8 +2259,8 @@ def _handle_yt(qraw,user='someone'):
         item = _yt_attach_spotify_wait_marker(item)
     with _YT_QUEUE_LOCK:
         _yt_load(); _YT_QUEUE.append(item); del _YT_QUEUE[:-100]; _yt_save()
-    _yt_log(f"Queued: {item['artist']} — {item['title']} (by @{item['by']}); queue_len={len(_YT_QUEUE)}")
-    logi(f"YouTube queued: {item['artist']} — {item['title']} (by @{item['by']})")
+    _yt_log(f"Queued: {item['artist']} â€” {item['title']} (by @{item['by']}); queue_len={len(_YT_QUEUE)}")
+    logi(f"YouTube queued: {item['artist']} â€” {item['title']} (by @{item['by']})")
     r={"ok":True,"queued":True}; r.update(_yt_public(item)); return r,None
 
 def _yt_state(pop_next=False):
@@ -2269,7 +2276,7 @@ def _yt_state(pop_next=False):
                 _yt_log(f"Marked played: {old.get('title','')} ({old.get('video_id','')})")
             _spotify_pause_for_youtube()
             _YT_CURRENT=_YT_QUEUE.pop(0); _YT_CURRENT['status']='playing'; _yt_save()
-            _yt_log(f"Now playing: {_YT_CURRENT.get('artist','YouTube')} — {_YT_CURRENT.get('title','')} ({_YT_CURRENT.get('video_id','')}); queue_len={len(_YT_QUEUE)}")
+            _yt_log(f"Now playing: {_YT_CURRENT.get('artist','YouTube')} â€” {_YT_CURRENT.get('title','')} ({_YT_CURRENT.get('video_id','')}); queue_len={len(_YT_QUEUE)}")
             try:
                 _set_youtube_nowplaying(_YT_CURRENT)
             except Exception:
@@ -2318,7 +2325,7 @@ def _yt_clear():
         _YT_QUEUE.clear(); _YT_CURRENT=None; _YT_CONTROL['clear_seq']=int(_YT_CONTROL.get('clear_seq') or 0)+1; _yt_save(); _yt_log(f"Queue cleared: removed {old_len} queued item(s), had_current={had_current}"); _spotify_resume_after_youtube(force=True); return _yt_state(False)
 
 def _yt_player_html():
-    return r'''<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>spotis3mptify YouTube Player</title><script src="https://www.youtube.com/iframe_api"></script><style>body{margin:0;background:#06070c;color:#fff;font-family:Segoe UI,Arial,sans-serif;overflow:hidden}#wrap{position:fixed;inset:0;display:grid;grid-template-rows:1fr auto;background:radial-gradient(circle at 18% 8%,#2b1759 0,#090a12 42%,#050507 100%)}#player{width:100%;height:100%}.bar{padding:14px 18px;background:rgba(0,0,0,.55);backdrop-filter:blur(14px);display:flex;gap:14px;align-items:center;border-top:1px solid rgba(255,255,255,.1)}.pill{background:rgba(255,255,255,.09);border:1px solid rgba(255,255,255,.15);border-radius:999px;padding:7px 11px;font-size:12px;white-space:nowrap}.meta{min-width:0;flex:1}.title{font-size:18px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.sub{font-size:12px;color:#b8bad0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.notice{position:fixed;left:24px;top:24px;max-width:520px;padding:14px 16px;border-radius:18px;background:rgba(0,0,0,.68);border:1px solid rgba(255,255,255,.16);box-shadow:0 18px 60px rgba(0,0,0,.35);display:none}.notice b{display:block;margin-bottom:4px}button{background:#8b5cf6;color:white;border:0;border-radius:13px;padding:10px 14px;font-weight:800;cursor:pointer}button:hover{filter:brightness(1.08)}</style></head><body><div id="wrap"><div id="player"></div><div class="notice" id="notice"><b>Video nicht im Player verfügbar</b><span id="noticeText">Ich überspringe automatisch zum nächsten Request.</span></div><div class="bar"><span class="pill" id="count">Queue: 0</span><div class="meta"><div class="title" id="title">Warte auf !yt …</div><div class="sub" id="sub">Browser Source offen lassen.</div></div><button onclick="skip()">Skip</button><button onclick="clearQ()">Clear</button></div></div><script>let player=null,playingId='',lastSkip=0,lastClear=0,lastErrorFor='';async function ytlog(message,level){try{await fetch('/yt/log',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message,level:level||'INFO'})})}catch(e){}}function onYouTubeIframeAPIReady(){ytlog('IFrame API ready, creating player');player=new YT.Player('player',{height:'100%',width:'100%',playerVars:{autoplay:1,controls:1,rel:0,modestbranding:1,origin:location.origin,playsinline:1},events:{onReady:e=>{ytlog('Player ready');tick()},onStateChange:e=>{ytlog('Player state changed: '+e.data);if(e.data===YT.PlayerState.ENDED)next(true)},onError:onPlayerError}})}async function api(p,o){let r=await fetch(p,o||{});return await r.json()}function showNotice(msg){let n=document.getElementById('notice'),t=document.getElementById('noticeText');t.textContent=msg||'Ich überspringe automatisch zum nächsten Request.';n.style.display='block';setTimeout(()=>{n.style.display='none'},5500)}async function onPlayerError(e){let code=e&&e.data;let id=playingId;if(id&&id!==lastErrorFor){lastErrorFor=id;ytlog('Player error code '+code+' for '+id,'WARN');showNotice('YouTube blockt dieses Video im eingebetteten Player (Code '+code+'). Ich nehme den nächsten Song.');await api('/yt/skip',{method:'POST'});setTimeout(()=>next(true),700)}}async function next(pop){apply(await api('/yt/next?pop='+(pop?'1':'0')))}function apply(s){document.getElementById('count').textContent='Queue: '+((s.queue||[]).length);let c=s.current;if(c){document.getElementById('title').textContent=c.title||c.video_id;document.getElementById('sub').textContent=(c.artist||'YouTube')+' · requested by '+(c.by||'someone');if((c.player_mode||'iframe')==='ytmusic'){if(player)player.stopVideo();playingId='';document.getElementById('sub').textContent='Wird von der YouTube Music App/WebView abgespielt.';}else if(player&&c.video_id&&c.video_id!==playingId){playingId=c.video_id;lastErrorFor='';ytlog('Loading video '+c.video_id+' — '+(c.title||''));player.loadVideoById(c.video_id)}}else{document.getElementById('title').textContent='Warte auf !yt …';document.getElementById('sub').textContent='Queue leer';playingId='';lastErrorFor=''}if(s.control){if(s.control.skip_seq!==lastSkip){lastSkip=s.control.skip_seq;next(true)}if(s.control.clear_seq!==lastClear){lastClear=s.control.clear_seq;if(player)player.stopVideo();playingId='';lastErrorFor=''}}}async function tick(){try{let s=await api('/yt/state');let q=s.queue||[];if(!s.current&&q.length){let first=q[0]||{};if((first.player_mode||'iframe')==='ytmusic'){document.getElementById('count').textContent='Queue: '+q.length;document.getElementById('title').textContent='YouTube Music WebView wartet';document.getElementById('sub').textContent='Diese Queue wird von der YouTube Music App abgespielt, nicht vom IFrame-Fallback.';}else await next(true);}else apply(s)}catch(e){}setTimeout(tick,1500)}async function skip(){await api('/yt/skip',{method:'POST'});await next(true)}async function clearQ(){await api('/yt/clear',{method:'POST'});if(player)player.stopVideo();playingId='';lastErrorFor=''}</script></body></html>'''
+    return r'''<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>spotis3mptify YouTube Player</title><script src="https://www.youtube.com/iframe_api"></script><style>body{margin:0;background:#06070c;color:#fff;font-family:Segoe UI,Arial,sans-serif;overflow:hidden}#wrap{position:fixed;inset:0;display:grid;grid-template-rows:1fr auto;background:radial-gradient(circle at 18% 8%,#2b1759 0,#090a12 42%,#050507 100%)}#player{width:100%;height:100%}.bar{padding:14px 18px;background:rgba(0,0,0,.55);backdrop-filter:blur(14px);display:flex;gap:14px;align-items:center;border-top:1px solid rgba(255,255,255,.1)}.pill{background:rgba(255,255,255,.09);border:1px solid rgba(255,255,255,.15);border-radius:999px;padding:7px 11px;font-size:12px;white-space:nowrap}.meta{min-width:0;flex:1}.title{font-size:18px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.sub{font-size:12px;color:#b8bad0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.notice{position:fixed;left:24px;top:24px;max-width:520px;padding:14px 16px;border-radius:18px;background:rgba(0,0,0,.68);border:1px solid rgba(255,255,255,.16);box-shadow:0 18px 60px rgba(0,0,0,.35);display:none}.notice b{display:block;margin-bottom:4px}button{background:#8b5cf6;color:white;border:0;border-radius:13px;padding:10px 14px;font-weight:800;cursor:pointer}button:hover{filter:brightness(1.08)}</style></head><body><div id="wrap"><div id="player"></div><div class="notice" id="notice"><b>Video nicht im Player verfÃ¼gbar</b><span id="noticeText">Ich Ã¼berspringe automatisch zum nÃ¤chsten Request.</span></div><div class="bar"><span class="pill" id="count">Queue: 0</span><div class="meta"><div class="title" id="title">Warte auf !yt â€¦</div><div class="sub" id="sub">Browser Source offen lassen.</div></div><button onclick="skip()">Skip</button><button onclick="clearQ()">Clear</button></div></div><script>let player=null,playingId='',lastSkip=0,lastClear=0,lastErrorFor='';async function ytlog(message,level){try{await fetch('/yt/log',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message,level:level||'INFO'})})}catch(e){}}function onYouTubeIframeAPIReady(){ytlog('IFrame API ready, creating player');player=new YT.Player('player',{height:'100%',width:'100%',playerVars:{autoplay:1,controls:1,rel:0,modestbranding:1,origin:location.origin,playsinline:1},events:{onReady:e=>{ytlog('Player ready');tick()},onStateChange:e=>{ytlog('Player state changed: '+e.data);if(e.data===YT.PlayerState.ENDED)next(true)},onError:onPlayerError}})}async function api(p,o){let r=await fetch(p,o||{});return await r.json()}function showNotice(msg){let n=document.getElementById('notice'),t=document.getElementById('noticeText');t.textContent=msg||'Ich Ã¼berspringe automatisch zum nÃ¤chsten Request.';n.style.display='block';setTimeout(()=>{n.style.display='none'},5500)}async function onPlayerError(e){let code=e&&e.data;let id=playingId;if(id&&id!==lastErrorFor){lastErrorFor=id;ytlog('Player error code '+code+' for '+id,'WARN');showNotice('YouTube blockt dieses Video im eingebetteten Player (Code '+code+'). Ich nehme den nÃ¤chsten Song.');await api('/yt/skip',{method:'POST'});setTimeout(()=>next(true),700)}}async function next(pop){apply(await api('/yt/next?pop='+(pop?'1':'0')))}function apply(s){document.getElementById('count').textContent='Queue: '+((s.queue||[]).length);let c=s.current;if(c){document.getElementById('title').textContent=c.title||c.video_id;document.getElementById('sub').textContent=(c.artist||'YouTube')+' Â· requested by '+(c.by||'someone');if((c.player_mode||'iframe')==='ytmusic'){if(player)player.stopVideo();playingId='';document.getElementById('sub').textContent='Wird von der YouTube Music App/WebView abgespielt.';}else if(player&&c.video_id&&c.video_id!==playingId){playingId=c.video_id;lastErrorFor='';ytlog('Loading video '+c.video_id+' â€” '+(c.title||''));player.loadVideoById(c.video_id)}}else{document.getElementById('title').textContent='Warte auf !yt â€¦';document.getElementById('sub').textContent='Queue leer';playingId='';lastErrorFor=''}if(s.control){if(s.control.skip_seq!==lastSkip){lastSkip=s.control.skip_seq;next(true)}if(s.control.clear_seq!==lastClear){lastClear=s.control.clear_seq;if(player)player.stopVideo();playingId='';lastErrorFor=''}}}async function tick(){try{let s=await api('/yt/state');let q=s.queue||[];if(!s.current&&q.length){let first=q[0]||{};if((first.player_mode||'iframe')==='ytmusic'){document.getElementById('count').textContent='Queue: '+q.length;document.getElementById('title').textContent='YouTube Music WebView wartet';document.getElementById('sub').textContent='Diese Queue wird von der YouTube Music App abgespielt, nicht vom IFrame-Fallback.';}else await next(true);}else apply(s)}catch(e){}setTimeout(tick,1500)}async function skip(){await api('/yt/skip',{method:'POST'});await next(true)}async function clearQ(){await api('/yt/clear',{method:'POST'});if(player)player.stopVideo();playingId='';lastErrorFor=''}</script></body></html>'''
 
 # ======================= EXTERNAL SR FILE WATCHER =======================
 _EXTERNAL_SR_THREAD: Optional[threading.Thread] = None
@@ -2417,8 +2424,8 @@ def _process_external_sr_line(line: str):
                 retry = int(err.split(":",1)[1]); logi(f"external SR ratelimited for {user}: retry in {retry}s")
             else: logw(f"external SR failed for {user}: {err}")
             return
-        if result.get("playing_now"): logi(f"external SR playing now: {result['artist']} — {result['title']} (by @{user})")
-        else: logi(f"external SR queued: {result['artist']} — {result['title']} (by @{user})")
+        if result.get("playing_now"): logi(f"external SR playing now: {result['artist']} â€” {result['title']} (by @{user})")
+        else: logi(f"external SR queued: {result['artist']} â€” {result['title']} (by @{user})")
     except Exception as e:
         logw(f"external request exception for {user}: {e}")
 
@@ -2535,9 +2542,7 @@ def _twitch_is_authorized(which="main"):
     return bool(t.get("refresh_token") or t.get("access_token"))
 
 def _twitch_redirect_uri(which="main"):
-    if which == "bot":
-        return (TWITCH_BOT_REDIRECT_OV.strip() or f"http://127.0.0.1:{PORT}/twitch/callback")
-    return (TWITCH_MAIN_REDIRECT_OV.strip() or f"http://127.0.0.1:{PORT}/twitch/callback")
+    return ""
 
 def _twitch_client_info(which="main"):
     if which == "bot":
@@ -2549,7 +2554,7 @@ def _twitch_ensure_access_token(which="main"):
     if tok.get("access_token") and (tok.get("expires_at", 0) - 30) > _now():
         return tok["access_token"]
     if not tok.get("refresh_token"):
-        raise RuntimeError("Twitch not authorized ({}). Open /twitch/login?acc={} first.".format(which,which))
+        raise RuntimeError("Twitch is not authorized in the core Platforms page.")
     cid, csec, _sc = _twitch_client_info(which)
     data = urllib.parse.urlencode({"grant_type": "refresh_token", "refresh_token": tok["refresh_token"], "client_id": cid, "client_secret": csec}).encode("utf-8")
     req = urllib.request.Request("https://id.twitch.tv/oauth2/token", data=data, method="POST")
@@ -2703,9 +2708,9 @@ class _TwitchIRC(threading.Thread):
                         self._reply("Request failed: " + err)
                     return
                 if result.get("playing_now"):
-                    self._reply(f"▶ {result['artist']} — {result['title']} (by @{user})")
+                    self._reply(f"â–¶ {result['artist']} â€” {result['title']} (by @{user})")
                 else:
-                    self._reply(f"Queued: {result['artist']} — {result['title']} (by @{user})")
+                    self._reply(f"Queued: {result['artist']} â€” {result['title']} (by @{user})")
             except Exception:
                 self._reply("SR failed.")
 
@@ -3067,7 +3072,7 @@ def _custom_overlay_html() -> str:
 <style>
 @font-face{font-family:SquareLocal;src:url('/font/square')} @font-face{font-family:RobotHeroes;src:url('/font/robot-heroes')}
 *{box-sizing:border-box} html,body{margin:0;width:100%;height:100%;background:transparent!important;overflow:hidden;font-family:Inter,Segoe UI,Arial,sans-serif;color:white}#stageWrap{position:relative;width:100vw;height:100vh;background:transparent;overflow:hidden;user-select:none}#stage{position:absolute;left:0;top:0;width:900px;height:360px;transform-origin:left top;background:transparent;overflow:visible}.el{position:absolute;min-width:8px;min-height:8px;transform-origin:center center;touch-action:none;outline:0 solid transparent}.editing .el.selected{outline:2px solid #8b5cf6;box-shadow:0 0 0 2px rgba(139,92,246,.25)}.el.text{display:flex;align-items:center;white-space:nowrap;overflow:hidden;line-height:1.05;text-shadow:none;background:transparent}.el.text .textInner{display:inline-block;white-space:nowrap;will-change:transform;max-width:none}.el.text.marquee-on{justify-content:flex-start!important}.el.shape,.el.line{background:rgba(255,255,255,.3)}.el.cover{overflow:hidden;background:transparent}.el.cover img{width:100%;height:100%;object-fit:cover;display:block}.cover img.youtube-cover{object-fit:cover;border-radius:0!important;}.el.cover.circle,img.circle{border-radius:9999px}.el.cover.rotate img{animation:spin var(--spin,18s) linear infinite}@keyframes spin{to{transform:rotate(360deg)}}@keyframes s3bounce{from{transform:translateX(0)}to{transform:translateX(calc(-1 * var(--marquee-distance,0px)))}}@keyframes s3scrollltr{from{transform:translateX(calc(-1 * var(--text-width,0px)))}to{transform:translateX(var(--box-width,100%))}}@keyframes s3scrollrtl{from{transform:translateX(var(--box-width,100%))}to{transform:translateX(calc(-1 * var(--text-width,0px)))}}.handle{display:none;position:absolute;right:-7px;bottom:-7px;width:15px;height:15px;border-radius:50%;background:#8b5cf6;border:2px solid #fff;cursor:nwse-resize;z-index:10}.editing .selected .handle{display:block}#editBtn{position:fixed;right:14px;bottom:14px;z-index:99999;border:1px solid rgba(255,255,255,.25);background:rgba(12,12,16,.72);backdrop-filter:blur(10px);color:white;border-radius:12px;padding:10px 16px;font-weight:900;cursor:pointer}#editBtn:hover{background:#8b5cf6}#panel{position:fixed;right:0;top:0;bottom:0;width:390px;z-index:99998;background:rgba(12,12,16,.95);backdrop-filter:blur(14px);border-left:1px solid #333341;padding:12px;transform:translateX(100%);transition:transform .22s ease;overflow:auto}.editing #panel{transform:translateX(0)}#panel h2{margin:0 0 8px;font-size:18px}.row{display:grid;grid-template-columns:132px 1fr;gap:8px;align-items:center;margin:7px 0}.row label{font-size:12px;color:#aaaab6}input,select,button{background:#1d1d27;color:#fff;border:1px solid #414152;border-radius:8px;padding:7px}input[type=color]{padding:2px;height:34px}.btns{display:flex;gap:6px;flex-wrap:wrap;margin:8px 0}.btns button{cursor:pointer}.primary{background:#7c3aed}.danger{background:#7f1d1d}.hint{font-size:12px;color:#aaa;line-height:1.35;border-top:1px solid #333;padding-top:8px;margin-top:8px}.list{max-height:150px;overflow:auto;border:1px solid #333;border-radius:8px}.item{padding:6px 8px;border-bottom:1px solid #2b2b34;cursor:pointer}.item:hover,.item.active{background:#2b2146}.fx-fade{animation:fadeIn .45s ease}.fx-slide-left{animation:slideLeft .45s ease}.fx-slide-right{animation:slideRight .45s ease}.fx-pop{animation:popIn .42s cubic-bezier(.2,1.5,.35,1)}.fx-glitch{animation:glitch .45s steps(2,end)}.fx-flip{animation:flipIn .55s ease}.fx-bounce{animation:bounceIn .6s ease}@keyframes fadeIn{from{opacity:0;filter:blur(5px)}to{opacity:1;filter:blur(0)}}@keyframes slideLeft{from{opacity:0;transform:translateX(-35px)}to{opacity:1;transform:translateX(0)}}@keyframes slideRight{from{opacity:0;transform:translateX(35px)}to{opacity:1;transform:translateX(0)}}@keyframes popIn{0%{opacity:0;transform:scale(.55)}70%{opacity:1;transform:scale(1.08)}100%{transform:scale(1)}}@keyframes glitch{0%{transform:translate(0);filter:hue-rotate(0)}20%{transform:translate(-4px,2px)}40%{transform:translate(4px,-1px)}60%{transform:translate(-2px,-2px)}80%{transform:translate(2px,1px)}100%{transform:translate(0)}}@keyframes flipIn{from{opacity:0;transform:perspective(400px) rotateX(70deg)}to{opacity:1;transform:none}}@keyframes bounceIn{0%{opacity:0;transform:scale(.3)}50%{opacity:1;transform:scale(1.08)}70%{transform:scale(.95)}100%{transform:scale(1)}}
-</style></head><body><div id='stageWrap'><div id='stage'></div></div><button id='editBtn'>Edit</button><aside id='panel'><h2>Custom Overlay</h2><div class='btns'><button onclick="addText('artist')">+ Artist</button><button onclick="addText('song')">+ Song</button><button onclick='addCover()'>+ Cover</button><button onclick='addRect()'>+ Rechteck</button><button onclick='addCircle()'>+ Kreis</button><button onclick="addLine('up')">+ Line Up</button><button onclick="addLine('down')">+ Line Down</button></div><div class='list' id='elist'></div><div id='props'></div><div class='btns'><button class='primary' onclick='saveLayout()'>Save</button><button onclick='loadLayout()'>Reload</button><button onclick='resetLayout()'>Reset</button><button class='danger' onclick='deleteSelected()'>Delete</button></div><div class='hint'>Kein Full-Reload: Artist/Song/Cover werden live aktualisiert. Cover-Cache wird nur bei echtem Wechsel erneuert. Für Meld am besten Browserquelle auf Canvas-Größe setzen. Lange Texte laufen automatisch als Band.</div></aside>
+</style></head><body><div id='stageWrap'><div id='stage'></div></div><button id='editBtn'>Edit</button><aside id='panel'><h2>Custom Overlay</h2><div class='btns'><button onclick="addText('artist')">+ Artist</button><button onclick="addText('song')">+ Song</button><button onclick='addCover()'>+ Cover</button><button onclick='addRect()'>+ Rechteck</button><button onclick='addCircle()'>+ Kreis</button><button onclick="addLine('up')">+ Line Up</button><button onclick="addLine('down')">+ Line Down</button></div><div class='list' id='elist'></div><div id='props'></div><div class='btns'><button class='primary' onclick='saveLayout()'>Save</button><button onclick='loadLayout()'>Reload</button><button onclick='resetLayout()'>Reset</button><button class='danger' onclick='deleteSelected()'>Delete</button></div><div class='hint'>Kein Full-Reload: Artist/Song/Cover werden live aktualisiert. Cover-Cache wird nur bei echtem Wechsel erneuert. FÃ¼r Meld am besten Browserquelle auf Canvas-GrÃ¶ÃŸe setzen. Lange Texte laufen automatisch als Band.</div></aside>
 <script>
 let state=__STATE__;let selected=null,editing=false,np={},lastVals={},nodes=new Map(),scale=1;const stage=document.getElementById('stage'),wrap=document.getElementById('stageWrap');
 function uid(p){return p+'_'+Math.random().toString(36).slice(2,8)}
@@ -3100,8 +3105,8 @@ function inp(l,v,k,t='text'){return `<div class='row'><label>${l}</label><input 
 function setSel(k,v){let el=state.elements.find(x=>x.id===selected);if(!el)return;if(['x','y','w','h','radius','opacity','z','fontSize','rotationSpeed','marqueeSpeed'].includes(k))v=Number(v);if(['bold','rotate'].includes(k))v=(v==='true'||v===true);el[k]=v;render()}
 function setCanvas(k,v){state.canvas=state.canvas||{};if(['width','height','marqueeSpeed'].includes(k))v=Number(v);state.canvas[k]=v;render()}
 function setColor(k,v){state.colors=state.colors||{};state.colors[k]=v;render()}
-function refreshProps(){let p=document.getElementById('props');let c=canvas();let el=state.elements.find(x=>x.id===selected);let html=`<h2>Canvas</h2>`+`<div class='row'><label>Breite</label><input type='number' value='${c.width}' onchange="setCanvas('width',this.value)"></div><div class='row'><label>Höhe</label><input type='number' value='${c.height}' onchange="setCanvas('height',this.value)"></div><div class='row'><label>Laufband</label><select onchange="setCanvas('marqueeMode',this.value)"><option value='bounce' ${(c.marqueeMode||'bounce')==='bounce'?'selected':''}>Bounce</option><option value='scroll-ltr' ${c.marqueeMode==='scroll-ltr'?'selected':''}>Links → rechts</option><option value='scroll-rtl' ${c.marqueeMode==='scroll-rtl'?'selected':''}>Rechts → links</option><option value='off' ${c.marqueeMode==='off'?'selected':''}>Aus</option></select></div><div class='row'><label>Tempo px/s</label><input type='number' value='${c.marqueeSpeed||45}' onchange="setCanvas('marqueeSpeed',this.value)"></div>`+`<h2>Provider-Farben</h2><div class='row'><label>Spotify</label><input type='color' value='${state.colors?.spotify||'#1DB954'}' oninput="setColor('spotify',this.value)"></div><div class='row'><label>YouTube</label><input type='color' value='${state.colors?.youtube||'#FF0033'}' oninput="setColor('youtube',this.value)"></div>`;if(!el){p.innerHTML=html+'<div class="hint">Element anklicken, dann Optionen ändern.</div>';return}html+=`<h2>Auswahl</h2>`+inp('Label',el.label||'','label')+inp('X',el.x,'x','number')+inp('Y',el.y,'y','number')+inp('Breite',el.w,'w','number')+inp('Höhe',el.h,'h','number')+inp('Radius',el.radius||0,'radius','number')+inp('Deckkraft 0-1',el.opacity??1,'opacity','number')+inp('Z',el.z||1,'z','number');if(el.type==='text'){html+=inp('Schrift',el.font||'','font')+inp('Größe',el.fontSize||32,'fontSize','number')+`<div class='row'><label>Fett</label><select onchange="setSel('bold',this.value)"><option value='true' ${el.bold?'selected':''}>Ja</option><option value='false' ${!el.bold?'selected':''}>Nein</option></select></div><div class='row'><label>Farbe</label><input type='color' value='${el.color||'#ffffff'}' oninput="setSel('color',this.value)"></div><div class='row'><label>Ausrichtung</label><select onchange="setSel('align',this.value)"><option value='left' ${el.align==='left'?'selected':''}>left</option><option value='center' ${el.align==='center'?'selected':''}>center</option><option value='right' ${el.align==='right'?'selected':''}>right</option></select></div><div class='row'><label>Laufband</label><select onchange="setSel('marqueeMode',this.value)"><option value='global' ${(el.marqueeMode||'global')==='global'?'selected':''}>Global</option><option value='bounce' ${el.marqueeMode==='bounce'?'selected':''}>Bounce</option><option value='scroll-ltr' ${el.marqueeMode==='scroll-ltr'?'selected':''}>Links → rechts</option><option value='scroll-rtl' ${el.marqueeMode==='scroll-rtl'?'selected':''}>Rechts → links</option><option value='off' ${el.marqueeMode==='off'?'selected':''}>Aus</option></select></div>`+inp('Tempo px/s',el.marqueeSpeed||45,'marqueeSpeed','number')}if(el.type==='shape'||el.type==='line'){html+=`<div class='row'><label>Farbe</label><input type='color' value='${el.color||'#ffffff'}' oninput="setSel('color',this.value)"></div><div class='row'><label>Provider-Farbe</label><select onchange="setSel('bind',this.value)"><option value='' ${!el.bind?'selected':''}>Nein</option><option value='providerColor' ${el.bind==='providerColor'?'selected':''}>Ja</option></select></div>`}if(el.type==='cover'){html+=`<div class='row'><label>Form</label><select onchange="setSel('shape',this.value)"><option value='circle' ${el.shape==='circle'?'selected':''}>Kreis</option><option value='square' ${el.shape!=='circle'?'selected':''}>Quadrat</option></select></div><div class='row'><label>Drehen</label><select onchange="setSel('rotate',this.value)"><option value='true' ${el.rotate?'selected':''}>Ja</option><option value='false' ${!el.rotate?'selected':''}>Nein</option></select></div>`+inp('Drehdauer s',el.rotationSpeed||18,'rotationSpeed','number')}html+=`<div class='row'><label>Effekt bei Wechsel</label><select onchange="setSel('effect',this.value)">${['none','fade','slide-left','slide-right','pop','glitch','flip','bounce'].map(f=>`<option value='${f}' ${el.effect===f?'selected':''}>${f}</option>`).join('')}</select></div>`;p.innerHTML=html}
-function deleteSelected(){if(!selected)return;state.elements=state.elements.filter(e=>e.id!==selected);selected=null;render()}function resetLayout(){if(confirm('Layout zurücksetzen?'))fetch('/customoverlay/state?default=1').then(r=>r.json()).then(d=>{state=d;selected=null;nodes.clear();stage.innerHTML='';render();refreshData()})}function saveLayout(){fetch('/customoverlay/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(state)}).then(r=>r.json()).then(d=>alert(d.ok?'Gespeichert':'Fehler: '+(d.error||'?'))).catch(e=>alert(e))}function loadLayout(){fetch('/customoverlay/state?_='+Date.now()).then(r=>r.json()).then(d=>{state=d;selected=null;nodes.clear();stage.innerHTML='';render();refreshData()})}
+function refreshProps(){let p=document.getElementById('props');let c=canvas();let el=state.elements.find(x=>x.id===selected);let html=`<h2>Canvas</h2>`+`<div class='row'><label>Breite</label><input type='number' value='${c.width}' onchange="setCanvas('width',this.value)"></div><div class='row'><label>HÃ¶he</label><input type='number' value='${c.height}' onchange="setCanvas('height',this.value)"></div><div class='row'><label>Laufband</label><select onchange="setCanvas('marqueeMode',this.value)"><option value='bounce' ${(c.marqueeMode||'bounce')==='bounce'?'selected':''}>Bounce</option><option value='scroll-ltr' ${c.marqueeMode==='scroll-ltr'?'selected':''}>Links â†’ rechts</option><option value='scroll-rtl' ${c.marqueeMode==='scroll-rtl'?'selected':''}>Rechts â†’ links</option><option value='off' ${c.marqueeMode==='off'?'selected':''}>Aus</option></select></div><div class='row'><label>Tempo px/s</label><input type='number' value='${c.marqueeSpeed||45}' onchange="setCanvas('marqueeSpeed',this.value)"></div>`+`<h2>Provider-Farben</h2><div class='row'><label>Spotify</label><input type='color' value='${state.colors?.spotify||'#1DB954'}' oninput="setColor('spotify',this.value)"></div><div class='row'><label>YouTube</label><input type='color' value='${state.colors?.youtube||'#FF0033'}' oninput="setColor('youtube',this.value)"></div>`;if(!el){p.innerHTML=html+'<div class="hint">Element anklicken, dann Optionen Ã¤ndern.</div>';return}html+=`<h2>Auswahl</h2>`+inp('Label',el.label||'','label')+inp('X',el.x,'x','number')+inp('Y',el.y,'y','number')+inp('Breite',el.w,'w','number')+inp('HÃ¶he',el.h,'h','number')+inp('Radius',el.radius||0,'radius','number')+inp('Deckkraft 0-1',el.opacity??1,'opacity','number')+inp('Z',el.z||1,'z','number');if(el.type==='text'){html+=inp('Schrift',el.font||'','font')+inp('GrÃ¶ÃŸe',el.fontSize||32,'fontSize','number')+`<div class='row'><label>Fett</label><select onchange="setSel('bold',this.value)"><option value='true' ${el.bold?'selected':''}>Ja</option><option value='false' ${!el.bold?'selected':''}>Nein</option></select></div><div class='row'><label>Farbe</label><input type='color' value='${el.color||'#ffffff'}' oninput="setSel('color',this.value)"></div><div class='row'><label>Ausrichtung</label><select onchange="setSel('align',this.value)"><option value='left' ${el.align==='left'?'selected':''}>left</option><option value='center' ${el.align==='center'?'selected':''}>center</option><option value='right' ${el.align==='right'?'selected':''}>right</option></select></div><div class='row'><label>Laufband</label><select onchange="setSel('marqueeMode',this.value)"><option value='global' ${(el.marqueeMode||'global')==='global'?'selected':''}>Global</option><option value='bounce' ${el.marqueeMode==='bounce'?'selected':''}>Bounce</option><option value='scroll-ltr' ${el.marqueeMode==='scroll-ltr'?'selected':''}>Links â†’ rechts</option><option value='scroll-rtl' ${el.marqueeMode==='scroll-rtl'?'selected':''}>Rechts â†’ links</option><option value='off' ${el.marqueeMode==='off'?'selected':''}>Aus</option></select></div>`+inp('Tempo px/s',el.marqueeSpeed||45,'marqueeSpeed','number')}if(el.type==='shape'||el.type==='line'){html+=`<div class='row'><label>Farbe</label><input type='color' value='${el.color||'#ffffff'}' oninput="setSel('color',this.value)"></div><div class='row'><label>Provider-Farbe</label><select onchange="setSel('bind',this.value)"><option value='' ${!el.bind?'selected':''}>Nein</option><option value='providerColor' ${el.bind==='providerColor'?'selected':''}>Ja</option></select></div>`}if(el.type==='cover'){html+=`<div class='row'><label>Form</label><select onchange="setSel('shape',this.value)"><option value='circle' ${el.shape==='circle'?'selected':''}>Kreis</option><option value='square' ${el.shape!=='circle'?'selected':''}>Quadrat</option></select></div><div class='row'><label>Drehen</label><select onchange="setSel('rotate',this.value)"><option value='true' ${el.rotate?'selected':''}>Ja</option><option value='false' ${!el.rotate?'selected':''}>Nein</option></select></div>`+inp('Drehdauer s',el.rotationSpeed||18,'rotationSpeed','number')}html+=`<div class='row'><label>Effekt bei Wechsel</label><select onchange="setSel('effect',this.value)">${['none','fade','slide-left','slide-right','pop','glitch','flip','bounce'].map(f=>`<option value='${f}' ${el.effect===f?'selected':''}>${f}</option>`).join('')}</select></div>`;p.innerHTML=html}
+function deleteSelected(){if(!selected)return;state.elements=state.elements.filter(e=>e.id!==selected);selected=null;render()}function resetLayout(){if(confirm('Layout zurÃ¼cksetzen?'))fetch('/customoverlay/state?default=1').then(r=>r.json()).then(d=>{state=d;selected=null;nodes.clear();stage.innerHTML='';render();refreshData()})}function saveLayout(){fetch('/customoverlay/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(state)}).then(r=>r.json()).then(d=>alert(d.ok?'Gespeichert':'Fehler: '+(d.error||'?'))).catch(e=>alert(e))}function loadLayout(){fetch('/customoverlay/state?_='+Date.now()).then(r=>r.json()).then(d=>{state=d;selected=null;nodes.clear();stage.innerHTML='';render();refreshData()})}
 loadLayout();refreshData();
 </script></body></html>"""
     return html.replace('__STATE__', initial_state)
@@ -3324,63 +3329,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 kind = path.split("/", 2)[2]
                 if kind == "song": kind = "title"
                 return self._text(_np_value_for_meld(kind))
-
-            # ---------- Spotify OAuth ----------
-            if path == "/login":
-                params = urllib.parse.urlencode({"response_type": "code", "client_id": CLIENT_ID,
-                    "scope": "user-modify-playback-state user-read-playback-state playlist-modify-private playlist-modify-public playlist-read-private ugc-image-upload",
-                    "redirect_uri": _redirect_uri(), "show_dialog": "true"})
-                self.send_response(302); self.send_header("Location","https://accounts.spotify.com/authorize?"+params); self.end_headers(); return
-            if path == "/callback":
-                code = (qd.get("code") or [None])[0]
-                if not code: return self._html(400,"<b>Missing code</b>")
-                data = urllib.parse.urlencode({"grant_type":"authorization_code","code":code,"redirect_uri":_redirect_uri(),"client_id":CLIENT_ID,"client_secret":CLIENT_SECRET}).encode("utf-8")
-                req = urllib.request.Request("https://accounts.spotify.com/api/token", data=data, method="POST")
-                req.add_header("Content-Type","application/x-www-form-urlencoded")
-                with urllib.request.urlopen(req, timeout=10) as resp:
-                    r = json.loads(resp.read().decode("utf-8"))
-                global _PLAYLIST_COVER_DISABLED_THIS_SESSION
-                _PLAYLIST_COVER_DISABLED_THIS_SESSION = False
-                _write_tokens({"access_token":r["access_token"],"refresh_token":r["refresh_token"],"expires_at": _now()+int(r.get("expires_in",3600)), "scope": r.get("scope", "")})
-                _maybe_enable_pollers()
-                try:
-                    at = _ensure_access_token(); _np_poll_once(at, force=True)
-                except: pass
-                return self._html(200,"<h3>spotis3mptify authorized ✓</h3>You can close this window.")
-
-            # ---------- Twitch OAuth ----------
-            if path == "/twitch/login":
-                acc = (qd.get("acc") or ["main"])[0]
-                cid, _csec, sc = _twitch_client_info(acc)
-                params = urllib.parse.urlencode({"response_type":"code","client_id": cid, "redirect_uri": _twitch_redirect_uri(acc), "scope": sc, "force_verify":"true"})
-                _save_json(os.path.join(TOKENS_DIR,"twitch_last_acc.json"), {"acc": acc, "ts": _now()})
-                self.send_response(302); self.send_header("Location","https://id.twitch.tv/oauth2/authorize?"+params); self.end_headers(); return
-            if path == "/twitch/callback":
-                code = (qd.get("code") or [None])[0]
-                if not code: return self._html(400,"<b>Missing code</b>")
-                last = _load_json(os.path.join(TOKENS_DIR,"twitch_last_acc.json"), {"acc":"main"})
-                acc = last.get("acc","main")
-                cid, csec, _sc = _twitch_client_info(acc)
-                data = urllib.parse.urlencode({"grant_type":"authorization_code","code":code,"client_id":cid,"client_secret":csec,"redirect_uri": _twitch_redirect_uri(acc)}).encode("utf-8")
-                req = urllib.request.Request("https://id.twitch.tv/oauth2/token", data=data, method="POST")
-                req.add_header("Content-Type","application/x-www-form-urlencoded")
-                with urllib.request.urlopen(req, timeout=10) as resp:
-                    r = json.loads(resp.read().decode("utf-8"))
-                _write_twitch_tokens({"access_token":r["access_token"],"refresh_token":r.get("refresh_token",""),"expires_at": _now()+int(r.get("expires_in",3600))}, which=acc)
-                _restart_twitch_thread_if_needed(force=True)
-                return self._html(200,f"<h3>Twitch ({acc}) authorized ✓</h3>You can close this window.")
-
             if path == "/twitch/status":
                 running = bool(_TWITCH_THREAD and _TWITCH_THREAD.is_alive())
                 ch = TWITCH_CHANNEL if TWITCH_REPLY_SENDER == "main" else (TWITCH_BOT_CHANNEL or TWITCH_CHANNEL)
                 st = {"authorized_main": _twitch_is_authorized("main"), "authorized_bot": _twitch_is_authorized("bot"),
                       "listen": TWITCH_LISTEN, "channel": ch, "running": running, "active_sender": _TWITCH_LAST_ACC}
                 return self._ok(st)
-            if path == "/twitch/logout":
-                acc = (qd.get("acc") or ["main"])[0]
-                _write_twitch_tokens({"access_token": None, "refresh_token": None, "expires_at": 0}, which=acc)
-                _restart_twitch_thread_if_needed(force=True)
-                return self._ok({"ok":True,"logout":True,"acc":acc})
             if path == "/twitch/debug":
                 running = bool(_TWITCH_THREAD and _TWITCH_THREAD.is_alive())
                 st = {"authorized_main": _twitch_is_authorized("main"), "authorized_bot": _twitch_is_authorized("bot"),
@@ -3392,7 +3346,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             # ---------- SR ----------
             if path == "/sr":
                 if not ENABLED: return self._fail(503,"DISABLED")
-                if not _is_authorized(): return self._fail(401,"Not authorized — open /login")
+                if not _is_authorized(): return self._fail(401,"Spotify is not authorized in the core Platforms page")
                 raw_q = ((qd.get("q") or [""])[0]); raw_user = ((qd.get("user") or [""])[0])
                 if not raw_q: return self._fail(400,"Missing q")
                 try:
@@ -3458,7 +3412,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
             if path == "/srplus/start":
                 if not ENABLED: return self._fail(503,"DISABLED")
-                if not _is_authorized(): return self._fail(401,"Not authorized — open /login")
+                if not _is_authorized(): return self._fail(401,"Spotify is not authorized in the core Platforms page")
                 user = ((qd.get("user") or [""])[0]).strip()
                 try:
                     at = _ensure_access_token()
@@ -3498,7 +3452,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 # really active, not a stale YouTube handoff state.
                 return self._ok(dict(_overlay_current()))
             if path == "/nowplaying/refresh":
-                if not _is_authorized(): return self._fail(401,"Not authorized — open /login")
+                if not _is_authorized(): return self._fail(401,"Spotify is not authorized in the core Platforms page")
                 try:
                     at = _ensure_access_token(); _np_poll_once(at, force=True)
                     with _NP_LOCK:
@@ -3644,7 +3598,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
             if path == "/sr":
                 if not ENABLED: return self._fail(503,"DISABLED")
-                if not _is_authorized(): return self._fail(401,"Not authorized — open /login")
+                if not _is_authorized(): return self._fail(401,"Spotify is not authorized in the core Platforms page")
                 raw_q = (body.get("q") or ""); raw_user = (body.get("user") or "")
                 if not raw_q: return self._fail(400,"Missing q")
                 try:
@@ -3656,7 +3610,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
             if path == "/srplus/start":
                 if not ENABLED: return self._fail(503,"DISABLED")
-                if not _is_authorized(): return self._fail(401,"Not authorized — open /login")
+                if not _is_authorized(): return self._fail(401,"Spotify is not authorized in the core Platforms page")
                 user = (body.get("user") or "").strip()
                 try:
                     at = _ensure_access_token()
@@ -3751,9 +3705,9 @@ def stop_server():
         _EXTERNAL_SR_STOP.clear()
     _OBS_CLIENT.disconnect()
 
-# ============== PUBLIC SETTERS (für UI) ==============
+# ============== PUBLIC SETTERS (fÃ¼r UI) ==============
 def apply_settings(cfg: Dict[str, Any]):
-    global CLIENT_ID, CLIENT_SECRET, PORT, SHARED_SECRET, DATA_DIR, AUTH_DIR, CONFIG_DIR, NOWPLAYING_DIR, COVERS_DIR, PLAYLISTS_DIR, STATE_DIR, EXPORT_DIR, CERTS_DIR, YOUTUBE_DIR, TOKENS_DIR, REDIRECT_URI_OV, CUSTOM_OVERLAY_JSON, _LOCAL_CA_CERT, _LOCAL_CA_KEY, _LOCAL_TLS_CERT, _LOCAL_TLS_KEY
+    global CLIENT_ID, CLIENT_SECRET, PORT, SHARED_SECRET, DATA_DIR, AUTH_DIR, CONFIG_DIR, NOWPLAYING_DIR, COVERS_DIR, PLAYLISTS_DIR, STATE_DIR, EXPORT_DIR, CERTS_DIR, YOUTUBE_DIR, TOKENS_DIR, REDIRECT_URI_OV, CENTRAL_SPOTIFY_TOKENS, CUSTOM_OVERLAY_JSON, _LOCAL_CA_CERT, _LOCAL_CA_KEY, _LOCAL_TLS_CERT, _LOCAL_TLS_KEY
     global COOLDOWN_MINUTES, PLAYLIST_PREFIX, PLAYLIST_COVER_ENABLED, PLAYLIST_COVER_FILE, SRPLUS_DURATION_MIN, SRPLUS_ONCE_PER_STREAM, SRPLUS_SHUFFLE, SRPLUS_SUBSCRIBERS_ONLY
     global ENABLED, AUTO_STOP_ON_DISABLE, REPEAT_GUARD, PLAY_NOW, QUEUE_THEN_SKIP, ASYNC_PLAYLIST_ADD, ASYNC_COVER_FETCH
     global LOG_VERBOSE, LOG_SLOW_MS, LOG_DEDUP_SEC, LOG_NP_ON_CHANGE, NOWPLAYING_ENABLE_FILES, NOWPLAYING_POLL_MS
@@ -3795,6 +3749,12 @@ def apply_settings(cfg: Dict[str, Any]):
     _LOCAL_TLS_CERT = os.path.join(CERTS_DIR, "localhost_https_cert.pem")
     _LOCAL_TLS_KEY  = os.path.join(CERTS_DIR, "localhost_https_key.pem")
     TOKENS_DIR      = _normalize_tokens_dir(cfg.get("tokens_dir", AUTH_DIR) or AUTH_DIR)
+    CENTRAL_SPOTIFY_TOKENS = {
+        "access_token": cfg.get("spotify_access_token") or None,
+        "refresh_token": cfg.get("spotify_refresh_token") or None,
+        "expires_at": cfg.get("spotify_expires_at") or 0,
+        "scope": cfg.get("spotify_scope") or "",
+    }
     _migrate_root_data_files_to_subdirs()
     REDIRECT_URI_OV = cfg.get("redirect_uri", REDIRECT_URI_OV)
 
@@ -3948,9 +3908,10 @@ def stop():
 DATA = {
     "port": PORT,
     "tokens_dir": TOKENS_DIR,
-    "redirect_uri": REDIRECT_URI_OV or f"http://127.0.0.1:{PORT}/callback"
+    "redirect_uri": REDIRECT_URI_OV
 }
 
 # UI helper: keep old overlay endpoint discovery available for the app.
 def get_endpoint_urls():
     return _overlay_endpoint_urls()
+

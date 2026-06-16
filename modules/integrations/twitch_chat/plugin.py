@@ -4,7 +4,6 @@ import html
 import json
 import os
 import re
-import secrets
 import socket
 import ssl
 import threading
@@ -12,8 +11,6 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-import webbrowser
-from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any, Optional
 from data.paths import app_root
@@ -22,8 +19,6 @@ from shared.plugin_base import PluginHost
 from shared.plugin_common import ThreadedPlugin
 IRC_HOST = 'irc.chat.twitch.tv'
 IRC_PORT_SSL = 6697
-AUTHORIZE_URL = 'https://id.twitch.tv/oauth2/authorize'
-TOKEN_URL = 'https://id.twitch.tv/oauth2/token'
 VALIDATE_URL = 'https://id.twitch.tv/oauth2/validate'
 HELIX_USERS_URL = 'https://api.twitch.tv/helix/users'
 HELIX_STREAMS_URL = 'https://api.twitch.tv/helix/streams'
@@ -53,7 +48,6 @@ def _main_data_dir(plugin_name: str) -> Path:
         if parent.name.lower() == 'modules':
             return parent.parent / 'data' / plugin_name
     return Path(__file__).resolve().parent / 'data'
-CACHE_PATH = _main_data_dir('twitch_chat') / 'oauth_cache.json'
 DEFAULT_SCOPES = 'chat:read chat:edit moderator:manage:banned_users moderator:manage:chat_messages channel:manage:broadcast'
 EMOTE_REFRESH_SECONDS = 900.0
 IMG_STYLE = 'display:inline;vertical-align:-0.10em;height:1em;max-height:1em;width:auto;margin:0;padding:0;border:0;'
@@ -80,7 +74,7 @@ _TWITCH_JOIN_BOT_LOGINS = {
 class TwitchChatPlugin(ThreadedPlugin):
     plugin_id = 'twitch_chat'
     display_name = 'Twitch Chat'
-    version = '1.7.8'
+    version = '1.7.9'
     description = 'Twitch chat via IRC with OAuth, viewer count polling, and inline emote rendering for Twitch/7TV/BTTV/FFZ.'
     def __init__(self) -> None:
         super().__init__()
@@ -103,6 +97,7 @@ class TwitchChatPlugin(ThreadedPlugin):
         self._processed_usernotice_ids: set[str] = set()
         self._processed_join_names: set[str] = set()
         self._processed_join_seen_at: dict[str, float] = {}
+        self._host: PluginHost | None = None
     def settings_schema(self):
         # Login/auth data now lives in the main tool under Plattformen/Platforms -> Twitch.
         # Keep this plugin overlay limited to Twitch-chat specific behavior only.
@@ -130,11 +125,7 @@ class TwitchChatPlugin(ThreadedPlugin):
         ]
     def default_settings(self):
         return {
-            'channel': '',
-            'client_id': '',
-            'client_secret': '',
-            'redirect_port': '17564',
-            'username': '',
+            # OAuth/account data is provided by the main Plattformen tab.
             'metrics_poll_seconds': '20',
             'autoconnect': False,
             'viewer_count_enabled': True,
@@ -239,47 +230,83 @@ class TwitchChatPlugin(ThreadedPlugin):
             return False
         return default
 
-    def _merge_platform_settings(self, settings: dict | None, host: PluginHost | None = None) -> dict:
-        merged = dict(settings or {})
-        platform: dict[str, Any] = {}
-        if host is not None:
+    def _host_platform_settings(self, host: PluginHost | None = None) -> dict[str, Any]:
+        host = host or self._host
+        if host is None:
+            return {}
+        for name in ('get_platform_settings', 'platform_settings'):
+            fn = getattr(host, name, None)
+            if not callable(fn):
+                continue
             try:
-                candidate = host.platform_settings('twitch')
+                data = fn('twitch')
+                if isinstance(data, dict):
+                    return dict(data)
             except Exception:
-                candidate = {}
-            if isinstance(candidate, dict):
-                platform = candidate
-        if not platform:
-            return merged
+                pass
+        return {}
 
-        main_account = self._clean_channel(platform.get('main_account') or platform.get('channel') or merged.get('channel') or '')
-        bot_account = self._clean_username(platform.get('bot_account') or platform.get('bot_username') or platform.get('username') or merged.get('username') or main_account)
-        redirect_url = str(platform.get('redirect_url') or merged.get('redirect_url') or '').strip()
-        redirect_port = platform.get('redirect_port') or merged.get('redirect_port') or self._parse_redirect_port(redirect_url, 17564)
+    def _effective_settings(self, settings: dict | None, host: PluginHost | None = None) -> dict[str, Any]:
+        """Resolve Twitch runtime settings from the central host, like kick_chat.
 
-        if main_account:
-            merged['channel'] = main_account
-        if bot_account:
-            merged['username'] = bot_account
-            merged['bot_username'] = bot_account
-        for key in ('client_id', 'client_secret', 'access_token', 'refresh_token'):
-            value = platform.get(key)
+        Host platform data is the source of truth. The plugin only contributes
+        Twitch-chat behavior settings. Empty old plugin fields never overwrite the
+        Plattformen tab and stale local OAuth data is not used unless there is no
+        host data at all.
+        """
+        local = dict(settings or {})
+        merged: dict[str, Any] = {}
+        platform = self._host_platform_settings(host)
+        if isinstance(platform, dict):
+            merged.update(platform)
+
+        # Plugin-local behavior only. This mirrors kick_chat's non-empty merge,
+        # but avoids pulling old local OAuth/client fields back into runtime data.
+        for key in ('metrics_poll_seconds', 'viewer_count_enabled', 'viewer_join_alerts'):
+            value = local.get(key)
             if value not in (None, ''):
-                merged[key] = str(value).strip()
+                merged[key] = value
+
+        # Legacy fallback only for installs that have no central Plattformen data.
+        if not merged.get('channel'):
+            channel = self._clean_channel(local.get('channel') or local.get('main') or local.get('main_account') or '')
+            if channel:
+                merged['channel'] = channel
+                merged['main'] = channel
+                merged['main_account'] = channel
+        if not merged.get('username'):
+            username = self._clean_username(local.get('username') or local.get('bot_username') or local.get('bot_account') or merged.get('channel') or '')
+            if username:
+                merged['username'] = username
+                merged['bot'] = username
+                merged['bot_account'] = username
+                merged['bot_username'] = username
+        for key in ('client_id', 'access_token'):
+            if not merged.get(key) and local.get(key) not in (None, ''):
+                merged[key] = str(local.get(key)).strip()
+
+        redirect_url = str(merged.get('redirect_url') or merged.get('redirect_uri') or '').strip()
+        redirect_port = merged.get('redirect_port') or self._parse_redirect_port(redirect_url, 17564)
+        merged['redirect_port'] = str(self._parse_redirect_port(redirect_port, self._parse_redirect_port(redirect_url, 17564)))
         if redirect_url:
             merged['redirect_url'] = redirect_url
-        merged['redirect_port'] = str(self._parse_redirect_port(redirect_port, self._parse_redirect_port(redirect_url, 17564)))
+            merged['redirect_uri'] = redirect_url
 
-        scopes = str(platform.get('scopes') or '').strip()
+        scopes = str(merged.get('scopes') or '').strip()
         if not scopes:
             scopes = 'chat:read chat:edit'
-            if self._as_bool(platform.get('moderation_rights_enabled'), True):
+            if self._as_bool(merged.get('moderation_rights_enabled'), True):
                 scopes += ' moderator:manage:banned_users moderator:manage:chat_messages'
+        scopes = scopes.replace('moderator:manage_banned_users', 'moderator:manage:banned_users')
         merged['scopes'] = scopes
-        merged['read_enabled'] = self._as_bool(platform.get('read_enabled'), True)
-        merged['write_enabled'] = self._as_bool(platform.get('write_enabled'), True)
-        merged['autoconnect'] = self._as_bool(platform.get('autoconnect'), self._as_bool(merged.get('autoconnect'), False))
+        merged['read_enabled'] = self._as_bool(merged.get('read_enabled'), True)
+        merged['write_enabled'] = self._as_bool(merged.get('write_enabled'), True)
+        merged['autoconnect'] = self._as_bool(merged.get('autoconnect'), self._as_bool(local.get('autoconnect'), False))
         return merged
+
+    def _merge_platform_settings(self, settings: dict | None, host: PluginHost | None = None) -> dict:
+        # Compatibility wrapper for older call-sites inside this plugin.
+        return self._effective_settings(settings, host)
 
     def _oauth_scopes(self, settings: dict) -> str:
         scopes = str((settings or {}).get('scopes') or '').strip()
@@ -387,47 +414,6 @@ class TwitchChatPlugin(ThreadedPlugin):
         with urllib.request.urlopen(req, timeout=20) as resp:
             txt = resp.read().decode('utf-8', errors='ignore')
         return json.loads(txt or '{}')
-    @staticmethod
-    def _botalot_cache_path() -> Path:
-        return _main_data_dir('botalot') / 'twitch_oauth_cache.json'
-
-    def _read_cache_file(self, path: Path) -> dict:
-        try:
-            if path.exists():
-                return json.loads(path.read_text(encoding='utf-8') or '{}')
-        except Exception:
-            pass
-        return {}
-
-    def _cache_score(self, cache: dict) -> int:
-        score = 0
-        if self._clean_token(cache.get('access_token') or ''):
-            score += 10
-        if str(cache.get('refresh_token') or '').strip():
-            score += 20
-        if self._clean_username(cache.get('username') or ''):
-            score += 2
-        try:
-            score += min(int(cache.get('saved_at') or 0) // 1000000000, 9)
-        except Exception:
-            pass
-        return score
-
-    def _load_cache(self) -> dict:
-        # Legacy fallback only. The source of truth is the main tool platform
-        # settings, merged into the cache inside _resolve_auth(). Do not copy
-        # plugin-folder OAuth files back into AppData/settings.
-        return self._read_cache_file(self._botalot_cache_path())
-
-    def _save_cache(self, payload: dict) -> None:
-        # Runtime compatibility cache for older installs. New OAuth is stored by
-        # the main tool in Plattformen -> Twitch and injected through settings.
-        path = self._botalot_cache_path()
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding='utf-8')
-        except Exception:
-            pass
     def _http_json(self, url: str, *, method='GET', data: dict | None = None, headers: dict | None = None) -> dict:
         body = None
         req_headers = dict(headers or {})
@@ -454,181 +440,29 @@ class TwitchChatPlugin(ThreadedPlugin):
             return True, login, 'Token validated.', list(scopes)
         except Exception as exc:
             return False, '', f'Token validation failed: {exc}', []
-    def _start_oauth_flow(self, settings: dict) -> tuple[bool, str, dict]:
-        client_id = (settings.get('client_id') or '').strip()
-        client_secret = (settings.get('client_secret') or '').strip()
-        if not client_id or not client_secret:
-            return False, 'Missing Client ID or Client Secret.', {}
-        try:
-            port = int((settings.get('redirect_port') or '17563').strip())
-        except Exception:
-            return False, 'Redirect port is invalid.', {}
-        redirect_uri = self._redirect_uri(port)
-        state = secrets.token_urlsafe(18)
-        code_box = {'code': '', 'state': '', 'error': ''}
-        class Handler(BaseHTTPRequestHandler):
-            def log_message(self, *args):
-                return
-            def do_GET(self):
-                parsed = urllib.parse.urlparse(self.path)
-                if parsed.path != '/callback':
-                    self.send_response(404)
-                    self.end_headers()
-                    return
-                qs = urllib.parse.parse_qs(parsed.query or '')
-                code_box['code'] = (qs.get('code', ['']) or [''])[0]
-                code_box['state'] = (qs.get('state', ['']) or [''])[0]
-                code_box['error'] = (qs.get('error', ['']) or [''])[0]
-                self.send_response(200)
-                self.send_header('Content-Type', 'text/html; charset=utf-8')
-                self.end_headers()
-                self.wfile.write(b'<html><body style="font-family:sans-serif"><h3>Twitch login complete</h3><p>You can close this window.</p></body></html>')
-        try:
-            httpd = HTTPServer(('127.0.0.1', port), Handler)
-        except Exception as exc:
-            return False, f'Could not start callback server on port {port}: {exc}', {}
-        def run_srv():
-            try:
-                httpd.handle_request()
-            except Exception:
-                pass
-        threading.Thread(target=run_srv, daemon=True).start()
-        params = {
-            'client_id': client_id,
-            'redirect_uri': redirect_uri,
-            'response_type': 'code',
-            'scope': self._oauth_scopes(settings),
-            'state': state,
-            'force_verify': 'true',
-        }
-        url = AUTHORIZE_URL + '?' + urllib.parse.urlencode(params)
-        try:
-            webbrowser.open(url, new=2, autoraise=True)
-        except Exception:
-            pass
-        deadline = time.time() + 180.0
-        while time.time() < deadline:
-            if code_box['error']:
-                try:
-                    httpd.server_close()
-                except Exception:
-                    pass
-                return False, f"OAuth aborted: {code_box['error']}", {}
-            if code_box['code']:
-                break
-            time.sleep(0.15)
-        try:
-            httpd.server_close()
-        except Exception:
-            pass
-        if not code_box['code']:
-            return False, 'OAuth timed out. Browser callback did not arrive.', {}
-        if code_box['state'] != state:
-            return False, 'OAuth state mismatch.', {}
-        try:
-            token_data = self._http_json(TOKEN_URL, method='POST', data={
-                'client_id': client_id,
-                'client_secret': client_secret,
-                'code': code_box['code'],
-                'grant_type': 'authorization_code',
-                'redirect_uri': redirect_uri,
-            })
-        except Exception as exc:
-            return False, f'Token exchange failed: {exc}', {}
-        access = self._clean_token(token_data.get('access_token') or '')
-        refresh = (token_data.get('refresh_token') or '').strip()
-        if not access:
-            return False, 'Token exchange returned no access token.', {}
-        ok, login, msg, scopes = self._validate_token(access)
-        if not ok:
-            return False, msg, {}
-        cache = {
-            'access_token': access,
-            'refresh_token': refresh,
-            'username': login,
-            'client_id': client_id,
-            'client_secret': client_secret,
-            'redirect_port': str(port),
-            'scopes': scopes,
-            'saved_at': int(time.time()),
-        }
-        self._save_cache(cache)
-        return True, f'OAuth successful for {login}.', cache
-    def _refresh_token_if_possible(self, settings: dict, cache: dict) -> tuple[bool, str, dict]:
-        refresh = (cache.get('refresh_token') or '').strip()
-        client_id = (settings.get('client_id') or cache.get('client_id') or '').strip()
-        client_secret = (settings.get('client_secret') or cache.get('client_secret') or '').strip()
-        if not refresh or not client_id or not client_secret:
-            return False, 'No refresh token available.', cache
-        try:
-            token_data = self._http_json(TOKEN_URL, method='POST', data={
-                'client_id': client_id,
-                'client_secret': client_secret,
-                'grant_type': 'refresh_token',
-                'refresh_token': refresh,
-            })
-        except Exception as exc:
-            return False, f'Refresh failed: {exc}', cache
-        access = self._clean_token(token_data.get('access_token') or '')
-        new_refresh = (token_data.get('refresh_token') or refresh).strip()
-        if not access:
-            return False, 'Refresh returned no access token.', cache
-        ok, login, msg, scopes = self._validate_token(access)
-        if not ok:
-            return False, msg, cache
-        updated = dict(cache)
-        updated.update({
-            'access_token': access,
-            'refresh_token': new_refresh,
-            'username': login or cache.get('username', ''),
-            'client_id': client_id,
-            'client_secret': client_secret,
-            'scopes': scopes,
-            'saved_at': int(time.time()),
-        })
-        self._save_cache(updated)
-        return True, f'Refreshed token for {updated.get("username", "unknown")}.', updated
     def _resolve_auth(self, settings: dict, *, allow_oauth: bool) -> tuple[bool, str, str, dict]:
-        cache = dict(self._load_cache() or {})
-        # Central platform settings win over every old cache. This prevents the
-        # reader from using stale plugin-folder OAuth after a restart.
-        for key in ('access_token', 'refresh_token', 'client_id', 'client_secret', 'redirect_port', 'scopes'):
+        cache: dict[str, Any] = {}
+        for key in ('access_token', 'client_id', 'scopes'):
             value = settings.get(key)
             if value not in (None, ''):
                 cache[key] = value
         token = self._clean_token(cache.get('access_token') or '')
         username = self._clean_username(settings.get('username') or settings.get('bot_username') or cache.get('username') or '')
-        if token:
-            ok, login, msg, scopes = self._validate_token(token)
-            if ok:
-                if login:
-                    username = login
-                cache = dict(cache)
-                cache.update({
-                    'access_token': token,
-                    'username': username,
-                    'client_id': (settings.get('client_id') or cache.get('client_id') or '').strip(),
-                    'client_secret': (settings.get('client_secret') or cache.get('client_secret') or '').strip(),
-                    'redirect_port': str(settings.get('redirect_port') or cache.get('redirect_port') or '17563'),
-                    'scopes': scopes,
-                    'saved_at': int(time.time()),
-                })
-                self._save_cache(cache)
-                return True, username, 'Using valid cached authorization.', cache
-            ok2, msg2, refreshed = self._refresh_token_if_possible(settings, cache)
-            if ok2:
-                return True, self._clean_username(refreshed.get('username', username)), msg2, refreshed
-            if allow_oauth:
-                ok3, msg3, fresh_cache = self._start_oauth_flow(settings)
-                if ok3:
-                    return True, self._clean_username(fresh_cache.get('username', '')), msg3, fresh_cache
+        if not token:
+            return False, '', 'Missing Twitch access token from core Platforms.', cache
+        ok, login, msg, scopes = self._validate_token(token)
+        if not ok:
             return False, '', msg, cache
-        if allow_oauth:
-            ok, msg, fresh_cache = self._start_oauth_flow(settings)
-            if ok:
-                return True, self._clean_username(fresh_cache.get('username', '')), msg, fresh_cache
-            return False, '', msg, fresh_cache
-        return False, '', 'No cached authorization available.', cache
+        if login:
+            username = login
+        cache.update({
+            'access_token': token,
+            'username': username,
+            'client_id': (settings.get('client_id') or '').strip(),
+            'scopes': scopes,
+            'saved_at': int(time.time()),
+        })
+        return True, username, 'Using core Twitch authorization.', cache
     def _refresh_runtime_auth(self, settings: dict, cache: dict) -> tuple[bool, str, str, dict]:
         ok, username, msg, fresh_cache = self._resolve_auth(settings, allow_oauth=False)
         if ok:
@@ -1428,15 +1262,15 @@ class TwitchChatPlugin(ThreadedPlugin):
         joined = ''.join(html_parts)
         return f'<div style="text-align:left;white-space:normal;line-height:1.08;margin:0;padding:0;">{joined}</div>'
     def test_connection(self, settings):
-        # Plugin row tests do not receive a host instance, so this uses the already
-        # mirrored settings written by the main Plattformen/Platforms tab.
-        settings = self._merge_platform_settings(settings, getattr(self, '_host', None))
+        # Like kick_chat: resolve effective runtime data from the central host first,
+        # then use plugin-local values only as non-empty fallback.
+        settings = self._effective_settings(settings, getattr(self, '_host', None))
         channel = self._clean_channel(settings.get('channel', ''))
         if not channel:
             return False, 'Missing Twitch main account / live channel in Plattformen.'
         if not self._as_bool(settings.get('read_enabled'), True):
             return False, 'Twitch reading is disabled in Plattformen.'
-        ok, username, auth_msg, cache = self._resolve_auth(settings, allow_oauth=True)
+        ok, username, auth_msg, cache = self._resolve_auth(settings, allow_oauth=False)
         if not ok:
             return False, auth_msg
         token = self._clean_token(cache.get('access_token') or '')
@@ -1480,7 +1314,9 @@ class TwitchChatPlugin(ThreadedPlugin):
             pass
         self._sock = None
     def run(self, settings, host: PluginHost):
-        settings = self._merge_platform_settings(settings, host)
+        self._host = host
+        base_settings = dict(settings or {})
+        settings = self._effective_settings(base_settings, host)
         channel = self._clean_channel(settings.get('channel', ''))
         if not channel:
             raise RuntimeError('Missing Twitch main account / live channel in Plattformen.')
@@ -1511,6 +1347,13 @@ class TwitchChatPlugin(ThreadedPlugin):
             buffer = ''
             empty_reads = 0
             try:
+                # Like kick_chat: refresh central host settings before each reconnect,
+                # because OAuth/account values can change in Plattformen while the plugin runs.
+                settings = self._effective_settings(base_settings, host)
+                new_channel = self._clean_channel(settings.get('channel', ''))
+                if new_channel and new_channel != channel:
+                    channel = new_channel
+                    self._third_party_emotes_loaded_for = ''
                 ok_auth, username, auth_msg, cache = self._refresh_runtime_auth(settings, cache)
                 if not ok_auth:
                     raise RuntimeError(auth_msg)

@@ -1,8 +1,8 @@
 {
   "id": "botalot",
-  "name": "botalot ver. 1.14",
-  "version": "1.14",
-  "description": "AI chat bot and cross-platform bridge for godisalotachat. Adds gam3pick3r system announcement echo protection.",
+  "name": "botalot ver. 1.16",
+  "version": "1.16",
+  "description": "AI chat bot for godisalotachat using central OpenAI and platform send paths.",
   "entry": "plugin.py",
-  "display_name": "botalot ver. 1.14"
+  "display_name": "botalot ver. 1.16"
 }

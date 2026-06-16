@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import importlib.util
 import json
@@ -289,7 +289,7 @@ class _DashboardWindow(QtWidgets.QWidget if QtWidgets is not None else object): 
         row = QtWidgets.QHBoxLayout()
         self.overlay_url = QtWidgets.QLineEdit()
         self.overlay_url.setReadOnly(True)
-        self.open_btn = QtWidgets.QPushButton('Browseranzeige öffnen')
+        self.open_btn = QtWidgets.QPushButton('Browseranzeige Ã¶ffnen')
         self.open_btn.clicked.connect(self.plugin.open_overlay)
         row.addWidget(self.overlay_url, 1)
         row.addWidget(self.open_btn)
@@ -348,7 +348,7 @@ class _DashboardWindow(QtWidgets.QWidget if QtWidgets is not None else object): 
         if not name or not name.lower().endswith(('.jpg', '.jpeg')):
             return
         self.plugin.set_playlist_cover_image(name)
-        self.cover_note.setText(f'Aktiv: {name} · wird bei neuen User-Playlists gesetzt.')
+        self.cover_note.setText(f'Aktiv: {name} Â· wird bei neuen User-Playlists gesetzt.')
 
     def refresh(self) -> None:
         data = self.plugin.current_nowplaying()
@@ -356,7 +356,7 @@ class _DashboardWindow(QtWidgets.QWidget if QtWidgets is not None else object): 
         artist = str(data.get('artist') or '').strip()
         provider = str(data.get('provider') or 'spotify').strip()
         playing = bool(data.get('is_playing'))
-        self.status.setText(('▶ ' if playing else '⏸ ') + provider.upper())
+        self.status.setText(('â–¶ ' if playing else 'â¸ ') + provider.upper())
         self.title.setText(title or 'Noch kein Song')
         self.artist.setText(artist or '')
         self.url.setText(str(data.get('url') or ''))
@@ -389,12 +389,12 @@ class Spotis3mptifyPlugin(ProviderPlugin):
         return [
             {'key': 'enabled', 'type': 'bool', 'label': 'Plugin aktiv', 'default': True, 'tab': 'Allgemein'},
             {'key': 'autoconnect', 'type': 'bool', 'label': 'Beim App-Start automatisch verbinden', 'default': True, 'tab': 'Allgemein'},
-            {'key': 'button_open_dashboard', 'type': 'button', 'label': 'Dashboard', 'button_text': 'Dashboard mit Cover öffnen', 'tab': 'Allgemein'},
-            {'key': 'button_open_overlay', 'type': 'button', 'label': 'Browseranzeige', 'button_text': 'Browseranzeige öffnen', 'tab': 'Allgemein'},
+            {'key': 'button_open_dashboard', 'type': 'button', 'label': 'Dashboard', 'button_text': 'Dashboard mit Cover Ã¶ffnen', 'tab': 'Allgemein'},
+            {'key': 'button_open_overlay', 'type': 'button', 'label': 'Browseranzeige', 'button_text': 'Browseranzeige Ã¶ffnen', 'tab': 'Allgemein'},
             {'key': 'port', 'type': 'number', 'label': 'Browser/API Port', 'default': 5173, 'min': 1024, 'max': 65535, 'tab': 'Browser'},
             {'key': 'custom_overlay_url', 'label': 'Browseranzeige URL', 'readonly': True, 'tab': 'Browser'},
             {'key': 'poll_ms', 'type': 'number', 'label': 'NowPlaying Poll ms', 'default': 2000, 'min': 500, 'max': 60000, 'tab': 'Browser'},
-            {'key': 'cover_image_size', 'type': 'number', 'label': 'Covergröße Datei', 'default': 640, 'min': 64, 'max': 640, 'tab': 'Browser'},
+            {'key': 'cover_image_size', 'type': 'number', 'label': 'CovergrÃ¶ÃŸe Datei', 'default': 640, 'min': 64, 'max': 640, 'tab': 'Browser'},
             {'key': 'sr_command', 'label': 'Songrequest Befehl', 'default': '!sr', 'tab': 'Requests'},
             {'key': 'srplus_command', 'label': 'SR+ Befehl', 'default': '!sr+', 'tab': 'Requests'},
             {'key': 'reply_enabled', 'type': 'bool', 'label': 'Antwort in Ursprungsplattform senden', 'default': True, 'tab': 'Requests'},
@@ -412,7 +412,7 @@ class Spotis3mptifyPlugin(ProviderPlugin):
             {'key': 'srplus_shuffle', 'type': 'bool', 'label': 'SR+ Shuffle', 'default': True, 'tab': 'SR+'},
             {'key': 'srplus_allowed_platforms', 'label': 'SR+ Plattformen leer=alle', 'placeholder': 'twitch,tiktok,youtube,kick', 'tab': 'SR+'},
             {'key': 'srplus_allowed_users', 'label': 'SR+ User leer=alle', 'placeholder': 'godis3mpty,psycho_edge', 'tab': 'SR+'},
-            {'key': 'log_verbose', 'type': 'bool', 'label': 'Ausführlich loggen', 'default': True, 'tab': 'Logs'},
+            {'key': 'log_verbose', 'type': 'bool', 'label': 'AusfÃ¼hrlich loggen', 'default': True, 'tab': 'Logs'},
         ]
 
     def default_settings(self) -> dict[str, Any]:
@@ -473,7 +473,31 @@ class Spotis3mptifyPlugin(ProviderPlugin):
             merged['playlist_cover_image'] = local.get('playlist_cover_image')
         if 'playlist_cover_enabled' in local:
             merged['playlist_cover_enabled'] = local.get('playlist_cover_enabled')
+        spotify = self._host_platform_settings('spotify')
+        if spotify:
+            merged['client_id'] = _safe_text(spotify.get('client_id'))
+            merged['client_secret'] = _safe_text(spotify.get('client_secret'))
+            merged['redirect_uri'] = _safe_text(spotify.get('redirect_uri'))
+            merged['spotify_access_token'] = _safe_text(spotify.get('access_token'))
+            merged['spotify_refresh_token'] = _safe_text(spotify.get('refresh_token'))
+            merged['spotify_expires_at'] = spotify.get('expires_at') or 0
+            merged['spotify_scope'] = _safe_text(spotify.get('scope') or spotify.get('scopes'))
         return merged
+
+    def _host_platform_settings(self, platform: str) -> dict[str, Any]:
+        host = self._host
+        if host is None:
+            return {}
+        for name in ('platform_settings', 'get_platform_settings'):
+            fn = getattr(host, name, None)
+            if callable(fn):
+                try:
+                    data = fn(platform)
+                    if isinstance(data, dict):
+                        return dict(data)
+                except Exception:
+                    pass
+        return {}
 
     def set_playlist_cover_image(self, filename: str) -> None:
         filename = Path(str(filename or '').strip()).name
@@ -492,24 +516,21 @@ class Spotis3mptifyPlugin(ProviderPlugin):
             if self._core is not None:
                 self._core.apply_settings(self._merged_config(self._settings))
         except Exception as exc:
-            self._log(f'Playlist-Cover konnte nicht direkt übernommen werden: {exc}')
-        self._log(f'Playlist-Cover gewählt: assets/{filename}')
+            self._log(f'Playlist-Cover konnte nicht direkt Ã¼bernommen werden: {exc}')
+        self._log(f'Playlist-Cover gewÃ¤hlt: assets/{filename}')
 
     def _merged_config(self, settings: dict[str, Any]) -> dict[str, Any]:
         _migrate_legacy_runtime_files()
-        # Migrate existing standalone token cache once, so Spotify does not need a fresh login when the old ZIP had tokens.
-        try:
-            dst = AUTH_DIR / 'spotis3mptify_tokens.json'
-            if LEGACY_TOKEN_FILE.exists() and not dst.exists():
-                dst.write_bytes(LEGACY_TOKEN_FILE.read_bytes())
-        except Exception:
-            pass
         port = int(settings.get('port') or 5173)
         return {
             'enabled': _as_bool(settings.get('enabled'), True),
             'client_id': _safe_text(settings.get('client_id')),
             'client_secret': _safe_text(settings.get('client_secret')),
             'redirect_uri': _safe_text(settings.get('redirect_uri')),
+            'spotify_access_token': _safe_text(settings.get('spotify_access_token')),
+            'spotify_refresh_token': _safe_text(settings.get('spotify_refresh_token')),
+            'spotify_expires_at': settings.get('spotify_expires_at') or 0,
+            'spotify_scope': _safe_text(settings.get('spotify_scope')),
             'port': port,
             'data_dir': str(DATA_DIR),
             'tokens_dir': str(AUTH_DIR),
@@ -569,7 +590,7 @@ class Spotis3mptifyPlugin(ProviderPlugin):
         url = self.overlay_url()
         self._settings['custom_overlay_url'] = url
         host.set_status(self.plugin_id, PluginStatus('connected', f'Overlay {url}'))
-        self._log(f'Plugin gestartet · Spotify-only · Overlay {url}')
+        self._log(f'Plugin gestartet Â· Spotify-only Â· Overlay {url}')
 
     def stop(self) -> None:
         try:
@@ -599,8 +620,8 @@ class Spotis3mptifyPlugin(ProviderPlugin):
                 if scope_text:
                     missing = sorted(x for x in required if x not in set(scope_text.split()))
                     if missing:
-                        return False, 'Spotify verbunden, aber Token-Scope fehlt: ' + ', '.join(missing) + ' · bitte OAuth neu ausführen'
-                return True, f"Spotify verbunden · Overlay {self.overlay_url()}"
+                        return False, 'Spotify verbunden, aber Token-Scope fehlt: ' + ', '.join(missing) + ' Â· bitte OAuth neu ausfÃ¼hren'
+                return True, f"Spotify verbunden Â· Overlay {self.overlay_url()}"
             return False, "Spotify nicht verbunden"
         except Exception as exc:
             return False, str(exc)
@@ -613,14 +634,10 @@ class Spotis3mptifyPlugin(ProviderPlugin):
         try:
             webbrowser.open(self.overlay_url())
         except Exception as exc:
-            self._log(f'Browseranzeige konnte nicht geöffnet werden: {exc}')
+            self._log(f'Browseranzeige konnte nicht geÃ¶ffnet werden: {exc}')
 
     def open_login(self) -> None:
-        port = int((self._settings or {}).get('port') or 5173)
-        try:
-            webbrowser.open(f'http://127.0.0.1:{port}/login')
-        except Exception as exc:
-            self._log(f'Spotify Login konnte nicht geöffnet werden: {exc}')
+        self._log('Spotify Login wird zentral im Haupttool unter Plattformen verwaltet.')
 
     def current_nowplaying(self) -> dict[str, Any]:
         try:
@@ -715,13 +732,13 @@ class Spotis3mptifyPlugin(ProviderPlugin):
             if not res.get('ok'):
                 err = str(res.get('error') or 'Request fehlgeschlagen')
                 self._reply(platform, f'@{username} {_friendly_sr_error(err)}')
-                self._log(f'SR fehlgeschlagen: {username}@{platform} -> {query} · {err}')
+                self._log(f'SR fehlgeschlagen: {username}@{platform} -> {query} Â· {err}')
                 return
             title = str(res.get('title') or '').strip()
             artist = str(res.get('artist') or '').strip()
-            msg = f'@{username} queued: {artist} — {title}'.strip()
+            msg = f'@{username} queued: {artist} â€” {title}'.strip()
             self._reply(platform, msg)
-            self._log(f'SR OK: {username}@{platform} -> {artist} — {title}')
+            self._log(f'SR OK: {username}@{platform} -> {artist} â€” {title}')
         except urllib.error.HTTPError as exc:
             body = ''
             try:
@@ -749,7 +766,7 @@ class Spotis3mptifyPlugin(ProviderPlugin):
 
     def _handle_srplus(self, platform: str, username: str) -> None:
         if not self._srplus_allowed(platform, username):
-            self._reply(platform, f'@{username} SR+ ist für dich oder diese Plattform nicht erlaubt.')
+            self._reply(platform, f'@{username} SR+ ist fÃ¼r dich oder diese Plattform nicht erlaubt.')
             self._log(f'SR+ blockiert: {username}@{platform}')
             return
         try:
@@ -758,7 +775,7 @@ class Spotis3mptifyPlugin(ProviderPlugin):
                 self._reply(platform, f'@{username} SR+ Fehler: {res.get("error") or "fehlgeschlagen"}')
                 return
             dur = int(res.get('duration_min') or self._settings.get('srplus_duration_min') or 15)
-            self._reply(platform, f'@{username} SR+ gestartet für {dur} Minuten.')
+            self._reply(platform, f'@{username} SR+ gestartet fÃ¼r {dur} Minuten.')
             self._log(f'SR+ OK: {username}@{platform}')
         except Exception as exc:
             self._reply(platform, f'@{username} SR+ Fehler: {exc}')
@@ -788,7 +805,7 @@ class Spotis3mptifyPlugin(ProviderPlugin):
                     settings.setdefault('write_twitch', True)
                 return bool(outputs.send_to_source(settings, message, platform))
         except Exception as exc:
-            self._log(f'Antwort über botalot fehlgeschlagen: {exc}')
+            self._log(f'Antwort Ã¼ber botalot fehlgeschlagen: {exc}')
         try:
             if hasattr(host, 'send_platform_message'):
                 return bool(host.send_platform_message(platform, message))
@@ -818,10 +835,11 @@ class Spotis3mptifyPlugin(ProviderPlugin):
                 self._dashboard.raise_()
                 self._dashboard.activateWindow()
             except Exception as exc:
-                self._log(f'Dashboard konnte nicht geöffnet werden: {exc}')
+                self._log(f'Dashboard konnte nicht geÃ¶ffnet werden: {exc}')
             return True
         return False
 
 
 def create_plugin() -> Spotis3mptifyPlugin:
     return Spotis3mptifyPlugin()
+
