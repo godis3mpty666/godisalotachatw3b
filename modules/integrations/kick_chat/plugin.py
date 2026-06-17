@@ -1,11 +1,19 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
 import contextlib
 import json
+import os
 import re
+import socket
+import struct
+import subprocess
 import time
+import tempfile
 import urllib.parse
+import urllib.request
 from html import escape as _html_escape
 from pathlib import Path
 from typing import Any
@@ -50,12 +58,15 @@ class KickChatPlugin(ThreadedPlugin):
         self._diag_last_line = ''
         self._diag_repeat_count = 0
         self._host: PluginHost | None = None
+        self._connected = False
+        self._write_ready = False
 
     # Wichtig: Keine OAuth-/Token-/Client-Felder mehr im Plugin-Dialog.
     # Das Maintool verwaltet Kick Main/Bot OAuth zentral und spiegelt nur die nötigen Werte.
     def settings_schema(self):
         return [
             {'key': 'channel', 'label': 'Kick Channel', 'placeholder': 'godis3mpty'},
+            {'key': 'enable_browser_chatroom_resolver', 'label': 'Browser-Resolver fuer Chatroom-ID nutzen', 'type': 'checkbox'},
             {'key': 'diag_log', 'label': 'Diagnosis Log', 'type': 'multiline', 'placeholder': ''},
             {'key': 'diag_path', 'label': 'Diagnosis file path', 'placeholder': ''},
         ]
@@ -63,6 +74,7 @@ class KickChatPlugin(ThreadedPlugin):
     def default_settings(self):
         return {
             'channel': '',
+            'enable_browser_chatroom_resolver': False,
             'diag_log': self._read_diag() or 'No diagnosis yet. Press Test or Connect once.',
             'diag_path': str(self._diag_path()),
             'autoconnect': False,
@@ -89,6 +101,7 @@ class KickChatPlugin(ThreadedPlugin):
     def _set_diag(self, text: str):
         self._diag_text = (text or '').strip()
         try:
+            self._diag_path().parent.mkdir(parents=True, exist_ok=True)
             self._diag_path().write_text(self._diag_text, encoding='utf-8')
         except Exception:
             pass
@@ -129,12 +142,45 @@ class KickChatPlugin(ThreadedPlugin):
         return {}
 
     def _effective_settings(self, settings: dict[str, Any] | None, host: PluginHost | None = None) -> dict[str, Any]:
-        merged: dict[str, Any] = {}
-        merged.update(self._host_platform_settings(host))
+        # Core/platform settings own OAuth, account names and the watched channel.
+        # Plugin-local settings are only behavior/diagnostic knobs; stale local
+        # channel/token values must not redirect Kick away from the main channel.
+        merged: dict[str, Any] = dict(self._host_platform_settings(host))
         if isinstance(settings, dict):
-            # Plugin-local values win only when filled. Empty plugin settings must not erase host OAuth values.
-            for key, value in settings.items():
+            local_keys = {'enable_browser_chatroom_resolver', 'diag_log', 'diag_path', 'autoconnect'}
+            for key in local_keys:
+                value = settings.get(key)
                 if value not in (None, ''):
+                    merged[key] = value
+            fallback_keys = {
+                'main_access_token',
+                'main_refresh_token',
+                'access_token',
+                'refresh_token',
+                'main',
+                'main_account',
+                'channel',
+                'main_username',
+                'main_user_id',
+                'channel_slug',
+                'broadcaster_user_id',
+                'broadcaster_id',
+                'channel_id',
+                'chatroom_id',
+                'chatroom_channel',
+                'bot',
+                'bot_account',
+                'bot_username',
+                'bot_user_id',
+                'read_enabled',
+                'write_enabled',
+                'enabled',
+                'scopes',
+                'main_scopes',
+            }
+            for key in fallback_keys:
+                value = settings.get(key)
+                if value not in (None, '') and merged.get(key) in (None, ''):
                     merged[key] = value
         return merged
 
@@ -146,6 +192,25 @@ class KickChatPlugin(ThreadedPlugin):
         if token.lower().startswith('bearer '):
             token = token[7:]
         return token.strip()
+
+    def _token_for_send(self, settings: dict[str, Any]) -> tuple[str, str]:
+        bot_token = self._clean_token(settings.get('access_token'))
+        if bot_token:
+            return bot_token, 'bot'
+        main_token = self._clean_token(settings.get('main_access_token'))
+        if main_token:
+            return main_token, 'main'
+        return '', ''
+
+    def _tokens_for_send(self, settings: dict[str, Any]) -> list[tuple[str, str]]:
+        tokens: list[tuple[str, str]] = []
+        bot_token = self._clean_token(settings.get('access_token'))
+        main_token = self._clean_token(settings.get('main_access_token'))
+        if bot_token:
+            tokens.append((bot_token, 'bot'))
+        if main_token and main_token != bot_token:
+            tokens.append((main_token, 'main'))
+        return tokens
 
     def _channel_from_settings(self, settings: dict[str, Any]) -> str:
         return self._clean_login(
@@ -184,6 +249,321 @@ class KickChatPlugin(ThreadedPlugin):
             'Accept': 'application/json',
             'Authorization': f'Bearer {token}',
         }
+
+    def _find_browser_exe(self, settings: dict[str, Any]) -> str:
+        raw = str(settings.get('browser_path') or '').strip().strip('"')
+        candidates = []
+        if raw:
+            candidates.append(raw)
+        for env_key in ('ProgramFiles', 'ProgramFiles(x86)', 'LocalAppData'):
+            base = os.environ.get(env_key)
+            if not base:
+                continue
+            candidates.extend([
+                str(Path(base) / 'Google' / 'Chrome' / 'Application' / 'chrome.exe'),
+                str(Path(base) / 'Microsoft' / 'Edge' / 'Application' / 'msedge.exe'),
+                str(Path(base) / 'Chromium' / 'Application' / 'chrome.exe'),
+            ])
+        for item in candidates:
+            if item and Path(item).exists():
+                return item
+        return ''
+
+    def _free_local_port(self) -> int:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind(('127.0.0.1', 0))
+            return int(sock.getsockname()[1])
+
+    def _cdp_json(self, port: int, path: str, timeout: float = 2.0) -> Any:
+        with urllib.request.urlopen(f'http://127.0.0.1:{port}{path}', timeout=timeout) as resp:
+            raw = resp.read().decode('utf-8', 'replace')
+        return json.loads(raw or '{}')
+
+    class _MiniWebSocket:
+        def __init__(self, url: str, timeout: float = 5.0):
+            parsed = urllib.parse.urlparse(url)
+            if parsed.scheme != 'ws' or not parsed.hostname:
+                raise RuntimeError(f'unsupported websocket url: {url}')
+            self._sock = socket.create_connection((parsed.hostname, int(parsed.port or 80)), timeout=timeout)
+            self._sock.settimeout(timeout)
+            path = parsed.path or '/'
+            if parsed.query:
+                path += '?' + parsed.query
+            key = base64.b64encode(os.urandom(16)).decode('ascii')
+            req = (
+                f'GET {path} HTTP/1.1\r\n'
+                f'Host: {parsed.hostname}:{int(parsed.port or 80)}\r\n'
+                'Upgrade: websocket\r\n'
+                'Connection: Upgrade\r\n'
+                f'Sec-WebSocket-Key: {key}\r\n'
+                'Sec-WebSocket-Version: 13\r\n'
+                f'Origin: http://{parsed.hostname}:{int(parsed.port or 80)}\r\n'
+                '\r\n'
+            ).encode('ascii')
+            self._sock.sendall(req)
+            response = b''
+            while b'\r\n\r\n' not in response:
+                chunk = self._sock.recv(4096)
+                if not chunk:
+                    break
+                response += chunk
+            head = response.decode('iso-8859-1', 'replace')
+            if ' 101 ' not in head.split('\r\n', 1)[0]:
+                raise RuntimeError('DevTools websocket handshake failed: ' + head.split('\r\n', 1)[0])
+            expected = base64.b64encode(hashlib.sha1((key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').encode('ascii')).digest()).decode('ascii')
+            if expected not in head:
+                raise RuntimeError('DevTools websocket accept key mismatch')
+
+        def gettimeout(self):
+            return self._sock.gettimeout()
+
+        def settimeout(self, value):
+            self._sock.settimeout(value)
+
+        def close(self):
+            with contextlib.suppress(Exception):
+                self._sock.close()
+
+        def _read_exact(self, size: int) -> bytes:
+            data = b''
+            while len(data) < size:
+                chunk = self._sock.recv(size - len(data))
+                if not chunk:
+                    raise RuntimeError('DevTools websocket closed')
+                data += chunk
+            return data
+
+        def send(self, text: str) -> None:
+            payload = str(text or '').encode('utf-8')
+            first = 0x81
+            if len(payload) < 126:
+                header = bytes([first, 0x80 | len(payload)])
+            elif len(payload) < 65536:
+                header = bytes([first, 0x80 | 126]) + struct.pack('!H', len(payload))
+            else:
+                header = bytes([first, 0x80 | 127]) + struct.pack('!Q', len(payload))
+            mask = os.urandom(4)
+            masked = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
+            self._sock.sendall(header + mask + masked)
+
+        def recv(self) -> str:
+            while True:
+                b1, b2 = self._read_exact(2)
+                opcode = b1 & 0x0F
+                length = b2 & 0x7F
+                if length == 126:
+                    length = struct.unpack('!H', self._read_exact(2))[0]
+                elif length == 127:
+                    length = struct.unpack('!Q', self._read_exact(8))[0]
+                mask = self._read_exact(4) if (b2 & 0x80) else b''
+                payload = self._read_exact(length) if length else b''
+                if mask:
+                    payload = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
+                if opcode == 0x1:
+                    return payload.decode('utf-8', 'replace')
+                if opcode == 0x8:
+                    raise RuntimeError('DevTools websocket closed')
+                if opcode == 0x9:
+                    self._sock.sendall(bytes([0x8A, len(payload)]) + payload)
+
+    def _cdp_connect(self, ws_url: str):
+        if websocket is not None:
+            try:
+                return websocket.create_connection(ws_url, timeout=5)
+            except Exception as exc:
+                self._append_diag(f'DevTools websocket-client failed, using builtin client: {exc}')
+        return self._MiniWebSocket(ws_url, timeout=5)
+
+    def _cdp_call(self, ws, method: str, params: dict[str, Any] | None = None, *, timeout: float = 8.0) -> dict[str, Any]:
+        msg_id = int(time.time() * 1000) % 1000000000
+        ws.send(json.dumps({'id': msg_id, 'method': method, 'params': params or {}}))
+        end = time.time() + max(0.5, timeout)
+        old_timeout = None
+        with contextlib.suppress(Exception):
+            old_timeout = ws.gettimeout()
+            ws.settimeout(0.5)
+        try:
+            while time.time() < end:
+                try:
+                    raw = ws.recv()
+                except Exception:
+                    continue
+                with contextlib.suppress(Exception):
+                    payload = json.loads(raw)
+                    if payload.get('id') == msg_id:
+                        return payload
+        finally:
+            with contextlib.suppress(Exception):
+                ws.settimeout(old_timeout)
+        return {}
+
+    def _extract_chatroom_from_text(self, text: str, *, chatroom_url: bool = False) -> dict[str, Any]:
+        body = str(text or '')
+        if not body:
+            return {}
+        with contextlib.suppress(Exception):
+            obj = json.loads(body)
+            data = self._extract_channel_data_from_any(obj)
+            if chatroom_url and 'chatroom_id' not in data:
+                found = self._search_value(obj, ('id',))
+                if found not in (None, ''):
+                    data['chatroom_id'] = found
+            if data:
+                return data
+        data = self._extract_channel_data_from_html(body)
+        if chatroom_url and 'chatroom_id' not in data:
+            match = re.search(r'"id"\s*:\s*"?(?P<v>\d+)"?', body, re.IGNORECASE)
+            if match:
+                data['chatroom_id'] = match.group('v')
+        return data
+
+    def _collect_browser_network_chatroom(self, ws, channel: str, *, seconds: float = 12.0) -> dict[str, Any]:
+        candidates: dict[str, str] = {}
+        end = time.time() + max(2.0, seconds)
+        with contextlib.suppress(Exception):
+            ws.settimeout(0.5)
+        while time.time() < end:
+            try:
+                raw = ws.recv()
+            except Exception:
+                continue
+            try:
+                msg = json.loads(raw)
+            except Exception:
+                continue
+            method = str(msg.get('method') or '')
+            params = msg.get('params') if isinstance(msg.get('params'), dict) else {}
+            if method == 'Network.responseReceived':
+                resp = params.get('response') if isinstance(params.get('response'), dict) else {}
+                url = str(resp.get('url') or '')
+                low = url.lower()
+                if 'kick.com' in low and ('chatroom' in low or f'/channels/{channel.lower()}' in low):
+                    rid = str(params.get('requestId') or '')
+                    if rid:
+                        candidates[rid] = url
+                        self._append_diag(f'BROWSER NETWORK candidate {url}')
+            elif method == 'Network.loadingFinished':
+                rid = str(params.get('requestId') or '')
+                url = candidates.pop(rid, '')
+                if not url:
+                    continue
+                body_resp = self._cdp_call(ws, 'Network.getResponseBody', {'requestId': rid}, timeout=2)
+                body = str(((body_resp.get('result') or {}).get('body') or ''))
+                data = self._extract_chatroom_from_text(body, chatroom_url='chatroom' in url.lower())
+                self._append_diag(f'BROWSER NETWORK body url={url} chatroom_id={data.get("chatroom_id")} channel_id={data.get("channel_id")}')
+                if data.get('chatroom_id'):
+                    return data
+        return {}
+
+    def _fetch_browser_chatroom_data(self, settings: dict[str, Any], channel: str) -> dict[str, Any]:
+        browser = self._find_browser_exe(settings)
+        if not browser:
+            raise RuntimeError('Chrome/Edge not found for browser resolver')
+
+        port = self._free_local_port()
+        profile = Path(tempfile.mkdtemp(prefix='gla_kick_chatroom_'))
+        proc = None
+        ws = None
+        try:
+            visible = str(settings.get('browser_resolver_visible') or '').strip().lower() in {'1', 'true', 'yes', 'on'}
+            args = [
+                browser,
+                f'--remote-debugging-port={port}',
+                '--remote-allow-origins=*',
+                f'--user-data-dir={profile}',
+                '--disable-gpu',
+                '--no-first-run',
+                '--no-default-browser-check',
+                f'https://kick.com/{urllib.parse.quote(channel)}',
+            ]
+            if not visible:
+                args.insert(4, '--headless=new')
+            proc = subprocess.Popen(
+                args,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            deadline = time.time() + 12.0
+            version = None
+            while time.time() < deadline:
+                with contextlib.suppress(Exception):
+                    version = self._cdp_json(port, '/json/version', timeout=1.0)
+                    if isinstance(version, dict):
+                        break
+                time.sleep(0.25)
+            if not isinstance(version, dict):
+                raise RuntimeError('browser debugger did not start')
+
+            tabs = self._cdp_json(port, '/json', timeout=2.0)
+            page = next((t for t in tabs if isinstance(t, dict) and t.get('webSocketDebuggerUrl')), None) if isinstance(tabs, list) else None
+            if not page:
+                raise RuntimeError('browser debugger has no page target')
+            ws = self._cdp_connect(page['webSocketDebuggerUrl'])
+            self._cdp_call(ws, 'Page.enable', timeout=2)
+            self._cdp_call(ws, 'Network.enable', timeout=2)
+            self._cdp_call(ws, 'Runtime.enable', timeout=2)
+            self._cdp_call(ws, 'Page.navigate', {'url': f'https://kick.com/{urllib.parse.quote(channel)}'}, timeout=2)
+            network_data = self._collect_browser_network_chatroom(ws, channel, seconds=12.0)
+            if network_data.get('chatroom_id'):
+                return network_data
+            for _ in range(40):
+                loc = self._cdp_call(ws, 'Runtime.evaluate', {'expression': 'location.href', 'returnByValue': True}, timeout=1)
+                href = str((((loc.get('result') or {}).get('result') or {}).get('value') or ''))
+                if 'kick.com' in href:
+                    break
+                time.sleep(0.25)
+            time.sleep(3.0)
+
+            js = """
+            (async () => {
+              const urls = [
+                `https://kick.com/api/v2/channels/${CHANNEL}/chatroom`,
+                `https://kick.com/api/v1/channels/${CHANNEL}/chatroom`,
+                `https://kick.com/api/v2/channels/${CHANNEL}`,
+                `https://kick.com/${CHANNEL}`
+              ];
+              let last = null;
+              for (const url of urls) {
+                try {
+                  const r = await fetch(url, {credentials: 'include', headers: {'accept': 'application/json,text/plain,*/*'}});
+                  const text = await r.text();
+                  last = {url, status: r.status, text: text.slice(0, 120000)};
+                  if (r.ok && /chatroom|chatroom_id/i.test(text)) return JSON.stringify(last);
+                } catch (e) {
+                  last = {url, status: 0, text: String(e)};
+                }
+              }
+              return JSON.stringify(last || {});
+            })()
+            """.replace('CHANNEL', json.dumps(channel))
+            result = self._cdp_call(ws, 'Runtime.evaluate', {'expression': js, 'awaitPromise': True, 'returnByValue': True}, timeout=20)
+            value = (((result.get('result') or {}).get('result') or {}).get('value') or '')
+            payload = json.loads(value or '{}') if isinstance(value, str) else {}
+            text = str(payload.get('text') or '')
+            url = str(payload.get('url') or '')
+            data = self._extract_chatroom_from_text(text, chatroom_url='chatroom' in url.lower())
+            self._append_diag(f'BROWSER CHATROOM url={url} status={payload.get("status")} chatroom_id={data.get("chatroom_id")} channel_id={data.get("channel_id")} text={text[:240]}')
+            if data.get('chatroom_id'):
+                return data
+            raise RuntimeError(f'browser resolver found no chatroom_id; last_url={url} status={payload.get("status")}')
+        finally:
+            with contextlib.suppress(Exception):
+                if ws is not None:
+                    ws.close()
+            with contextlib.suppress(Exception):
+                if proc is not None:
+                    proc.terminate()
+            with contextlib.suppress(Exception):
+                import shutil
+                shutil.rmtree(profile, ignore_errors=True)
+
+    def _has_write_credentials(self, settings: dict[str, Any]) -> bool:
+        token, _account = self._token_for_send(settings)
+        broadcaster_id = self._parse_int(settings.get('broadcaster_user_id') or settings.get('channel_id') or settings.get('main_user_id'))
+        return bool(token and broadcaster_id)
+
+    def is_connected(self) -> bool:
+        return bool(self._connected or self._write_ready)
 
     def _safe_json(self, resp: requests.Response):
         try:
@@ -440,6 +820,10 @@ class KickChatPlugin(ThreadedPlugin):
         manual_channel_id = self._parse_int(settings.get('channel_id'))
         # Falls ein alter Wert noch in settings.json liegt, nutzen wir ihn, zeigen ihn aber nicht mehr im UI.
         manual_chatroom_id = self._parse_int(settings.get('chatroom_id'))
+        manual_chatroom_channel = self._clean_login(settings.get('chatroom_channel') or settings.get('chatroom_slug'))
+        if manual_chatroom_id is not None and manual_chatroom_channel and manual_chatroom_channel != channel:
+            self._append_diag(f'Ignoring cached chatroom_id={manual_chatroom_id} for old channel={manual_chatroom_channel}; current channel={channel}')
+            manual_chatroom_id = None
 
         broadcaster_user_id = manual_broadcaster_user_id
         channel_id = manual_channel_id
@@ -458,8 +842,8 @@ class KickChatPlugin(ThreadedPlugin):
 
         try:
             bundle = self._fetch_official_channel_bundle(settings, channel)
-            broadcaster_user_id = bundle.get('broadcaster_user_id') or broadcaster_user_id
-            channel_id = bundle.get('channel_id') or channel_id
+            broadcaster_user_id = broadcaster_user_id or bundle.get('broadcaster_user_id')
+            channel_id = channel_id or bundle.get('channel_id')
             viewer_count = bundle.get('viewer_count')
             is_live = bundle.get('is_live')
             source_parts.append('official_api')
@@ -489,7 +873,27 @@ class KickChatPlugin(ThreadedPlugin):
             if chatroom_id:
                 break
 
+        if not chatroom_id and self._as_bool(settings.get('enable_browser_chatroom_resolver'), False):
+            try:
+                data = self._fetch_browser_chatroom_data(settings, channel)
+                broadcaster_user_id = self._parse_int(data.get('broadcaster_user_id')) or broadcaster_user_id
+                channel_id = self._parse_int(data.get('channel_id')) or channel_id
+                chatroom_id = self._parse_int(data.get('chatroom_id')) or chatroom_id
+                if data:
+                    source_parts.append('browser_chatroom')
+            except Exception as exc:
+                self._append_diag(f'browser_chatroom unavailable: {exc}')
+        elif not chatroom_id:
+            self._append_diag('browser_chatroom skipped: browser resolver disabled')
+
         source = ' + '.join(source_parts) if source_parts else 'unknown'
+        if broadcaster_user_id is not None:
+            settings['broadcaster_user_id'] = str(broadcaster_user_id)
+        if channel_id is not None:
+            settings['channel_id'] = str(channel_id)
+        if chatroom_id is not None:
+            settings['chatroom_id'] = str(chatroom_id)
+            settings['chatroom_channel'] = channel
         self._append_diag(
             f'RESOLVED channel={channel} '
             f'broadcaster_user_id={broadcaster_user_id} '
@@ -668,7 +1072,7 @@ class KickChatPlugin(ThreadedPlugin):
             return
         self._is_live = live
         self._append_diag(f'IS_LIVE {self._is_live}')
-        state = 'connected' if self._is_live else 'warning'
+        state = 'connected'
         host.set_status(self.plugin_id, PluginStatus(state, f'Watching #{channel} | live={str(self._is_live).lower()}'))
 
     def _refresh_metrics(self, host: PluginHost, settings: dict[str, Any], channel: str, *, force: bool = False) -> None:
@@ -790,6 +1194,12 @@ class KickChatPlugin(ThreadedPlugin):
 
         if event == 'pusher_internal:subscription_succeeded':
             self._append_diag(f'SUBSCRIBED {raw[:300]}')
+            return
+
+        if event in {'pusher:error', 'pusher_internal:subscription_error'}:
+            self._append_diag(f'PUSHER ERROR {raw[:700]}')
+            with contextlib.suppress(Exception):
+                host.log(self.plugin_id, f'pusher error {raw[:500]}')
             return
 
         if event == 'App\\Events\\ChatMessageEvent':
@@ -957,7 +1367,11 @@ class KickChatPlugin(ThreadedPlugin):
         followers_txt = f'followers={followers_count}' if followers_count is not None else 'followers=unknown'
 
         if chatroom_id:
+            self._write_ready = self._has_write_credentials(effective)
             return True, f'Kick ready: room {chatroom_id} | {live_txt} | {viewer_txt} | {followers_txt} | source={source}'
+        if self._has_write_credentials(effective):
+            self._write_ready = True
+            return True, f'Kick write ready; realtime chatroom is not available yet | {live_txt} | {viewer_txt} | {followers_txt} | source={source}'
         # No manual chatroom setting anymore. OAuth belongs to the maintool and
         # the plugin keeps resolving/retrying from Kick itself.
         return False, f'Kick channel found, but realtime chatroom ID is not available yet | {live_txt} | {viewer_txt} | {followers_txt} | source={source}'
@@ -979,6 +1393,8 @@ class KickChatPlugin(ThreadedPlugin):
         self._current_viewer_count = None
         self._current_followers_count = None
         self._is_live = None
+        self._connected = False
+        self._write_ready = self._has_write_credentials(effective)
 
         channel, broadcaster_user_id, channel_id, chatroom_id, is_live, viewer_count, followers_count, source = self._effective_ids(effective)
 
@@ -1001,18 +1417,23 @@ class KickChatPlugin(ThreadedPlugin):
                 # Refresh host-provided settings before each reconnect, because tokens/accounts can change in the maintool.
                 effective = self._effective_settings(settings, host)
                 channel, broadcaster_user_id, channel_id, chatroom_id, is_live, viewer_count, followers_count, source = self._effective_ids(effective)
+                self._write_ready = self._has_write_credentials(effective)
                 if not chatroom_id:
                     # Do not crash into an obsolete manual-chatroom-id message. Kick
                     # sometimes hides the realtime room id for a few seconds after
                     # stream start or behind a flaky website/API response. Keep
                     # retrying silently with a useful status.
-                    self._status_short(host, 'warning', f'Kick chatroom not ready for #{channel}; retrying in {int(reconnect_delay)}s')
+                    if self._write_ready:
+                        self._status_short(host, 'connected', f'Kick write ready for #{channel}; realtime chatroom pending, retrying in {int(reconnect_delay)}s')
+                    else:
+                        self._status_short(host, 'warning', f'Kick chatroom not ready for #{channel}; retrying in {int(reconnect_delay)}s')
                     self._append_diag(f'WAIT no chatroom_id channel={channel} broadcaster_user_id={broadcaster_user_id} channel_id={channel_id} source={source}')
                     time.sleep(reconnect_delay)
                     reconnect_delay = min(reconnect_delay * 1.5, 30.0)
                     continue
 
                 reconnect_delay = 3.0
+                self._connected = True
                 if websocket is not None:
                     self._run_with_websocket_client(ws_url, int(chatroom_id), host, effective, channel, viewer_poll_interval, channel_id)
                 elif websockets is not None:
@@ -1020,6 +1441,7 @@ class KickChatPlugin(ThreadedPlugin):
                 else:
                     raise RuntimeError('No websocket library available in host app.')
             except Exception as exc:
+                self._connected = False
                 self._append_diag(f'ws_error={exc}')
                 self._status_short(host, 'error', f'Kick reconnect in {int(reconnect_delay)}s | {exc}')
                 time.sleep(reconnect_delay)
@@ -1027,44 +1449,46 @@ class KickChatPlugin(ThreadedPlugin):
             else:
                 break
 
+        self._connected = False
+        self._write_ready = False
         self._status_short(host, 'disconnected', 'Stopped')
 
-    def _send_direct_with_token(self, message: str, settings: dict[str, Any], *, use_bot: bool = True) -> tuple[bool, str]:
+    def _send_direct_with_token(self, message: str, settings: dict[str, Any]) -> tuple[bool, str]:
         content = str(message or '').strip()
         if not content:
             return False, 'Kick message is empty.'
         if len(content) > 500:
             content = content[:500]
-        token = self._clean_token(settings.get('access_token') if use_bot else settings.get('main_access_token'))
-        if not token:
+        tokens = self._tokens_for_send(settings)
+        if not tokens:
             return False, 'Kick token missing from host settings.'
         broadcaster_id = str(settings.get('broadcaster_user_id') or settings.get('channel_id') or settings.get('main_user_id') or '').strip()
-        payloads: list[tuple[str, dict[str, Any]]] = []
-        if broadcaster_id.isdigit():
-            bid = int(broadcaster_id)
-            payloads.append(('user-with-broadcaster', {'content': content, 'type': 'user', 'broadcaster_user_id': bid}))
-            if use_bot:
-                payloads.append(('bot-with-broadcaster', {'content': content, 'type': 'bot', 'broadcaster_user_id': bid}))
-            payloads.append(('minimal-with-broadcaster', {'content': content, 'broadcaster_user_id': bid}))
-        else:
-            payloads.append(('user-minimal', {'content': content, 'type': 'user'}))
-            if use_bot:
-                payloads.append(('bot-minimal', {'content': content, 'type': 'bot'}))
-
         errors: list[str] = []
-        for variant, payload in payloads:
-            try:
-                resp = requests.post(
-                    self.KICK_CHAT_URL,
-                    headers={'Accept': 'application/json', 'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'},
-                    json=payload,
-                    timeout=15,
-                )
-                if resp.status_code < 400:
-                    return True, f'Kick message sent direct ({variant}).'
-                errors.append(f'{variant}: HTTP {resp.status_code} {resp.text[:300]}')
-            except Exception as exc:
-                errors.append(f'{variant}: {exc}')
+        for token, account in tokens:
+            payloads: list[tuple[str, dict[str, Any]]] = []
+            if broadcaster_id.isdigit():
+                bid = int(broadcaster_id)
+                payloads.append((f'{account}-user-with-broadcaster', {'content': content, 'type': 'user', 'broadcaster_user_id': bid}))
+                if account == 'bot':
+                    payloads.append((f'{account}-bot-with-broadcaster', {'content': content, 'type': 'bot', 'broadcaster_user_id': bid}))
+                payloads.append((f'{account}-minimal-with-broadcaster', {'content': content, 'broadcaster_user_id': bid}))
+            else:
+                payloads.append((f'{account}-user-minimal', {'content': content, 'type': 'user'}))
+                if account == 'bot':
+                    payloads.append((f'{account}-bot-minimal', {'content': content, 'type': 'bot'}))
+            for variant, payload in payloads:
+                try:
+                    resp = requests.post(
+                        self.KICK_CHAT_URL,
+                        headers={'Accept': 'application/json', 'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'},
+                        json=payload,
+                        timeout=15,
+                    )
+                    if resp.status_code < 400:
+                        return True, f'Kick message sent direct as {account} ({variant}).'
+                    errors.append(f'{variant}: HTTP {resp.status_code} {resp.text[:300]}')
+                except Exception as exc:
+                    errors.append(f'{variant}: {exc}')
         return False, 'Kick send failed: ' + ' | '.join(errors)[:900]
 
     def send_message(self, message: str, settings: dict[str, Any] | None = None, host: PluginHost | None = None):
@@ -1076,7 +1500,7 @@ class KickChatPlugin(ThreadedPlugin):
         # recurses back into this same method and blocks bridge messages from Twitch,
         # YouTube or TikTok. So Kick writes directly with the central OAuth token
         # mirrored through host.platform_settings().
-        ok, detail = self._send_direct_with_token(message, effective, use_bot=True)
+        ok, detail = self._send_direct_with_token(message, effective)
         self._append_diag(detail)
         return ok, detail
 

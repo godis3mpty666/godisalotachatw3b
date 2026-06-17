@@ -1,8 +1,8 @@
 {
   "id": "botalot",
-  "name": "botalot ver. 1.16",
-  "version": "1.16",
+  "name": "botalot ver. 1.22",
+  "version": "1.22",
   "description": "AI chat bot for godisalotachat using central OpenAI and platform send paths.",
   "entry": "plugin.py",
-  "display_name": "botalot ver. 1.16"
+  "display_name": "botalot ver. 1.22"
 }

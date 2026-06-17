@@ -1545,10 +1545,10 @@ class TikTokLiveAlertPlugin(ThreadedPlugin):
     def on_message(self, msg: Any) -> None:
         try:
             source_plugin = str(self._msg_value(msg, 'source_plugin_id', '') or '').strip()
-            # Accept the direct alert bridge from the tiktok_live chat plugin.
+            # Accept the direct alert bridge from the TikTok chat plugin.
             # Do NOT consume our own emitted tiktok_live_alert messages again;
             # that can create alert/log feedback loops, especially for joins.
-            if source_plugin and source_plugin != 'tiktok_live':
+            if source_plugin and source_plugin not in {'tiktok_chat', 'tiktok_live'}:
                 return
             platform = str(self._msg_value(msg, 'platform', '') or '').strip().lower()
             if platform and platform != 'tiktok':
@@ -1584,13 +1584,13 @@ class TikTokLiveAlertPlugin(ThreadedPlugin):
                 self._state['goals']['gifts']['target'] = self._int_setting(settings, 'gift_goal', 100, 0, 100000000)
 
             if is_follow:
-                self.logger.info(f"Live bridge FOLLOW from tiktok_live: {username}")
+                self.logger.info(f"Live bridge FOLLOW from {source_plugin or 'tiktok_chat'}: {username}")
                 self._record_follow(settings, username)
                 self._bridge_emit_alert(settings, username, 'followed the stream', channel, 'tiktok_follow')
                 return
 
             if is_share:
-                self.logger.info(f"Live bridge SHARE from tiktok_live: {username}")
+                self.logger.info(f"Live bridge SHARE from {source_plugin or 'tiktok_chat'}: {username}")
                 self._event_counters['share'] += 1
                 self._trigger_live_action(settings, 'live_action_share', f'share:{username}')
                 self._bridge_emit_alert(settings, username, 'shared the stream', channel, 'tiktok_share')
@@ -1601,9 +1601,9 @@ class TikTokLiveAlertPlugin(ThreadedPlugin):
                     self.logger.debug(f"Live bridge JOIN ignored because joins are disabled: {username}")
                     return
                 join_dedupe_seconds = self._int_setting(settings, 'join_dedupe_seconds', 60, 0, 600)
-                if not self._should_process_recent_event('join', bridge_user_key, join_dedupe_seconds, log_label=f'Live bridge JOIN from tiktok_live: {username}'):
+                if not self._should_process_recent_event('join', bridge_user_key, join_dedupe_seconds, log_label=f"Live bridge JOIN from {source_plugin or 'tiktok_chat'}: {username}"):
                     return
-                self.logger.info(f"Live bridge JOIN from tiktok_live: {username}")
+                self.logger.info(f"Live bridge JOIN from {source_plugin or 'tiktok_chat'}: {username}")
                 self._event_counters['join'] += 1
                 self._trigger_live_action(settings, 'live_action_join', f'join:{username}')
                 self._bridge_emit_alert(settings, username, 'joined the stream', channel, 'tiktok_join')
@@ -1613,7 +1613,7 @@ class TikTokLiveAlertPlugin(ThreadedPlugin):
                 if not _as_bool(settings.get('enable_subscribes', True)):
                     self.logger.debug(f"Live bridge SUBSCRIBE ignored because subscribes are disabled: {username}")
                     return
-                self.logger.info(f"Live bridge SUBSCRIBE from tiktok_live: {username}")
+                self.logger.info(f"Live bridge SUBSCRIBE from {source_plugin or 'tiktok_chat'}: {username}")
                 self._event_counters['subscribe'] += 1
                 self._trigger_live_action(settings, 'live_action_subscribe', f'subscribe:{username}')
                 self._bridge_emit_alert(settings, username, 'subscribed / became a member', channel, 'tiktok_subscribe')
@@ -1627,13 +1627,13 @@ class TikTokLiveAlertPlugin(ThreadedPlugin):
                     text = ' '.join(str(self._msg_value(msg, key, '') or '') for key in ('text', 'message', 'content', 'comment'))
                     match = re.search(r'(?i)x\s+(.+)$', text)
                     gift_name = match.group(1).strip() if match else 'gift'
-                self.logger.info(f"Live bridge GIFT from tiktok_live: {username} {gift_name} x{count}")
+                self.logger.info(f"Live bridge GIFT from {source_plugin or 'tiktok_chat'}: {username} {gift_name} x{count}")
                 self._record_gift(settings, username, user_key, gift_name, count, self._external_gifter_rankings)
                 self._bridge_emit_alert(settings, username, f'sent {count} x {gift_name}', channel, 'tiktok_gift')
                 return
 
             count = self._external_like_count_from_message(msg)
-            self.logger.info(f"Live bridge LIKE from tiktok_live: {username} +{count}")
+            self.logger.info(f"Live bridge LIKE from {source_plugin or 'tiktok_chat'}: {username} +{count}")
             self._record_like(settings, username, user_key, count, self._external_liker_rankings)
             self._bridge_emit_alert(settings, username, f'sent {count} likes', channel, 'tiktok_like')
         except Exception as exc:

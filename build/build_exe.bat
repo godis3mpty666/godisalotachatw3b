@@ -13,15 +13,21 @@ if /I not "%~1"=="/Y" (
     )
 )
 
+rem Laufende alte EXE beenden, sonst sperrt Windows Dateien in dist beim Neubau.
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$root=(Resolve-Path '.').Path; $exe=(Join-Path $root 'dist\webbased\webbased.exe'); Get-Process webbased -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $exe } | Stop-Process -Force" >nul 2>nul
+
+rem Browserfenster mit alten TikTok-Profilen beenden, sonst bleiben Cookie-Daten gelockt.
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$root=(Resolve-Path '.').Path; $distData=(Join-Path $root 'dist\webbased\data'); if(Test-Path $distData){ Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and $_.CommandLine.Contains($distData) } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } }" >nul 2>nul
+
+rem Einen Moment warten, damit Browser/SQLite-Cookie-Daten sauber freigegeben werden.
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Sleep -Milliseconds 900" >nul 2>nul
+
 rem Zuletzt in der EXE verwendete Einstellungen, Tokens und Plugin-Daten sichern.
 if exist "dist\webbased\data" (
     echo Uebernehme vorhandene Laufzeit- und Anmeldedaten aus dist...
     robocopy "dist\webbased\data" "data" /E /XD %DATA_EXCLUDE_DIRS% /XF %DATA_EXCLUDE_FILES% /NFL /NDL /NJH /NJS /NP >nul
     if errorlevel 8 goto :fail
 )
-
-rem Laufende alte EXE beenden, sonst sperrt Windows Dateien in dist beim Neubau.
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$root=(Resolve-Path '.').Path; $exe=(Join-Path $root 'dist\webbased\webbased.exe'); Get-Process webbased -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $exe } | Stop-Process -Force" >nul 2>nul
 
 if exist temp rmdir /s /q temp
 if exist dist rmdir /s /q dist

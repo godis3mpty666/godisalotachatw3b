@@ -1,6 +1,0 @@
-{
-  "id": "tiktok_live",
-  "name": "TikTok LIVE",
-  "version": "1.1.9.platform-settings",
-  "entry": "plugin.py"
-}

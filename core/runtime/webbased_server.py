@@ -9,7 +9,7 @@ APP_NAME = "godisalotachat webbased"
 VERSION = APP_VERSION
 
 PLATFORM_ORDER = ["twitch", "tiktok", "youtube", "kick", "spotify", "openai", "meld", "obs"]
-CHAT_INPUT_PLUGIN_IDS = {"twitch_chat", "tiktok_live", "youtube_chat", "kick_chat"}
+CHAT_INPUT_PLUGIN_IDS = {"twitch_chat", "tiktok_chat", "tiktok_live", "youtube_chat", "kick_chat"}
 CALLBACK_PORT = 5173
 MAIN_PORT = 17890
 OPENAI_API_BASE = "https://api.openai.com/v1"
@@ -227,6 +227,8 @@ class WebbasedPluginHost:
             overlay_html = str(payload.get("overlay_html") or "")
             if not text and not overlay_html:
                 return
+            if self._is_suppressed_outbound_echo(payload, text):
+                return
             item = {
                 "id": _now_ms(),
                 "platform": str(payload.get("platform") or plugin_id or "plugin"),
@@ -271,6 +273,8 @@ class WebbasedPluginHost:
             self.state.messages.append(item)
             if len(self.state.messages) > 300:
                 self.state.messages = self.state.messages[-300:]
+            if item.get("message_type", "chat") in {"chat", "message", "comment"}:
+                self.log(plugin_id, f"chat | {item.get('platform')}:{item.get('user')}: {str(item.get('text') or '')[:180]}")
             self._dispatch_chat_message(plugin_id, item)
         except Exception as exc:
             self.log(plugin_id, f"emit_message failed: {exc}")
@@ -315,12 +319,74 @@ class WebbasedPluginHost:
             platform = str(payload.get("platform") or "")
             if platform:
                 self.state.metrics[platform] = {**payload, "ts": time.time(), "plugin_id": plugin_id}
-            self.state.log(str(plugin_id), "metric", json.dumps(payload, ensure_ascii=False)[:500])
+            sig = "|".join([
+                str(plugin_id),
+                platform,
+                str(payload.get("message_type") or payload.get("type") or ""),
+                str(payload.get("viewer_count") if payload.get("viewer_count") is not None else payload.get("text") or ""),
+                str(payload.get("followers_count") if payload.get("followers_count") is not None else ""),
+            ])
+            now = time.time()
+            recent = getattr(self.state, "_recent_metric_log", None)
+            if not isinstance(recent, dict):
+                recent = {}
+                setattr(self.state, "_recent_metric_log", recent)
+            last = float(recent.get(sig) or 0.0)
+            if now - last >= 60.0:
+                recent[sig] = now
+                self.state.log(str(plugin_id), "metric", json.dumps(payload, ensure_ascii=False)[:500])
         except Exception:
             pass
 
+    def _outbound_echo_key(self, platform: str, text: str) -> str:
+        return "|".join([
+            str(platform or "").strip().lower(),
+            " ".join(str(text or "").split()).lower(),
+        ])
+
+    def _mark_outbound_echo(self, sender: str, platform: str, message: str, ttl: float = 45.0) -> None:
+        if str(sender or "").strip().lower() not in {"bridg3alot", "spotis3mptify", "botalot", "gam3pick3r", "bot"}:
+            return
+        key = self._outbound_echo_key(platform, message)
+        if not key.strip("|"):
+            return
+        recent = getattr(self.state, "_suppressed_outbound_echoes", None)
+        if not isinstance(recent, dict):
+            recent = {}
+            setattr(self.state, "_suppressed_outbound_echoes", recent)
+        now = time.time()
+        try:
+            for old_key, expires in list(recent.items()):
+                if float(expires or 0.0) < now:
+                    recent.pop(old_key, None)
+        except Exception:
+            pass
+        recent[key] = now + max(3.0, float(ttl or 45.0))
+
+    def _is_suppressed_outbound_echo(self, payload: dict, text: str) -> bool:
+        message_type = str(payload.get("message_type") or payload.get("type") or "chat").strip().lower()
+        if message_type not in {"chat", "message", "comment"}:
+            return False
+        platform = str(payload.get("platform") or "").strip().lower()
+        key = self._outbound_echo_key(platform, text)
+        recent = getattr(self.state, "_suppressed_outbound_echoes", None)
+        if not isinstance(recent, dict):
+            return False
+        now = time.time()
+        try:
+            for old_key, expires in list(recent.items()):
+                if float(expires or 0.0) < now:
+                    recent.pop(old_key, None)
+        except Exception:
+            pass
+        if float(recent.get(key) or 0.0) < now:
+            return False
+        return True
+
     def send_platform_message(self, platform: str, message: str, **kwargs) -> bool:
         try:
+            sender = str(kwargs.get("sender") or "").strip()
+            self._mark_outbound_echo(sender, platform, message)
             plugin = self.state.plugin_instances.get(f"{platform}_chat") or self.state.plugin_instances.get(platform)
             if plugin is not None and hasattr(plugin, "send_message"):
                 result = plugin.send_message(message, settings=self.state.plugin_settings(getattr(plugin, "plugin_id", f"{platform}_chat")), host=self)
@@ -386,7 +452,7 @@ class WebbasedPluginManager:
         if self.started:
             return
         self.started = True
-        for plugin_id in ("twitch_chat", "tiktok_live", "youtube_chat", "kick_chat", "spotis3mptify", "gam3pick3r", "botalot", "bridg3alot"):
+        for plugin_id in ("twitch_chat", "tiktok_chat", "youtube_chat", "kick_chat", "spotis3mptify", "gam3pick3r", "botalot", "bridg3alot"):
             self.start_plugin(plugin_id)
 
     def load_plugin(self, plugin_id: str):
@@ -427,6 +493,33 @@ class WebbasedPluginManager:
             self.state.plugin_status[plugin_id] = {"state": "error", "message": str(exc), "ts": time.time()}
             self.state.log(plugin_id, "start failed", exc)
             return False
+
+    def restart_plugin_async(self, plugin_id: str, reason: str = "") -> None:
+        plugin_id = str(plugin_id or "").strip()
+        if not plugin_id:
+            return
+
+        def worker() -> None:
+            try:
+                self.state.plugin_status[plugin_id] = {"state": "starting", "message": reason or "Neustart laeuft", "ts": time.time()}
+                old_plugin = self.state.plugin_instances.get(plugin_id)
+                if old_plugin is not None:
+                    try:
+                        old_plugin.stop(wait=True, timeout=3.0)
+                    except TypeError:
+                        try:
+                            old_plugin.stop()
+                        except Exception:
+                            pass
+                    except Exception as exc:
+                        self.state.log(plugin_id, "stop before restart failed", exc)
+                    self.state.plugin_instances.pop(plugin_id, None)
+                self.start_plugin(plugin_id)
+            except Exception as exc:
+                self.state.plugin_status[plugin_id] = {"state": "error", "message": str(exc), "ts": time.time()}
+                self.state.log(plugin_id, "async restart failed", exc)
+
+        threading.Thread(target=worker, daemon=True, name=f"plugin-restart-{plugin_id}").start()
 
     def stop_all(self) -> None:
         for pid, plugin in list(self.state.plugin_instances.items()):
@@ -474,7 +567,7 @@ class AppState:
         self._meld_status_cache = {"ts": 0.0, "host": "", "port": 0, "ok": False, "detail": "nicht verbunden", "locked": False}
         self._obs_status_cache = {"ts": 0.0, "host": "", "port": 0, "ok": False, "detail": "nicht verbunden", "locked": False}
         self._youtube_status_cache = {"ts": 0.0, "ok": False, "detail": "nicht verbunden", "locked": False, "key": None}
-        self._openai_status_cache = {"ts": 0.0, "ok": False, "detail": "nicht verbunden", "locked": False, "key": None}
+        self._openai_status_cache = {"ts": 0.0, "ok": False, "detail": "nicht verbunden", "locked": False, "key": None, "models": []}
         # OBS must be a real/persistent connection like in the original tool.
         # A short test socket makes the dashboard green, but OBS shows no active session afterwards.
         self._obs_sock = None
@@ -505,7 +598,8 @@ class AppState:
 
     def log(self, *parts):
         try:
-            line = time.strftime("%Y-%m-%d %H:%M:%S") + " | " + " | ".join(str(x) for x in parts) + "\n"
+            source, level, message = _normalize_log_parts(parts)
+            line = time.strftime("%Y-%m-%d %H:%M:%S") + f" | {source} | {level} | " + _redact_dev_log(message) + "\n"
             self.log_file.parent.mkdir(parents=True, exist_ok=True)
             with self.log_file.open("a", encoding="utf-8") as f:
                 f.write(line)
@@ -565,7 +659,7 @@ class AppState:
         ai.setdefault("api_key", "")
         ai.setdefault("organization", "")
         ai.setdefault("project", "")
-        ai.setdefault("model", "gpt-5.5")
+        ai.pop("model", None)
 
         # TikTok hat keinen OAuth-Redirect wie Twitch/YouTube/Kick/Spotify.
         # Wir halten getrennte Browserprofile für Main und Bot vor, damit QR-/Login-Cookies erhalten bleiben.
@@ -593,6 +687,8 @@ class AppState:
             tt["bot_profile_dir"] = default_bot_profile
         tt.setdefault("main_login_ok", False)
         tt.setdefault("bot_login_ok", False)
+        if bool(tt.get("main_login_ok") or tt.get("bot_login_ok")):
+            tt["enabled"] = True
         tt.setdefault("remote_debug_port", 9229)
         tt.setdefault("bot_remote_debug_port", 9230)
 
@@ -1018,6 +1114,7 @@ class AppState:
         account = "bot" if str(account or "").lower().strip() == "bot" else "main"
         s = self.settings()
         cfg = s.setdefault("platforms", {}).setdefault("tiktok", {})
+        cfg["enabled"] = True
         profile_dir = self._tiktok_profile_dir(cfg, account)
         profile_dir.mkdir(parents=True, exist_ok=True)
         port_key = "bot_remote_debug_port" if account == "bot" else "remote_debug_port"
@@ -1158,12 +1255,22 @@ class AppState:
         s = self.settings()
         source = s.get("platforms", {}) if isinstance(s.get("platforms", {}), dict) else {}
         out = {}
-        plugin_map = {"twitch": "twitch_chat", "tiktok": "tiktok_live", "youtube": "youtube_chat", "kick": "kick_chat"}
+        plugin_map = {"twitch": "twitch_chat", "tiktok": "tiktok_chat", "youtube": "youtube_chat", "kick": "kick_chat"}
         for p in PLATFORM_ORDER:
             cfg = dict(source.get(p, {}) or {})
             enabled = bool(cfg.get("enabled", False))
             cfg["enabled"] = enabled
             if not enabled:
+                if p == "tiktok":
+                    main_ok, _ = self.tiktok_account_status(cfg, "main")
+                    bot_ok, _ = self.tiktok_account_status(cfg, "bot")
+                    cfg["main_status"] = "verbunden" if main_ok else "nicht verbunden"
+                    cfg["bot_status"] = "verbunden" if bot_ok else "nicht verbunden"
+                    if main_ok or bot_ok:
+                        cfg["status"] = "verbunden"
+                        cfg["detail"] = "Main OK · Bot OK" if (main_ok and bot_ok) else "Main OK · Bot fehlt" if main_ok else "Bot OK · Main fehlt"
+                        out[p] = cfg
+                        continue
                 cfg["status"] = "nicht verbunden"
                 cfg.setdefault("detail", "inaktiv")
                 out[p] = cfg
@@ -1197,7 +1304,13 @@ class AppState:
                 cfg["status"] = "verbunden" if (main_ok or bot_ok) else "nicht verbunden"
                 cfg["detail"] = "Main OK · Bot OK" if (main_ok and bot_ok) else "Main OK · Bot fehlt" if main_ok else "Bot OK · Main fehlt" if bot_ok else "Main fehlt · Bot fehlt"
             elif p == "youtube":
-                ok, detail = self.youtube_status(cfg)
+                main_saved = self._auth_token_ok("youtube", "main") or bool(str(cfg.get("main_access_token") or cfg.get("main_refresh_token") or "").strip())
+                bot_saved = self._auth_token_ok("youtube", "bot") or bool(str(cfg.get("access_token") or cfg.get("refresh_token") or "").strip())
+                if main_saved or bot_saved:
+                    ok = True
+                    detail = "Main/Bot OAuth gespeichert" if main_saved and bot_saved else "Main OAuth gespeichert" if main_saved else "Bot OAuth gespeichert"
+                else:
+                    ok, detail = self.youtube_status(cfg)
                 cfg["status"] = "verbunden" if ok else "nicht verbunden"
                 cfg["detail"] = detail
                 cfg["main_status"] = self.platform_status(p, "main")
@@ -1210,6 +1323,7 @@ class AppState:
                 api_key = str(cfg.get("api_key") or "").strip()
                 cfg["status"] = "verbunden" if api_key else "nicht verbunden"
                 cfg["detail"] = "API-Key gespeichert" if api_key else "OpenAI API-Key fehlt"
+                cfg.pop("model", None)
                 cfg.pop("api_key", None)
             else:
                 main = self.platform_status(p, "main")
@@ -1330,7 +1444,7 @@ class AppState:
     def openai_status(self, cfg: dict, force=False) -> tuple[bool, str]:
         cfg = cfg if isinstance(cfg, dict) else {}
         if not bool(cfg.get("enabled", False)):
-            self._openai_status_cache = {"ts": time.time(), "ok": False, "detail": "deaktiviert", "locked": False, "key": None}
+            self._openai_status_cache = {"ts": time.time(), "ok": False, "detail": "deaktiviert", "locked": False, "key": None, "models": []}
             return False, "deaktiviert"
 
         api_key = str(cfg.get("api_key") or "").strip()
@@ -1340,7 +1454,7 @@ class AppState:
         cache_key = (key_fingerprint, organization, project)
         if not api_key:
             detail = "OpenAI API-Key fehlt"
-            self._openai_status_cache = {"ts": time.time(), "ok": False, "detail": detail, "locked": False, "key": cache_key}
+            self._openai_status_cache = {"ts": time.time(), "ok": False, "detail": detail, "locked": False, "key": cache_key, "models": []}
             return False, detail
 
         cache = self._openai_status_cache
@@ -1350,19 +1464,34 @@ class AppState:
         if not force and cache.get("key") == cache_key and now - float(cache.get("ts") or 0.0) < 10.0:
             return bool(cache.get("ok")), str(cache.get("detail") or "nicht verbunden")
 
-        ok, detail = _check_openai_api(api_key, organization, project)
-        self._openai_status_cache = {"ts": now, "ok": ok, "detail": detail, "locked": bool(ok), "key": cache_key}
+        ok, detail, models = _check_openai_api(api_key, organization, project)
+        self._openai_status_cache = {"ts": now, "ok": ok, "detail": detail, "locked": bool(ok), "key": cache_key, "models": models}
         return ok, detail
+
+    def openai_models(self, cfg: dict, force=False) -> tuple[bool, str, list[str]]:
+        ok, detail = self.openai_status(cfg, force=force)
+        models = self._openai_status_cache.get("models") if isinstance(self._openai_status_cache, dict) else []
+        return ok, detail, list(models or [])
 
     def plugin_enabled(self, plugin_id: str) -> bool:
         try:
             s = self.settings()
             pcfg = s.setdefault("plugins", {}).setdefault(plugin_id, {})
-            platform_for_plugin = {"twitch_chat": "twitch", "tiktok_live": "tiktok", "youtube_chat": "youtube", "kick_chat": "kick"}.get(plugin_id)
+            platform_for_plugin = {"twitch_chat": "twitch", "tiktok_chat": "tiktok", "tiktok_live": "tiktok", "youtube_chat": "youtube", "kick_chat": "kick"}.get(plugin_id)
             if platform_for_plugin and "enabled" not in pcfg:
+                if platform_for_plugin == "tiktok":
+                    tt = s.get("platforms", {}).get("tiktok", {})
+                    if isinstance(tt, dict) and bool(tt.get("main_login_ok") or tt.get("bot_login_ok")):
+                        return True
+                pdata = s.get("platforms", {}).get(platform_for_plugin, {})
+                if isinstance(pdata, dict) and any(str(pdata.get(k) or "").strip() for k in ("main_access_token", "main_refresh_token", "access_token", "refresh_token")):
+                    return True
                 return bool(s.get("platforms", {}).get(platform_for_plugin, {}).get("enabled", False))
             if plugin_id == "spotis3mptify" and "enabled" not in pcfg:
                 return bool(s.get("platforms", {}).get("spotify", {}).get("enabled", False))
+            if plugin_id == "bridg3alot" and "enabled" not in pcfg:
+                platforms = s.get("platforms", {})
+                return any(bool(platforms.get(key, {}).get("enabled", False)) for key in ("twitch", "tiktok", "youtube", "kick"))
             return bool(pcfg.get("enabled", False))
         except Exception:
             return False
@@ -1384,6 +1513,10 @@ class AppState:
         except Exception:
             pass
         try:
+            if plugin_id == "tiktok_chat":
+                legacy = self.settings().get("plugins", {}).get("tiktok_live", {})
+                if isinstance(legacy, dict):
+                    cfg.update(legacy)
             in_main = self.settings().get("plugins", {}).get(plugin_id, {})
             if isinstance(in_main, dict):
                 cfg.update(in_main)
@@ -1747,7 +1880,41 @@ YOUTUBE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 YOUTUBE_CHANNELS_URL = "https://www.googleapis.com/youtube/v3/channels"
 
 
-def _check_openai_api(api_key: str, organization="", project="", timeout=10.0) -> tuple[bool, str]:
+def _openai_model_sort_key(model_id: str):
+    text = str(model_id or "")
+    low = text.lower()
+    group = 0 if low.startswith("gpt-5") else 1 if low.startswith("gpt-4.1") else 2 if low.startswith("gpt-4o") else 3 if low.startswith(("o4", "o3", "o1")) else 4
+    return (group, low)
+
+
+def _openai_chat_model_ids(data: dict) -> list[str]:
+    blocked = (
+        "embedding", "audio", "tts", "whisper", "dall-e", "image", "moderation",
+        "realtime", "transcribe", "search", "instruct", "babbage", "davinci",
+        "preview", "codex",
+    )
+    stable_chat_aliases = {
+        "gpt-5", "gpt-5-mini", "gpt-5-nano", "gpt-5-chat-latest",
+        "gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano",
+        "gpt-4o", "gpt-4o-mini",
+        "o4-mini", "o3", "o3-mini", "o1", "o1-mini",
+    }
+    models = []
+    for item in data.get("data") or []:
+        if not isinstance(item, dict):
+            continue
+        model_id = str(item.get("id") or "").strip()
+        low = model_id.lower()
+        if not model_id or any(part in low for part in blocked):
+            continue
+        # /models also returns snapshots and special-purpose variants. Keep the
+        # dropdown conservative so selecting an item means botalot can call it.
+        if low in stable_chat_aliases:
+            models.append(model_id)
+    return sorted(set(models), key=_openai_model_sort_key)
+
+
+def _check_openai_api(api_key: str, organization="", project="", timeout=10.0) -> tuple[bool, str, list[str]]:
     headers = {"Authorization": f"Bearer {api_key}", "Accept": "application/json"}
     if organization:
         headers["OpenAI-Organization"] = organization
@@ -1758,8 +1925,11 @@ def _check_openai_api(api_key: str, organization="", project="", timeout=10.0) -
         with urllib.request.urlopen(req, timeout=timeout) as response:
             data = json.loads(response.read().decode("utf-8", errors="replace") or "{}")
         if isinstance(data, dict) and isinstance(data.get("data"), list):
-            return True, "OpenAI API verbunden"
-        return False, "OpenAI API antwortet, aber ohne Modellliste"
+            models = _openai_chat_model_ids(data)
+            if models:
+                return True, f"OpenAI API verbunden - {len(models)} Chat-Modelle verfuegbar", models
+            return False, "OpenAI API verbunden, aber keine passenden Chat-Modelle gefunden", []
+        return False, "OpenAI API antwortet, aber ohne Modellliste", []
     except urllib.error.HTTPError as exc:
         detail = ""
         try:
@@ -1768,12 +1938,12 @@ def _check_openai_api(api_key: str, organization="", project="", timeout=10.0) -
         except Exception:
             pass
         if exc.code == 401:
-            return False, "OpenAI API-Key ungültig"
+            return False, "OpenAI API-Key ungueltig", []
         if exc.code == 403:
-            return False, "OpenAI API-Zugriff verweigert; Projekt- und Organisations-ID prüfen"
-        return False, f"OpenAI API HTTP {exc.code}" + (f": {detail}" if detail else "")
+            return False, "OpenAI API-Zugriff verweigert; Projekt- und Organisations-ID pruefen", []
+        return False, f"OpenAI API HTTP {exc.code}" + (f": {detail}" if detail else ""), []
     except Exception as exc:
-        return False, f"OpenAI API nicht erreichbar: {exc}"
+        return False, f"OpenAI API nicht erreichbar: {exc}", []
 
 
 def _yt_clean(value) -> str:
@@ -1904,6 +2074,34 @@ def _content_type(path):
 def esc_html(text):
     return str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
+LOG_LEVELS = {"debug", "info", "status", "metric", "warning", "warn", "error", "failed"}
+
+def _clean_log_field(value, fallback="app"):
+    text = str(value if value is not None else "").replace("\r", " ").replace("\n", " ").strip()
+    text = re.sub(r"\s+", " ", text)
+    return text[:120] or fallback
+
+def _normalize_log_parts(parts) -> tuple[str, str, str]:
+    items = [str(item) for item in (parts or ()) if item is not None]
+    if not items:
+        return "app", "info", ""
+    source = _clean_log_field(items[0])
+    level = "info"
+    rest = items[1:]
+    if rest:
+        maybe_level = str(rest[0] or "").strip().lower()
+        if maybe_level in LOG_LEVELS:
+            level = "warning" if maybe_level == "warn" else maybe_level
+            rest = rest[1:]
+    if level == "info":
+        low = " ".join(rest).lower()
+        if any(word in low for word in ("error", "failed", "fehlgeschlagen", "exception", "traceback")):
+            level = "error"
+        elif any(word in low for word in ("warning", "warnung", "blocked", "ungueltig", "invalid")):
+            level = "warning"
+    message = " | ".join(_clean_log_field(item, "") for item in rest).strip(" |")
+    return source, level, message
+
 def _redact_dev_log(text):
     text = str(text or "")
     text = re.sub(r"(?i)(authorization\s*[:=]\s*bearer\s+)[^\s,;]+", r"\1[REDACTED]", text)
@@ -1942,7 +2140,7 @@ def _available_dev_log_sources(text, plugin_ids):
 
 DEV_PLATFORM_LOG_SOURCES = {
     "twitch": {"twitch", "twitch_chat"},
-    "tiktok": {"tiktok", "tiktok_live", "tiktok_live_alert"},
+    "tiktok": {"tiktok", "tiktok_chat", "tiktok_live", "tiktok_live_alert"},
     "youtube": {"youtube", "youtube_chat"},
     "kick": {"kick", "kick_chat"},
     "spotify": {"spotify", "spotis3mptify"},
@@ -1955,12 +2153,26 @@ def _dev_log_source(line):
     parts = str(line or "").split(" | ", 2)
     return parts[1].strip() if len(parts) >= 3 else ""
 
+def _dev_log_level(line):
+    parts = str(line or "").split(" | ", 3)
+    if len(parts) >= 4 and parts[2].strip().lower() in LOG_LEVELS:
+        level = parts[2].strip().lower()
+        return "warning" if level == "warn" else level
+    low = str(line or "").lower()
+    if any(word in low for word in ("error", "failed", "fehlgeschlagen", "traceback")):
+        return "error"
+    if any(word in low for word in ("warning", "warnung", "blocked", "ungueltig", "invalid")):
+        return "warning"
+    return "info"
+
 def _dev_source_matches(source, allowed):
     return any(source == item or source.startswith(item + " ") for item in allowed)
 
-def _filter_dev_log(text, scope, selected, plugin_ids):
+def _filter_dev_log(text, scope, selected, plugin_ids, level="all", search=""):
     scope = str(scope or "all").strip().lower()
     selected = str(selected or "").strip()
+    level = str(level or "all").strip().lower()
+    search = str(search or "").strip().lower()
     plugin_ids = set(plugin_ids or [])
     platform_sources = set().union(*DEV_PLATFORM_LOG_SOURCES.values())
     lines = str(text or "").splitlines()
@@ -1973,6 +2185,10 @@ def _filter_dev_log(text, scope, selected, plugin_ids):
         lines = [line for line in lines if _dev_log_source(line) in plugin_ids]
     elif scope == "core":
         lines = [line for line in lines if _dev_log_source(line) not in plugin_ids and not _dev_source_matches(_dev_log_source(line), platform_sources)]
+    if level in {"debug", "info", "status", "metric", "warning", "error", "failed"}:
+        lines = [line for line in lines if _dev_log_level(line) == level]
+    if search:
+        lines = [line for line in lines if search in line.lower()]
     return "\n".join(lines)
 
 def _dev_plugin_filter_list(st):
@@ -2000,13 +2216,13 @@ def _dev_plugin_filter_list(st):
 
 CHAT_PLATFORM_PLUGINS = {
     "twitch": "twitch_chat",
-    "tiktok": "tiktok_live",
+    "tiktok": "tiktok_chat",
     "youtube": "youtube_chat",
     "kick": "kick_chat",
 }
 CHAT_PLATFORM_ICON_PATHS = {
     "twitch": ("integrations", "twitch_chat", "assets", "twitch.png"),
-    "tiktok": ("integrations", "tiktok_live", "assets", "TikTok.png"),
+    "tiktok": ("integrations", "tiktok_chat", "assets", "TikTok.png"),
     "youtube": ("integrations", "youtube_chat", "assets", "youtube.png"),
     "kick": ("integrations", "kick_chat", "assets", "Kick.png"),
 }
@@ -2029,7 +2245,7 @@ def _chat_platform_state(st, settings):
             "plugin_id": plugin_id,
             "connected": connected,
             "viewer_count": int(viewer) if metric_fresh and not viewer_error and str(viewer).isdigit() else None,
-            "blocked": not connected or not metric_fresh or viewer_error,
+            "blocked": not connected or viewer_error,
             "detail": str(plugin_status.get("message") or "Noch keine aktuellen Zuschauerdaten"),
         })
     return out
@@ -2126,6 +2342,12 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/settings":
             self._json(st.settings())
             return
+        if path == "/api/openai/models":
+            cfg = st.settings().get("platforms", {}).get("openai", {})
+            force = str((urllib.parse.parse_qs(parsed.query).get("force") or [""])[0]).lower() in {"1", "true", "yes"}
+            ok, detail, models = st.openai_models(cfg, force=force)
+            self._json({"ok": ok, "detail": detail, "models": models})
+            return
         m_plugin_settings = re.match(r"^/api/plugins/([^/]+)/settings$", path)
         if m_plugin_settings:
             plugin_id = urllib.parse.unquote(m_plugin_settings.group(1)).strip()
@@ -2185,13 +2407,17 @@ class Handler(BaseHTTPRequestHandler):
             query = urllib.parse.parse_qs(parsed.query)
             scope = str((query.get("scope") or ["all"])[0])
             selected = str((query.get("id") or [""])[0])
+            level = str((query.get("level") or ["all"])[0])
+            search = str((query.get("q") or [""])[0])
             plugin_ids = [str(item.get("id") or "") for item in st.plugin_list()]
-            filtered = _filter_dev_log(txt, scope, selected, plugin_ids)
+            filtered = _filter_dev_log(txt, scope, selected, plugin_ids, level=level, search=search)
             self._json({
                 "log": _redact_dev_log(filtered[-100000:]),
                 "bytes": st.log_file.stat().st_size if st.log_file.exists() else 0,
                 "scope": scope,
                 "id": selected,
+                "level": level,
+                "search": search,
                 "lines": len(filtered.splitlines()) if filtered else 0,
             })
             return
@@ -2391,17 +2617,8 @@ class Handler(BaseHTTPRequestHandler):
                 new_cfg.update(incoming)
                 current["plugins"][plugin_id] = new_cfg
                 st.save_settings(current)
-                old_plugin = st.plugin_instances.get(plugin_id)
-                if old_plugin is not None:
-                    try: old_plugin.stop(wait=True)
-                    except TypeError:
-                        try: old_plugin.stop()
-                        except Exception: pass
-                    except Exception as exc:
-                        st.log(plugin_id, "stop before settings restart failed", exc)
-                    st.plugin_instances.pop(plugin_id, None)
-                st.plugin_manager.start_plugin(plugin_id)
-                self._json({"ok": True, "plugin_id": plugin_id, "values": st.plugin_settings(plugin_id)})
+                st.plugin_manager.restart_plugin_async(plugin_id, "Settings gespeichert; Neustart laeuft")
+                self._json({"ok": True, "plugin_id": plugin_id, "values": st.plugin_settings(plugin_id), "restart": "queued"})
             except Exception as exc:
                 st.log(plugin_id or "plugins", "save settings failed", exc)
                 self._json({"ok": False, "error": str(exc)}, 500)
@@ -2418,6 +2635,11 @@ class Handler(BaseHTTPRequestHandler):
                     # Ein bereits bestätigter Login darf nur über den Trennen-Endpunkt gelöscht werden.
                     new_tiktok["main_login_ok"] = bool(old_tiktok.get("main_login_ok") or new_tiktok.get("main_login_ok"))
                     new_tiktok["bot_login_ok"] = bool(old_tiktok.get("bot_login_ok") or new_tiktok.get("bot_login_ok"))
+                    if bool(new_tiktok.get("main_login_ok") or new_tiktok.get("bot_login_ok")):
+                        new_tiktok["enabled"] = True
+                openai_cfg = incoming["platforms"].get("openai", {})
+                if isinstance(openai_cfg, dict):
+                    openai_cfg.pop("model", None)
                 current["platforms"] = incoming["platforms"]
             if "plugins" in incoming and isinstance(incoming["plugins"], dict):
                 current["plugins"] = incoming["plugins"]
@@ -2428,11 +2650,7 @@ class Handler(BaseHTTPRequestHandler):
                 for platform, plugin_id in CHAT_PLATFORM_PLUGINS.items():
                     if platform not in changed_platforms:
                         continue
-                    old_plugin = st.plugin_instances.get(plugin_id)
-                    if old_plugin is not None:
-                        try: old_plugin.stop(wait=True)
-                        except TypeError: old_plugin.stop()
-                    st.plugin_manager.start_plugin(plugin_id)
+                    st.plugin_manager.restart_plugin_async(plugin_id, f"{platform} gespeichert; Neustart laeuft")
             except Exception as exc:
                 st.log("chat-plugins", "restart after settings failed", exc)
             try:
@@ -2565,7 +2783,7 @@ class Handler(BaseHTTPRequestHandler):
                         ai = s.setdefault("platforms", {}).setdefault("openai", {})
                         ai["api_key"] = ""
                         ai["status"] = "nicht verbunden"
-                        st._openai_status_cache = {"ts": 0.0, "ok": False, "detail": "getrennt", "locked": False, "key": None}
+                        st._openai_status_cache = {"ts": 0.0, "ok": False, "detail": "getrennt", "locked": False, "key": None, "models": []}
                         st.save_settings(s)
                     except Exception as exc:
                         st.log("openai", "disconnect cleanup failed", exc)
@@ -2927,6 +3145,67 @@ class Handler(BaseHTTPRequestHandler):
                 continue
         return {}
 
+    def _kick_resolve_chatroom_after_main_auth(self, channel_slug: str):
+        global STATE
+        st = STATE
+        slug = self._clean_login(channel_slug)
+        if not slug:
+            return
+
+        def worker():
+            try:
+                st.log("kick_chat", "resolving chatroom id after main OAuth", slug)
+                plugin_path = st.base / "modules" / "integrations" / "kick_chat" / "plugin.py"
+                spec = importlib.util.spec_from_file_location("kick_chat_resolver", plugin_path)
+                if not spec or not spec.loader:
+                    st.log("kick_chat", "chatroom resolver unavailable: plugin.py not found")
+                    return
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                plugin = module.KickChatPlugin()
+                settings = WebbasedPluginHost(st).platform_settings("kick")
+                settings["channel"] = slug
+                settings["browser_resolver_visible"] = True
+                settings.pop("chatroom_id", None)
+                settings.pop("chatroom_channel", None)
+                data = plugin._fetch_browser_chatroom_data(settings, slug)
+                chatroom_id = str(data.get("chatroom_id") or "").strip()
+                if not chatroom_id:
+                    st.log("kick_chat", "chatroom resolver found no chatroom_id")
+                    return
+                channel_id = str(data.get("channel_id") or "").strip()
+                st.log("kick_chat", f"chatroom_id {chatroom_id} catched from browser for {slug}" + (f" | channel_id {channel_id} catched from browser" if channel_id else ""))
+                updates = {"chatroom_id": chatroom_id, "chatroom_channel": slug}
+                if channel_id:
+                    updates["channel_id"] = channel_id
+                s = st.settings()
+                cfg = s.setdefault("platforms", {}).setdefault("kick", {})
+                current = self._clean_login(cfg.get("channel") or cfg.get("main") or cfg.get("main_account") or cfg.get("channel_slug"))
+                if current and current != slug:
+                    st.log("kick_chat", f"chatroom resolver ignored stale result for {slug}; current channel is {current}")
+                    return
+                cfg.update(updates)
+                st.save_settings(s)
+                st.log("kick_chat", f"chatroom id resolved after main OAuth: {chatroom_id}" + (f" channel_id={channel_id}" if channel_id else ""))
+                try:
+                    old = st.plugin_instances.get("kick_chat")
+                    if old is not None:
+                        try:
+                            old.stop(wait=True)
+                        except TypeError:
+                            old.stop()
+                    st.plugin_manager.start_plugin("kick_chat")
+                    st.log("kick_chat", "restarted after chatroom id resolve")
+                except Exception as exc:
+                    st.log("kick_chat", f"restart after chatroom id resolve failed: {exc}")
+            except Exception as exc:
+                try:
+                    st.log("kick_chat", f"chatroom resolver after main OAuth failed: {exc}")
+                except Exception:
+                    pass
+
+        threading.Thread(target=worker, daemon=True, name="kick-chatroom-resolver").start()
+
     def _oauth_state_prefix(self, platform, account):
         # gla2 carries platform/account in the state itself. The verifier is appended
         # in _oauth_start for PKCE platforms, so callbacks stay resolvable even if
@@ -3241,14 +3520,20 @@ class Handler(BaseHTTPRequestHandler):
                 broadcaster_id = str(channel.get("broadcaster_user_id") or channel.get("id") or uid or "").strip()
                 scopes = str(token.get("scope") or cfg.get("main_scopes" if account == "main" else "scopes") or DEFAULT_SCOPES["kick"][account]).strip()
                 if account == "main":
-                    updates.update({"main_access_token": access, "main_refresh_token": refresh or cfg.get("main_refresh_token", ""), "main_scopes": scopes, "main_saved_at": int(time.time()), "main_user_id": uid, "main_username": username, "broadcaster_user_id": broadcaster_id, "channel_id": broadcaster_id, "channel_slug": slug, "main_connection_status": f"Verbunden als {slug or username}"})
+                    updates.update({"enabled": True, "main_access_token": access, "main_refresh_token": refresh or cfg.get("main_refresh_token", ""), "main_scopes": scopes, "main_saved_at": int(time.time()), "main_user_id": uid, "main_username": username, "broadcaster_user_id": broadcaster_id, "channel_id": broadcaster_id, "channel_slug": slug, "chatroom_id": "", "chatroom_channel": "", "main_connection_status": f"Verbunden als {slug or username}"})
                     if slug and not self._clean_login(cfg.get("main_account") or cfg.get("main")): updates.update({"main": slug, "main_account": slug, "channel": slug})
                 else:
-                    updates.update({"access_token": access, "refresh_token": refresh or cfg.get("refresh_token", ""), "scopes": scopes, "saved_at": int(time.time()), "bot_user_id": uid, "bot_username": username, "bot_account": username, "connection_status": f"Verbunden als {username}"})
+                    updates.update({"enabled": True, "access_token": access, "refresh_token": refresh or cfg.get("refresh_token", ""), "scopes": scopes, "saved_at": int(time.time()), "bot_user_id": uid, "bot_username": username, "bot_account": username, "connection_status": f"Verbunden als {username}"})
                     if username and not self._clean_login(cfg.get("bot_account") or cfg.get("bot")): updates.update({"bot": username, "bot_account": username, "bot_username": username})
             elif platform == "spotify":
                 updates.update({"access_token": access, "refresh_token": refresh or cfg.get("refresh_token", ""), "scopes": str(token.get("scope") or cfg.get("scopes") or DEFAULT_SCOPES["spotify"]["main"]), "saved_at": int(time.time()), "connection_status": "Verbunden"})
             self._save_platform_updates(platform, updates)
+            if platform == "kick" and account == "main":
+                try:
+                    self._kick_resolve_chatroom_after_main_auth(updates.get("channel_slug") or updates.get("main_username") or cfg.get("channel") or cfg.get("main_account"))
+                except Exception as exc:
+                    try: st.log("kick_chat", "chatroom resolver start failed", exc)
+                    except Exception: pass
             if platform == "spotify":
                 try: st.log("spotify", "status", "connected", "OAuth gespeichert")
                 except Exception: pass
@@ -3423,14 +3708,22 @@ def _write_pid(port: int):
 class ThreadingHTTPServerV6(ThreadingHTTPServer):
     address_family = socket.AF_INET6
 
+
+class WebbasedHTTPServer(ThreadingHTTPServer):
+    daemon_threads = True
+
+
+class WebbasedHTTPServerV6(ThreadingHTTPServerV6):
+    daemon_threads = True
+
 def _start_server_on(address, port):
-    cb = ThreadingHTTPServer((address, int(port)), Handler)
+    cb = WebbasedHTTPServer((address, int(port)), Handler)
     t = threading.Thread(target=cb.serve_forever, daemon=True)
     t.start()
     return cb
 
 def _start_server_on_v6(port):
-    cb = ThreadingHTTPServerV6(("::1", int(port)), Handler)
+    cb = WebbasedHTTPServerV6(("::1", int(port)), Handler)
     t = threading.Thread(target=cb.serve_forever, daemon=True)
     t.start()
     return cb
@@ -3470,7 +3763,7 @@ def run(base_dir: str, open_browser: bool = True):
         except Exception: pass
     _start_ui_watchdog()
     _write_pid(port)
-    httpd = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    httpd = WebbasedHTTPServer(("127.0.0.1", port), Handler)
     callback_servers = _start_extra_callback_servers(port)
     url = f"http://127.0.0.1:{port}/?v={VERSION}&t={_now_ms()}"
     if port != preferred_port:

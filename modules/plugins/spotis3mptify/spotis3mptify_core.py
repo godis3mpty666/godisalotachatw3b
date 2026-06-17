@@ -575,6 +575,8 @@ def _ensure_access_token():
     tok = _read_tokens()
     if tok.get("access_token") and (tok.get("expires_at", 0) - 30) > _now():
         return tok["access_token"]
+    if tok.get("access_token") and not tok.get("expires_at"):
+        return tok["access_token"]
     if not tok.get("refresh_token"):
         raise RuntimeError("Spotify is not authorized in the core Platforms page.")
     try:
@@ -602,6 +604,8 @@ def _ensure_access_token():
         loge(f"auth refresh failed {code}: {body[:200]}")
         if code in (400,401):
             _write_tokens({"access_token": None, "refresh_token": None, "expires_at": 0})
+            if tok.get("access_token"):
+                return tok["access_token"]
         raise
 
 # ---------------- Spotify API helpers (search, meta, playback, playlists) ----------------
@@ -3914,4 +3918,3 @@ DATA = {
 # UI helper: keep old overlay endpoint discovery available for the app.
 def get_endpoint_urls():
     return _overlay_endpoint_urls()
-

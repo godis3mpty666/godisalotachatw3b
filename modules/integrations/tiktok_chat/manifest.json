@@ -1,0 +1,6 @@
+{
+  "id": "tiktok_chat",
+  "name": "TikTok Chat",
+  "version": "1.7.7.platform-settings",
+  "entry": "plugin.py"
+}

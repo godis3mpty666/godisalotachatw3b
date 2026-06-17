@@ -1,8 +1,8 @@
 {
   "id": "bridg3alot",
-  "name": "bridg3alot ver. 1.0.0",
-  "version": "1.0.0",
+  "name": "bridg3alot ver. 1.0.2",
+  "version": "1.0.2",
   "description": "Standalone cross-platform chat bridge for Twitch, TikTok, YouTube and Kick. Split out from botalot without changing bridge behavior.",
   "entry": "plugin.py",
-  "display_name": "bridg3alot ver. 1.0.0"
+  "display_name": "bridg3alot ver. 1.0.2"
 }

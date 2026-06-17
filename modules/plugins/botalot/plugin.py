@@ -3,6 +3,7 @@ from __future__ import annotations
 import sys
 import threading
 import time
+import re
 from pathlib import Path
 from typing import Any
 
@@ -16,9 +17,7 @@ from shared.plugin_base import PluginHost, ProviderPlugin
 from ai_client import OpenAIChatClient
 from common import as_bool, clean_text, to_int
 from context_memory import ContextMemory
-from trigger_matcher import TriggerMatcher
-
-PLUGIN_VERSION = "1.16"
+PLUGIN_VERSION = "1.22"
 PLUGIN_NAME = f"botalot ver. {PLUGIN_VERSION}"
 
 
@@ -28,6 +27,11 @@ def _data_dir() -> Path:
         if parent.name.lower() == "modules":
             return parent.parent / "data" / "botalot"
     return _PLUGIN_DIR / "data"
+
+
+def _is_service_command(text: str) -> bool:
+    low = clean_text(text).lower().strip()
+    return any(low == cmd or low.startswith(cmd + " ") for cmd in ("!sr", "!sr+", "!yt"))
 
 
 class BotalotPlugin(ProviderPlugin):
@@ -41,7 +45,6 @@ class BotalotPlugin(ProviderPlugin):
         self._settings: dict[str, Any] = {}
         self._enabled = False
         self._context = ContextMemory(10)
-        self._triggers = TriggerMatcher(_data_dir() / "triggers" / "ursula_words.txt")
         self._ai = OpenAIChatClient(self._log)
         self._last_reply_at = 0.0
         self._worker_lock = threading.Lock()
@@ -50,14 +53,11 @@ class BotalotPlugin(ProviderPlugin):
         return [
             {"key": "enabled", "label": "Bot aktiv", "type": "bool"},
             {"key": "openai_connection_status", "label": "OpenAI / ChatGPT", "readonly": True, "placeholder": "aus Core"},
-            {"key": "button_test_openai_connection", "type": "button", "label": "OpenAI", "button_text": "OpenAI testen"},
-            {"key": "openai_model", "label": "OpenAI Modell", "placeholder": "gpt-5-mini"},
-            {"key": "system_prompt", "label": "System Prompt", "type": "multiline"},
-            {"key": "trigger_at_bot", "label": "@bot / @botis3mpty", "type": "bool"},
-            {"key": "trigger_botis3mpty", "label": "botis3mpty im Text", "type": "bool"},
-            {"key": "only_answer_questions_for_botis3mpty", "label": "botis3mpty nur bei Fragen", "type": "bool"},
-            {"key": "trigger_ursula", "label": "Ursula Trigger", "type": "bool"},
-            {"key": "trigger_commands", "label": "! Commands", "placeholder": "!bot,!ask,!ai"},
+            {"key": "openai_model", "label": "OpenAI Modell", "type": "select", "options": [{"value": "", "label": "Modelle aus API-Key laden..."}]},
+            {"key": "openai_prompt_id", "label": "OpenAI Prompt ID", "placeholder": "pmpt_..."},
+            {"key": "openai_prompt_version", "label": "OpenAI Prompt Version", "placeholder": "leer = aktuelle Version"},
+            {"key": "custom_system_prompt", "label": "Eigener Prompt", "type": "multiline", "wide": True},
+            {"key": "trigger_commands", "label": "Commands", "placeholder": "!bot,!ask,!ai", "wide": True},
             {"key": "reply_to_source", "label": "Antwort an Ursprungsplattform senden", "type": "bool"},
             {"key": "emit_to_desktop", "label": "Antwort im Desktopchat anzeigen", "type": "bool"},
             {"key": "cooldown_seconds", "label": "Cooldown Sekunden", "type": "number", "min": 0, "max": 600},
@@ -70,11 +70,9 @@ class BotalotPlugin(ProviderPlugin):
             "enabled": True,
             "openai_connection_status": "aus Core",
             "openai_model": "gpt-5-mini",
-            "system_prompt": "Du bist botalot im Stream von godis3mpty. Antworte kurz, direkt, menschlich und ohne Supportbot-Ton.",
-            "trigger_at_bot": True,
-            "trigger_botis3mpty": True,
-            "only_answer_questions_for_botis3mpty": False,
-            "trigger_ursula": True,
+            "openai_prompt_id": "",
+            "openai_prompt_version": "",
+            "custom_system_prompt": "Du bist ein Chatbot fuer einen Livestream. Bleibe im Charakter, reagiere natuerlich und halte dich an die Kanalregeln.",
             "trigger_commands": "!bot,!ask,!ai",
             "reply_to_source": True,
             "emit_to_desktop": True,
@@ -111,11 +109,31 @@ class BotalotPlugin(ProviderPlugin):
     def _effective_settings(self, settings: dict[str, Any] | None = None) -> dict[str, Any]:
         merged = dict(self.default_settings())
         merged.update(self._settings if settings is None else dict(settings or {}))
+        if not str(merged.get("custom_system_prompt") or "").strip() and str(merged.get("base_system_prompt") or "").strip():
+            merged["custom_system_prompt"] = str(merged.get("base_system_prompt") or "").strip()
         openai = self._host_platform_settings("openai")
         merged["openai_api_key"] = str(openai.get("api_key") or "").strip()
+        merged["openai_organization"] = str(openai.get("organization") or "").strip()
+        merged["openai_project"] = str(openai.get("project") or "").strip()
         merged["openai_enabled"] = as_bool(openai.get("enabled"), True)
         merged["openai_connection_status"] = "OpenAI API-Key aus Core geladen" if merged["openai_api_key"] else "OpenAI API-Key fehlt im Core"
         return merged
+
+    def _current_settings(self) -> dict[str, Any]:
+        host = self._host
+        state = getattr(host, "state", None) if host is not None else None
+        getter = getattr(state, "plugin_settings", None) if state is not None else None
+        if callable(getter):
+            try:
+                fresh = getter(self.plugin_id, self)
+                if isinstance(fresh, dict):
+                    self._settings.update(fresh)
+            except Exception:
+                pass
+        settings = self._effective_settings(self._settings)
+        self._enabled = as_bool(settings.get("enabled"), True)
+        self._context.resize(to_int(settings.get("context_messages"), 8, 1, 30))
+        return settings
 
     def start(self, settings: dict[str, Any], host: PluginHost) -> None:
         self._host = host
@@ -153,7 +171,7 @@ class BotalotPlugin(ProviderPlugin):
         else:
             raw = getattr(payload, "platform", "") or getattr(payload, "source_plugin_id", "") or plugin_id
         text = str(raw or "").strip().lower()
-        return {"twitch_chat": "twitch", "tiktok_live": "tiktok", "youtube_chat": "youtube", "kick_chat": "kick"}.get(text, text)
+        return {"twitch_chat": "twitch", "tiktok_chat": "tiktok", "tiktok_live": "tiktok", "youtube_chat": "youtube", "kick_chat": "kick"}.get(text, text)
 
     def _message_text(self, payload: Any) -> str:
         if isinstance(payload, dict):
@@ -176,19 +194,41 @@ class BotalotPlugin(ProviderPlugin):
         return str(getattr(payload, "message_type", "") or getattr(payload, "type", "") or "chat").strip().lower()
 
     def _command_trigger(self, settings: dict[str, Any], text: str) -> tuple[bool, str, str]:
-        commands = [cmd.strip().lower() for cmd in str(settings.get("trigger_commands") or "").split(",") if cmd.strip()]
+        commands = self._command_triggers(settings)
         low = text.lower().strip()
         for cmd in commands:
-            if low == cmd or low.startswith(cmd + " "):
+            if low == cmd:
                 return True, cmd, text[len(cmd):].strip() or text
+            if low.startswith(cmd):
+                tail = text[len(cmd):]
+                if tail and (tail[0].isspace() or not tail[0].isalnum()):
+                    return True, cmd, tail.lstrip(" \t\r\n,.:;!?-").strip() or text
         return False, "", text
 
+    def _command_triggers(self, settings: dict[str, Any]) -> list[str]:
+        raw_items = re.split(r"[\n,;]+", str(settings.get("trigger_commands") or ""))
+        commands: list[str] = []
+        for item in raw_items:
+            cmd = item.strip().lower()
+            if cmd and cmd not in commands:
+                commands.append(cmd)
+        path = _data_dir() / "triggers" / "commands.txt"
+        try:
+            if path.exists():
+                for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+                    cmd = line.split("#", 1)[0].strip().lower()
+                    if cmd and cmd not in commands:
+                        commands.append(cmd)
+        except Exception as exc:
+            self._log(f"Commands-Datei konnte nicht gelesen werden: {exc}")
+        return commands
+
     def on_message(self, msg: Any) -> None:
-        if not self._enabled:
-            return
         if self._message_type(msg) not in {"chat", "message", "comment"}:
             return
-        settings = self._effective_settings(self._settings)
+        settings = self._current_settings()
+        if not self._enabled:
+            return
         platform = self._message_platform("", msg)
         if platform not in {"twitch", "tiktok", "youtube", "kick"}:
             return
@@ -196,22 +236,25 @@ class BotalotPlugin(ProviderPlugin):
         text = self._message_text(msg)
         if not username or not text:
             return
+        if _is_service_command(text):
+            return
         self._context.add(platform, username, text)
         command_hit, command, command_text = self._command_trigger(settings, text)
-        trigger_hit, reason = self._triggers.match(settings, text)
-        if command_hit:
-            reason = command
-            text = command_text
-        if not command_hit and not trigger_hit:
+        if not command_hit:
             return
+        reason = command
+        text = command_text
+        self._log(f"Trigger erkannt: {reason} von {username} auf {platform}")
         if not str(settings.get("openai_api_key") or "").strip():
             self._log("AI-Antwort uebersprungen: OpenAI API-Key fehlt im Core.")
             return
         cooldown = to_int(settings.get("cooldown_seconds"), 8, 0, 600)
         now = time.time()
         if cooldown and now - self._last_reply_at < cooldown:
+            self._log(f"AI-Antwort uebersprungen: Cooldown noch {int(cooldown - (now - self._last_reply_at))}s.")
             return
         if not self._worker_lock.acquire(blocking=False):
+            self._log("AI-Antwort uebersprungen: vorherige Antwort laeuft noch.")
             return
         self._last_reply_at = now
         threading.Thread(target=self._reply_worker, args=(settings, platform, username, text, reason, self._message_channel(msg)), daemon=True, name="botalot-ai-reply").start()

@@ -283,7 +283,7 @@ class TwitchChatPlugin(ThreadedPlugin):
                 merged['bot'] = username
                 merged['bot_account'] = username
                 merged['bot_username'] = username
-        for key in ('client_id', 'access_token'):
+        for key in ('client_id', 'access_token', 'main_access_token', 'main_oauth_login', 'main_username', 'main_account'):
             if not merged.get(key) and local.get(key) not in (None, ''):
                 merged[key] = str(local.get(key)).strip()
 
@@ -444,12 +444,24 @@ class TwitchChatPlugin(ThreadedPlugin):
             return False, '', f'Token validation failed: {exc}', []
     def _resolve_auth(self, settings: dict, *, allow_oauth: bool) -> tuple[bool, str, str, dict]:
         cache: dict[str, Any] = {}
-        for key in ('access_token', 'client_id', 'scopes'):
+        for key in ('access_token', 'main_access_token', 'client_id', 'scopes', 'main_scopes'):
             value = settings.get(key)
             if value not in (None, ''):
                 cache[key] = value
-        token = self._clean_token(cache.get('access_token') or '')
-        username = self._clean_username(settings.get('username') or settings.get('bot_username') or cache.get('username') or '')
+        # Prefer the bot token when a bot account is actually connected. If not,
+        # use the main token so channels without a separate bot can still read
+        # and write chat as the main account.
+        token = self._clean_token(cache.get('access_token') or cache.get('main_access_token') or '')
+        username = self._clean_username(
+            settings.get('username')
+            or settings.get('bot_username')
+            or settings.get('bot_account')
+            or settings.get('main_oauth_login')
+            or settings.get('main_username')
+            or settings.get('main_account')
+            or cache.get('username')
+            or ''
+        )
         if not token:
             return False, '', 'Missing Twitch access token from core Platforms.', cache
         ok, login, msg, scopes = self._validate_token(token)
@@ -1316,6 +1328,9 @@ class TwitchChatPlugin(ThreadedPlugin):
             pass
         self._sock = None
         self._current_channel = ''
+
+    def is_connected(self) -> bool:
+        return self._sock is not None
 
     def send_message(self, message: str, settings: dict | None = None, host: PluginHost | None = None):
         text = self._normalize_chat_text(str(message or '')).replace('\r', ' ').replace('\n', ' ').strip()

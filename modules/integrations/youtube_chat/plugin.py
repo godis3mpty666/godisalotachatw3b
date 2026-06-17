@@ -157,6 +157,31 @@ class YouTubeChatPlugin(ThreadedPlugin):
             for key in local_keys:
                 if key in settings and settings.get(key) is not None:
                     merged[key] = settings.get(key)
+            auth_fallback_keys = {
+                'main_access_token',
+                'main_refresh_token',
+                'access_token',
+                'refresh_token',
+                'bot_access_token',
+                'bot_refresh_token',
+                'main',
+                'main_account',
+                'channel',
+                'main_channel_id',
+                'broadcaster_channel_id',
+                'main_channel_title',
+                'bot',
+                'bot_account',
+                'bot_username',
+                'username',
+                'bot_channel_title',
+                'client_id',
+                'client_secret',
+            }
+            for key in auth_fallback_keys:
+                value = settings.get(key)
+                if value not in (None, '') and merged.get(key) in (None, ''):
+                    merged[key] = value
 
         merged['read_enabled'] = self._as_bool(
             merged.get('read_enabled'),
@@ -1112,20 +1137,21 @@ class YouTubeChatPlugin(ThreadedPlugin):
         try:
             with self._send_lock:
                 live_chat_id = self._resolve_api_live_chat_id_for_send(final_settings)
-                # First try the bot account, because bridge messages should come from the bot.
-                try:
-                    self._send_live_chat_message_with_kind(final_settings, 'bot', live_chat_id, msg)
-                    return True, 'YouTube message sent with bot token.'
-                except urllib.error.HTTPError as bot_exc:
-                    bot_detail = self._http_error_short(bot_exc)
-                    send_errors.append(f'bot={bot_detail}')
-                    # A browser chat post can work while the Data API rejects the bot token.
-                    # In that case retry once with the broadcaster/main token. This is not
-                    # guessing; the log will say which token YouTube accepted or rejected.
-                    if int(getattr(bot_exc, 'code', 0) or 0) != 403:
-                        raise
-                except Exception as bot_exc:
-                    send_errors.append(f'bot={self._http_error_short(bot_exc)}')
+                if self._token_for(final_settings, 'bot'):
+                    # First try the bot account, because bridge messages should come from the bot.
+                    try:
+                        self._send_live_chat_message_with_kind(final_settings, 'bot', live_chat_id, msg)
+                        return True, 'YouTube message sent with bot token.'
+                    except urllib.error.HTTPError as bot_exc:
+                        bot_detail = self._http_error_short(bot_exc)
+                        send_errors.append(f'bot={bot_detail}')
+                        # A browser chat post can work while the Data API rejects the bot token.
+                        # In that case retry once with the broadcaster/main token. This is not
+                        # guessing; the log will say which token YouTube accepted or rejected.
+                        if int(getattr(bot_exc, 'code', 0) or 0) != 403:
+                            raise
+                    except Exception as bot_exc:
+                        send_errors.append(f'bot={self._http_error_short(bot_exc)}')
 
                 try:
                     self._send_live_chat_message_with_kind(final_settings, 'main', live_chat_id, msg)
@@ -1150,6 +1176,9 @@ class YouTubeChatPlugin(ThreadedPlugin):
         bot_token = self._token_for(settings, 'bot')
         if not main_token:
             return False, 'Missing YouTube main OAuth token from main tool.'
+        if not bot_token:
+            main_name = self._clean_account(settings.get('main_account') or settings.get('channel') or 'main')
+            return True, f'YouTube OAuth data available - main={main_name or "main"} - bot fehlt, Main wird genutzt'
         if self._as_bool(settings.get('write_enabled'), True) and not bot_token:
             return False, 'Missing YouTube bot OAuth token from main tool.'
         main_name = self._clean_account(settings.get('main_account') or settings.get('channel') or 'main')

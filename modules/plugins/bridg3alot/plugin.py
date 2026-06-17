@@ -18,7 +18,7 @@ from shared.plugin_base import ProviderPlugin, PluginHost
 from common import as_bool, clean_text, strip_response
 from platform_outputs import PlatformOutputs
 
-PLUGIN_VERSION = '1.0.0'
+PLUGIN_VERSION = '1.0.2'
 PLUGIN_NAME = f'bridg3alot ver. {PLUGIN_VERSION}'
 PLUGIN_DIR = Path(__file__).resolve().parent
 
@@ -67,31 +67,22 @@ class Bridg3alotPlugin(ProviderPlugin):
 
         schema: list[dict[str, Any]] = []
         schema += tab('Übersicht', [
-            {'key': 'section_overview', 'type': 'separator', 'label': 'bridg3alot ver. 1.0.0 - Chatbridge', 'label_en': 'bridg3alot ver. 1.0.0 - Chatbridge'},
+            {'key': 'section_overview', 'type': 'separator', 'label': 'bridg3alot ver. 1.0.2 - Chatbridge', 'label_en': 'bridg3alot ver. 1.0.2 - Chatbridge'},
             {'key': 'enabled', 'label': 'Plugin aktiv', 'label_en': 'Plugin enabled', 'type': 'bool'},
             {'key': 'bridge_enabled', 'label': 'Chatbridge aktiv', 'label_en': 'Chatbridge enabled', 'type': 'bool'},
             {'key': 'bridge_only_when_write_enabled', 'label': 'Nur an aktive/schreibbare Zielplattformen senden', 'label_en': 'Only send to active/writable target platforms', 'type': 'bool'},
-            {'key': 'bridge_prefix_format', 'label': 'Bridge-Format', 'placeholder': '{platform}-Message from {user}: {text}', 'help': 'Platzhalter: {platform}, {user}, {text}', 'help_en': 'Placeholders: {platform}, {user}, {text}'},
-            {'key': 'section_status', 'type': 'separator', 'label': 'Status', 'label_en': 'Status'},
-            {'key': 'twitch_connection_status', 'label': 'Twitch', 'readonly': True, 'placeholder': '❔ Noch nicht geprüft'},
-            {'key': 'tiktok_connection_status', 'label': 'TikTok', 'readonly': True, 'placeholder': '❔ Noch nicht geprüft'},
-            {'key': 'youtube_connection_status', 'label': 'YouTube', 'readonly': True, 'placeholder': '❔ Noch nicht geprüft'},
-            {'key': 'kick_connection_status', 'label': 'Kick', 'readonly': True, 'placeholder': '❔ Noch nicht geprüft'},
+            {'key': 'bridge_prefix_format', 'label': 'Standard-Bridge-Format', 'placeholder': '{platform}-Message from {user}: {text}', 'help': 'Platzhalter: {platform}, {user}, {text}', 'help_en': 'Placeholders: {platform}, {user}, {text}'},
+            {'key': 'bridge_format_twitch', 'label': 'Format für Twitch-Nachrichten', 'placeholder': '{platform}-Message from {user}: {text}', 'help': 'Leer lassen = Standard-Bridge-Format'},
+            {'key': 'bridge_format_tiktok', 'label': 'Format für TikTok-Nachrichten', 'placeholder': '{platform}-Message from {user}: {text}', 'help': 'Leer lassen = Standard-Bridge-Format'},
+            {'key': 'bridge_format_youtube', 'label': 'Format für YouTube-Nachrichten', 'placeholder': '{platform}-Message from {user}: {text}', 'help': 'Leer lassen = Standard-Bridge-Format'},
+            {'key': 'bridge_format_kick', 'label': 'Format für Kick-Nachrichten', 'placeholder': '{platform}-Message from {user}: {text}', 'help': 'Leer lassen = Standard-Bridge-Format'},
         ], en='Overview')
         schema += tab('Routen', [
-            {'key': 'section_routes', 'type': 'separator', 'label': 'Bridge-Routen', 'label_en': 'Bridge routes'},
-            {'key': 'bridge_twitch_to_tiktok', 'label': 'Twitch → TikTok', 'type': 'bool'},
-            {'key': 'bridge_twitch_to_youtube', 'label': 'Twitch → YouTube', 'type': 'bool'},
-            {'key': 'bridge_twitch_to_kick', 'label': 'Twitch → Kick', 'type': 'bool'},
-            {'key': 'bridge_tiktok_to_twitch', 'label': 'TikTok → Twitch', 'type': 'bool'},
-            {'key': 'bridge_tiktok_to_youtube', 'label': 'TikTok → YouTube', 'type': 'bool'},
-            {'key': 'bridge_tiktok_to_kick', 'label': 'TikTok → Kick', 'type': 'bool'},
-            {'key': 'bridge_youtube_to_twitch', 'label': 'YouTube → Twitch', 'type': 'bool'},
-            {'key': 'bridge_youtube_to_tiktok', 'label': 'YouTube → TikTok', 'type': 'bool'},
-            {'key': 'bridge_youtube_to_kick', 'label': 'YouTube → Kick', 'type': 'bool'},
-            {'key': 'bridge_kick_to_twitch', 'label': 'Kick → Twitch', 'type': 'bool'},
-            {'key': 'bridge_kick_to_tiktok', 'label': 'Kick → TikTok', 'type': 'bool'},
-            {'key': 'bridge_kick_to_youtube', 'label': 'Kick → YouTube', 'type': 'bool'},
+            {'key': 'section_routes', 'type': 'separator', 'label': 'Plattformen bridgen', 'label_en': 'Bridge platforms'},
+            {'key': 'bridge_twitch', 'label': 'Twitch', 'type': 'bool'},
+            {'key': 'bridge_tiktok', 'label': 'TikTok', 'type': 'bool'},
+            {'key': 'bridge_youtube', 'label': 'YouTube', 'type': 'bool'},
+            {'key': 'bridge_kick', 'label': 'Kick', 'type': 'bool'},
         ], en='Routes')
         return schema
 
@@ -99,6 +90,10 @@ class Bridg3alotPlugin(ProviderPlugin):
         return {
             'enabled': True,
             'bridge_enabled': True,
+            'bridge_twitch': True,
+            'bridge_tiktok': True,
+            'bridge_youtube': True,
+            'bridge_kick': True,
             'bridge_twitch_to_tiktok': True,
             'bridge_twitch_to_youtube': True,
             'bridge_twitch_to_kick': True,
@@ -113,6 +108,10 @@ class Bridg3alotPlugin(ProviderPlugin):
             'bridge_kick_to_youtube': True,
             'bridge_only_when_write_enabled': True,
             'bridge_prefix_format': '{platform}-Message from {user}: {text}',
+            'bridge_format_twitch': '',
+            'bridge_format_tiktok': '',
+            'bridge_format_youtube': '',
+            'bridge_format_kick': '',
             'twitch_connection_status': '⚪ inaktiv',
             'tiktok_connection_status': '⚪ inaktiv',
             'youtube_connection_status': '⚪ inaktiv',
@@ -121,10 +120,10 @@ class Bridg3alotPlugin(ProviderPlugin):
             'read_tiktok': True,
             'read_youtube': True,
             'read_kick': True,
-            'write_twitch': False,
-            'write_tiktok': False,
-            'write_youtube': False,
-            'write_kick': False,
+            'write_twitch': True,
+            'write_tiktok': True,
+            'write_youtube': True,
+            'write_kick': True,
         }
 
     def start(self, settings: dict[str, Any], host: PluginHost) -> None:
@@ -262,7 +261,7 @@ class Bridg3alotPlugin(ProviderPlugin):
         if tw:
             target.update({
                 'read_twitch': self._platform_bool(tw, 'read_enabled', 'read', default=True),
-                'write_twitch': self._platform_bool(tw, 'write_enabled', 'write', default=False),
+                'write_twitch': self._platform_bool(tw, 'write_enabled', 'write', default=True),
             })
             target['twitch_connection_status'] = self._status_from_platform('twitch')
 
@@ -270,7 +269,7 @@ class Bridg3alotPlugin(ProviderPlugin):
         if tt:
             target.update({
                 'read_tiktok': self._platform_bool(tt, 'read_enabled', 'read', default=True),
-                'write_tiktok': self._platform_bool(tt, 'write_enabled', 'write', default=False),
+                'write_tiktok': self._platform_bool(tt, 'write_enabled', 'write', default=True),
             })
             target['tiktok_connection_status'] = self._status_from_platform('tiktok')
 
@@ -278,7 +277,7 @@ class Bridg3alotPlugin(ProviderPlugin):
         if yt:
             target.update({
                 'read_youtube': self._platform_bool(yt, 'read_enabled', 'read', default=True),
-                'write_youtube': self._platform_bool(yt, 'write_enabled', 'write', default=False),
+                'write_youtube': self._platform_bool(yt, 'write_enabled', 'write', default=True),
             })
             target['youtube_connection_status'] = self._status_from_platform('youtube')
 
@@ -286,7 +285,7 @@ class Bridg3alotPlugin(ProviderPlugin):
         if kc:
             target.update({
                 'read_kick': self._platform_bool(kc, 'read_enabled', 'read', default=True),
-                'write_kick': self._platform_bool(kc, 'write_enabled', 'write', default=False),
+                'write_kick': self._platform_bool(kc, 'write_enabled', 'write', default=True),
             })
             target['kick_connection_status'] = self._status_from_platform('kick')
 
@@ -295,6 +294,19 @@ class Bridg3alotPlugin(ProviderPlugin):
     def _settings_with_platforms(self, settings: dict[str, Any] | None = None) -> dict[str, Any]:
         base = dict(settings or self._settings or {})
         return self._apply_platform_settings(base)
+
+    def _current_settings(self) -> dict[str, Any]:
+        host = self._host
+        state = getattr(host, 'state', None) if host is not None else None
+        getter = getattr(state, 'plugin_settings', None) if state is not None else None
+        if callable(getter):
+            try:
+                fresh = getter(self.plugin_id, self)
+                if isinstance(fresh, dict):
+                    self._settings.update(fresh)
+            except Exception:
+                pass
+        return self._settings_with_platforms(self._settings)
 
     def _host_plugin_object(self, *plugin_ids: str) -> Any:
         host = self._host
@@ -358,10 +370,27 @@ class Bridg3alotPlugin(ProviderPlugin):
                     pass
         return False
 
+    def _host_plugin_runtime_state(self, *plugin_ids: str) -> str:
+        host = self._host
+        state = getattr(host, 'state', None) if host is not None else None
+        plugin_status = getattr(state, 'plugin_status', {}) if state is not None else {}
+        if not isinstance(plugin_status, dict):
+            return ''
+        for plugin_id in plugin_ids:
+            item = plugin_status.get(plugin_id)
+            value = getattr(item, 'state', None) or getattr(item, 'status', None)
+            if value:
+                return str(value).strip().lower()
+            if isinstance(item, dict):
+                value = item.get('state') or item.get('status')
+                if value:
+                    return str(value).strip().lower()
+        return ''
+
     def _platform_plugin_ids(self, key: str) -> tuple[str, ...]:
         return {
             'twitch': ('twitch_chat',),
-            'tiktok': ('tiktok_live',),
+            'tiktok': ('tiktok_chat', 'tiktok_live'),
             'youtube': ('youtube_chat', 'youtube_live'),
             'kick': ('kick_chat',),
         }.get(str(key or '').lower(), ())
@@ -369,9 +398,19 @@ class Bridg3alotPlugin(ProviderPlugin):
     def _status_from_platform(self, platform: str) -> str:
         pids = self._platform_plugin_ids(platform)
         if not self._host_plugin_is_active(*pids):
+            runtime_state = self._host_plugin_runtime_state(*pids)
+            if runtime_state in {'connected', 'running', 'ready'}:
+                return '✅ verbunden'
+            if runtime_state in {'connecting', 'starting'}:
+                return '🟡 verbindet'
             return '⚪ inaktiv'
         if self._host_plugin_is_connected(*pids):
             return '✅ verbunden'
+        runtime_state = self._host_plugin_runtime_state(*pids)
+        if runtime_state in {'connected', 'running', 'ready'}:
+            return '✅ verbunden'
+        if runtime_state in {'connecting', 'starting'}:
+            return '🟡 verbindet'
         pdata = self._host_platform_settings(platform)
         raw = str(pdata.get('connection_status') or '').strip() if isinstance(pdata, dict) else ''
         if raw:
@@ -380,7 +419,7 @@ class Bridg3alotPlugin(ProviderPlugin):
 
     def _normalize_platform(self, value: Any) -> str:
         p = str(value or '').strip().lower()
-        if p in {'tt', 'tiktok_live'}:
+        if p in {'tt', 'tiktok_chat', 'tiktok_live'}:
             return 'tiktok'
         if p == 'twitch_chat':
             return 'twitch'
@@ -457,6 +496,10 @@ class Bridg3alotPlugin(ProviderPlugin):
         )
         return low_text.startswith(bridge_prefixes)
 
+    def _is_service_command(self, text: str) -> bool:
+        low = clean_text(text).lower().strip()
+        return any(low == cmd or low.startswith(cmd + ' ') for cmd in ('!sr', '!sr+', '!yt'))
+
     def _is_gamepicker_system_text(self, text: str) -> bool:
         raw = str(text or '').strip()
         low_text = raw.lower()
@@ -480,13 +523,15 @@ class Bridg3alotPlugin(ProviderPlugin):
             return
         if self._is_recent_duplicate(platform, username, text, ttl=12.0):
             return
-        settings = self._settings_with_platforms(self._settings)
+        settings = self._current_settings()
         if not self._should_read_platform(settings, platform):
             return
         self._maybe_bridge_message_async(settings, platform, username, text, channel)
 
     def _should_read_platform(self, settings: dict[str, Any], platform: str) -> bool:
         p = self._normalize_platform(platform)
+        if not self._bridge_platform_enabled(settings, p):
+            return False
         if p == 'tiktok':
             return as_bool(settings.get('read_tiktok'), True)
         if p == 'twitch':
@@ -497,26 +542,81 @@ class Bridg3alotPlugin(ProviderPlugin):
             return as_bool(settings.get('read_kick'), True)
         return False
 
+    def _bridge_platform_enabled(self, settings: dict[str, Any], platform: str) -> bool:
+        p = self._normalize_platform(platform)
+        if p not in {'twitch', 'tiktok', 'youtube', 'kick'}:
+            return False
+        return as_bool(settings.get(f'bridge_{p}'), True)
+
     def _target_write_available(self, settings: dict[str, Any], target: str) -> bool:
         target = self._normalize_platform(target)
+        if not self._bridge_platform_enabled(settings, target):
+            return False
         pdata = self._host_platform_settings(target)
         platform_enabled = True
         if isinstance(pdata, dict) and 'enabled' in pdata:
             platform_enabled = as_bool(pdata.get('enabled'), False)
+            if target == 'tiktok' and not platform_enabled:
+                platform_enabled = bool(pdata.get('main_login_ok') or pdata.get('bot_login_ok'))
         if not platform_enabled:
             return False
         if target == 'tiktok':
             return as_bool(settings.get('write_tiktok'), False)
         if target == 'twitch':
+            if isinstance(pdata, dict):
+                has_token = any(str(pdata.get(k) or '').strip() for k in ('access_token', 'refresh_token', 'main_access_token', 'main_refresh_token'))
+                has_channel = any(str(pdata.get(k) or '').strip() for k in ('channel', 'main_account', 'main', 'broadcaster_user_id', 'broadcaster_id'))
+                if has_token and has_channel:
+                    return as_bool(settings.get('write_twitch'), True)
             return as_bool(settings.get('write_twitch'), False)
         if target == 'youtube':
+            if isinstance(pdata, dict):
+                has_token = any(str(pdata.get(k) or '').strip() for k in ('access_token', 'refresh_token', 'main_access_token', 'main_refresh_token'))
+                has_channel = any(str(pdata.get(k) or '').strip() for k in ('main_channel_id', 'broadcaster_channel_id', 'main_account', 'channel'))
+                if has_token and has_channel:
+                    return as_bool(settings.get('write_youtube'), True)
             return as_bool(settings.get('write_youtube'), False)
         if target == 'kick':
+            if isinstance(pdata, dict):
+                has_token = any(str(pdata.get(k) or '').strip() for k in ('access_token', 'refresh_token', 'main_access_token', 'main_refresh_token'))
+                has_channel = any(str(pdata.get(k) or '').strip() for k in ('broadcaster_user_id', 'channel_id', 'main_user_id', 'channel_slug', 'main_account', 'channel'))
+                if has_token and has_channel:
+                    return as_bool(settings.get('write_kick'), True)
             return as_bool(settings.get('write_kick'), False)
         return False
 
     def _platform_has_kick_send_access(self, settings: dict[str, Any] | None = None) -> bool:
         return as_bool((settings or self._settings or {}).get('write_kick'), False)
+
+    def _format_for_source_platform(self, settings: dict[str, Any], platform: str) -> str:
+        p = self._normalize_platform(platform)
+        specific = str(settings.get(f'bridge_format_{p}') or '').strip()
+        if specific:
+            return specific
+        return str(settings.get('bridge_prefix_format') or '{platform}-Message from {user}: {text}')
+
+    def _normalize_bridge_format(self, fmt: str) -> str:
+        text = str(fmt or '').strip()
+        # Be forgiving for the UI-friendly typo "{user from ...}".
+        text = re.sub(r'\{user\s+from\s+', '{user} from ', text, flags=re.IGNORECASE)
+        return text
+
+    def _render_bridge_format(self, fmt: str, *, platform_label: str, username: str, text: str) -> str:
+        class BridgeFormatValues(dict):
+            def __missing__(self, key: str) -> str:
+                return str(key)
+
+        values = BridgeFormatValues(platform=platform_label, user=username, text=text)
+        normalized = self._normalize_bridge_format(fmt)
+        try:
+            return normalized.format_map(values)
+        except Exception:
+            manual = normalized
+            for key, value in values.items():
+                manual = manual.replace('{' + key + '}', str(value))
+            if manual != normalized:
+                return manual
+            return f'{platform_label}-Message from {username}: {text}'
 
     def _maybe_bridge_message_async(self, settings: dict[str, Any], source_platform: str, username: str, text: str, source_channel: str = '') -> None:
         if not as_bool(settings.get('bridge_enabled'), True):
@@ -538,22 +638,23 @@ class Bridg3alotPlugin(ProviderPlugin):
         stripped = clean_text(text)
         if not stripped or self._is_echo_text(stripped):
             return
+        if self._is_service_command(stripped):
+            return
+        if not self._bridge_platform_enabled(settings, p):
+            return
 
         targets: list[str] = []
         for target in ('twitch', 'tiktok', 'youtube', 'kick'):
             if target == p:
                 continue
-            if as_bool(settings.get(f'bridge_{p}_to_{target}'), True):
+            if self._bridge_platform_enabled(settings, target):
                 targets.append(target)
         if not targets:
             return
 
-        fmt = str(settings.get('bridge_prefix_format') or '{platform}-Message from {user}: {text}')
+        fmt = self._format_for_source_platform(settings, p)
         label = self._bridge_platform_label(p)
-        try:
-            bridged_base = fmt.format(platform=label, user=username, text=stripped)
-        except Exception:
-            bridged_base = f'{label}-Message from {username}: {stripped}'
+        bridged_base = self._render_bridge_format(fmt, platform_label=label, username=username, text=stripped)
 
         for target in targets:
             if as_bool(settings.get('bridge_only_when_write_enabled'), True) and not self._target_write_available(settings, target):

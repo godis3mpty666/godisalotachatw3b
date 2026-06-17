@@ -44,9 +44,11 @@ Beim ersten Start wird `data/` automatisch befuellt.
 
 Das Build-Skript fragt vor dem Build nach einer Bestaetigung. Nach einem
 erfolgreichen Build startet es automatisch `dist\webbased\webbased.exe`.
-Vorhandene Einstellungen, Anmeldedaten, Tokens und Plugin-Daten werden zwischen
-`data` und `dist\webbased\data` uebernommen, damit sie bei einem neuen Build
-erhalten bleiben. Build-Artefakte und lokale Laufzeitdaten werden nicht
+Vorhandene Einstellungen, Anmeldedaten, Tokens und Plugin-Daten werden vor dem
+Loeschen von `dist` aus `dist\webbased\data` nach `data` gesichert und danach
+wieder neben die neue EXE kopiert. Dabei werden die alte EXE und Browserfenster
+mit den portablen Profilen zuerst beendet, damit OAuth-/Cookie-Dateien nicht
+gesperrt sind. Build-Artefakte und lokale Laufzeitdaten werden nicht
 versioniert. PyInstaller verwendet waehrend des Builds den Ordner `temp/`; nach
 einem erfolgreichen Build wird er automatisch entfernt.
 

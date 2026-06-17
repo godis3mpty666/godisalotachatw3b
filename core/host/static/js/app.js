@@ -22,6 +22,24 @@ async function api(url, opts){
   if(!r.ok){ data.ok=false; data.http_status=r.status; data.error=data.error||`HTTP ${r.status}`; }
   return data;
 }
+api = async function(url, opts){
+  opts = opts || {};
+  const timeoutMs = Number(opts.timeoutMs || 8000);
+  const controller = new AbortController();
+  const timer = setTimeout(()=>controller.abort(), timeoutMs);
+  try{
+    const r=await fetch(url,{cache:"no-store",...opts,signal:controller.signal});
+    let data=null;
+    try{ data=await r.json(); }catch(e){ data={ok:false,error:String(e||"Ungueltige JSON-Antwort")}; }
+    if(!r.ok){ data.ok=false; data.http_status=r.status; data.error=data.error||`HTTP ${r.status}`; }
+    return data;
+  }catch(e){
+    const aborted = e && e.name === "AbortError";
+    return {ok:false,error:aborted ? `Timeout nach ${Math.round(timeoutMs/1000)}s: ${url}` : String(e||"Netzwerkfehler")};
+  }finally{
+    clearTimeout(timer);
+  }
+};
 async function loadAll(){ settingsCache=await api("/api/settings"); statusCache=await api("/api/status"); return {settings:settingsCache,status:statusCache};}
 function esc(s){return String(s??"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[m]));}
 function userColor(platform,user){let h=2166136261;for(const c of `${platform}:${user}`){h^=c.charCodeAt(0);h=Math.imul(h,16777619)}return `hsl(${Math.abs(h)%360} 78% 68%)`;}
@@ -35,7 +53,7 @@ function card(p,cfg){
   if(p==="tiktok") details = cfg.detail ? esc(cfg.detail) : `Main: ${esc(cfg.main||"-")}<br>Bot: ${esc(cfg.bot||"-")}`;
   else if(p==="twitch"||p==="youtube"||p==="kick") details = `Main: ${esc(cfg.main||"-")}<br>Bot: ${esc(cfg.bot||"-")}`;
   else if(p==="spotify") details = ``;
-  else if(p==="openai") details = cfg.detail ? esc(cfg.detail) : `Modell: ${esc(cfg.model||"-")}`;
+  else if(p==="openai") details = cfg.detail ? esc(cfg.detail) : (cfg.status==="verbunden" ? "API-Key gespeichert" : "OpenAI API-Key fehlt");
   else if(p==="meld") details = cfg.detail ? esc(cfg.detail) : ``;
   else if(p==="obs") details = cfg.detail ? esc(cfg.detail) : ``;
   else details = `Host: ${esc(cfg.host||"-")}:${esc(cfg.port||"-")}`;
@@ -220,7 +238,7 @@ function platformForm(p,cfg){
   if(p==="meld") return `<form class="platformForm" data-platform="${p}">${sel("enabled","Aktiv",cfg.enabled)}${sel("autoconnect","Autoconnect",cfg.autoconnect ?? true)}${field("host","Host",cfg.host || "127.0.0.1")}${field("port","Port",cfg.port || "13376")}<div class="hint">Meld Studio braucht keine Anmeldedaten. Wie im Original wird nur per lokalem WebSocket verbunden.</div><div class="btnLine"><button type="submit">Speichern</button><button type="button" class="secondary testMeld">Verbindung testen</button><span class="small">Status: ${esc(cfg.status||"nicht verbunden")}${cfg.detail ? " · "+esc(cfg.detail) : ""}</span></div></form>`;
   if(p==="obs") return `<form class="platformForm" data-platform="${p}">${sel("enabled","Aktiv",cfg.enabled)}${sel("autoconnect","Autoconnect",cfg.autoconnect ?? true)}${field("host","Host",cfg.host || "127.0.0.1")}${field("port","Port",cfg.port || "4455")}${field("password","Passwort",cfg.password,"password")}<div class="hint">OBS WebSocket Standard: <b>ws://127.0.0.1:4455</b>. In OBS muss unter <b>Werkzeuge &gt; WebSocket-Servereinstellungen</b> der WebSocket-Server aktiviert sein.</div><div class="btnLine"><button type="submit">Speichern</button><button type="button" class="secondary testObs">Verbindung testen</button><span class="small">Status: ${esc(cfg.status||"nicht verbunden")}${cfg.detail ? " · "+esc(cfg.detail) : ""}</span></div></form>`;
   if(p==="spotify") return `<form class="platformForm" data-platform="${p}">${sel("enabled","Aktiv",cfg.enabled)}${field("client_id","Client ID",cfg.client_id)}${field("client_secret","Client Secret",cfg.client_secret,"password")}${redirectFieldOnly("Redirect URI",cfg.redirect_uri || "http://127.0.0.1:5173/callback")}<div class="hint">Spotify braucht keinen Accountnamen. Die Redirect URI ist manuell einstellbar und wird genau so für OAuth benutzt.</div><div class="btnLine"><button type="submit">Speichern</button><a class="btn login" data-platform="${p}" data-account="main" href="#">Spotify anmelden</a><button type="button" class="secondary disconnect" data-platform="${p}" data-account="main">Trennen</button>${devButton(p)}<span class="small">Status: ${esc(cfg.status||"nicht verbunden")}</span></div></form>`;
-  if(p==="openai") return `<form class="platformForm" data-platform="${p}">${sel("enabled","Aktiv",cfg.enabled)}${field("api_key","API-Key",cfg.api_key,"password")}${field("model","Standardmodell",cfg.model || "gpt-5.5")}${field("organization","Organisations-ID (optional)",cfg.organization)}${field("project","Projekt-ID (optional)",cfg.project)}<div class="hint">Der API-Key wird lokal in <b>data/settings.json</b> gespeichert. Ein ChatGPT-Abo enthält nicht automatisch API-Guthaben. Der Verbindungstest ruft nur die Modellliste der offiziellen OpenAI-API ab und erzeugt keine Antwort.</div><div class="btnLine"><button type="submit">Speichern</button><button type="button" class="secondary testOpenAI">Verbindung testen</button><button type="button" class="secondary disconnect" data-platform="${p}" data-account="main">API-Key entfernen</button>${devButton(p)}<span class="small">Status: ${esc(cfg.status||"nicht verbunden")}${cfg.detail ? " · "+esc(cfg.detail) : ""}</span></div></form>`;
+  if(p==="openai") return `<form class="platformForm" data-platform="${p}">${sel("enabled","Aktiv",cfg.enabled)}${field("api_key","API-Key",cfg.api_key,"password")}${field("organization","Organisations-ID (optional)",cfg.organization)}${field("project","Projekt-ID (optional)",cfg.project)}<div class="hint">Der API-Key wird lokal in <b>data/settings.json</b> gespeichert. Ein ChatGPT-Abo enthaelt nicht automatisch API-Guthaben. Der Verbindungstest ruft nur die Modellliste der offiziellen OpenAI-API ab und erzeugt keine Antwort. Modelle waehlst du im jeweiligen Plugin.</div><div class="btnLine"><button type="submit">Speichern</button><button type="button" class="secondary testOpenAI">Verbindung testen</button><button type="button" class="secondary disconnect" data-platform="${p}" data-account="main">API-Key entfernen</button>${devButton(p)}<span class="small">Status: ${esc(cfg.status||"nicht verbunden")}${cfg.detail ? " - "+esc(cfg.detail) : ""}</span></div></form>`;
   return `<form class="platformForm" data-platform="${p}">${sel("enabled","Aktiv",cfg.enabled)}${field("main","Main/Kanal",cfg.main)}${field("bot","Bot",cfg.bot)}${field("client_id","Client ID",cfg.client_id)}${field("client_secret","Client Secret",cfg.client_secret,"password")}${redirectFieldOnly("Redirect URI",cfg.redirect_uri)}<div class="btnLine"><button type="submit">Speichern</button><a class="btn login" data-platform="${p}" data-account="main" href="#">OAuth Main</a><a class="btn login" data-platform="${p}" data-account="bot" href="#">OAuth Bot</a><button type="button" class="secondary disconnect" data-platform="${p}" data-account="main">Main trennen</button><button type="button" class="secondary disconnect" data-platform="${p}" data-account="bot">Bot trennen</button>${devButton(p)}<span class="small">Status: ${esc(cfg.status||"nicht verbunden")}</span></div></form>`;
 }
 async function renderPlatforms(){
@@ -235,6 +253,7 @@ async function renderPlatforms(){
       if(pf === "obs") normalizeObsFields(form);
       const fd2=new FormData(form);
       for(const [k,v] of fd2.entries()) settingsCache.platforms[pf][k] = (k==="enabled"||k==="autoconnect") ? (v==="true") : String(v);
+      if(pf === "openai"){ delete settingsCache.platforms[pf].model; }
       if(pf === "spotify"){ delete settingsCache.platforms[pf].main; delete settingsCache.platforms[pf].bot; }
       if(pf === "tiktok"){
         settingsCache.platforms[pf].main_account = (settingsCache.platforms[pf].main || "").replace(/^@/, "");
@@ -358,22 +377,30 @@ function renderPluginField(field, values){
   if(!key) return "";
   const readonly=field.readonly||field.disabled;
   const ro=readonly?"readonly disabled":"";
-  const helpHtml=help?`<div class="hint">${esc(help)}</div>`:"";
+  const wide=(field.wide||field.full_width||field.fullWidth||field.span==="full")?" wide":"";
+  const helpHtml=help?`<div class="hint${wide}">${esc(help)}</div>`:"";
   if(type==="bool" || type==="boolean" || type==="checkbox"){
     const checked=(value===true||String(value).toLowerCase()==="true"||String(value)==="1")?"checked":"";
-    return `<label class="settingsBool"><input name="${esc(key)}" type="checkbox" ${checked} ${readonly?"disabled":""}><span>${label}</span></label>${helpHtml}`;
+    return `<label class="settingsBool${wide}"><input name="${esc(key)}" type="checkbox" ${checked} ${readonly?"disabled":""}><span>${label}</span></label>${helpHtml}`;
   }
   const opts=field.options||field.choices||field.values;
   if((type==="select" || Array.isArray(opts)) && Array.isArray(opts)){
-    const options=opts.map(o=>{
+    const normalizedOpts=[...opts];
+    if(String(value??"") && !normalizedOpts.some(o=>String(typeof o==="object"?(o.value??o.id??o.key??o.label):o)===String(value))){
+      normalizedOpts.unshift({value:String(value),label:`${String(value)} (gespeichert)`});
+    }
+    const options=normalizedOpts.map(o=>{
       const v=typeof o==="object"?(o.value??o.id??o.key??o.label):o;
       const l=typeof o==="object"?(o.label??o.name??v):o;
       return `<option value="${esc(v)}" ${String(value??"")===String(v)?"selected":""}>${esc(l)}</option>`;
     }).join("");
-    return `<label><div>${label}</div><select name="${esc(key)}" ${readonly?"disabled":""}>${options}</select></label>${helpHtml}`;
+    return `<label class="${wide.trim()}"><div>${label}</div><select name="${esc(key)}" ${readonly?"disabled":""}>${options}</select></label>${helpHtml}`;
+  }
+  if(type==="multiline" || type==="textarea"){
+    return `<label class="${wide.trim()}"><div>${label}</div><textarea name="${esc(key)}" ${ro} placeholder="${esc(field.placeholder||"")}">${esc(value??field.default??"")}</textarea></label>${helpHtml}`;
   }
   const inputType=(type==="number"||type==="int"||type==="float")?"number":(type==="password"?"password":"text");
-  return `<label><div>${label}</div><input name="${esc(key)}" type="${inputType}" value="${esc(value??field.default??"")}" ${ro} placeholder="${esc(field.placeholder||"")}"></label>${helpHtml}`;
+  return `<label class="${wide.trim()}"><div>${label}</div><input name="${esc(key)}" type="${inputType}" value="${esc(value??field.default??"")}" ${ro} placeholder="${esc(field.placeholder||"")}"></label>${helpHtml}`;
 }
 function collectPluginSettings(form, schema){
   const values={};
@@ -390,14 +417,35 @@ function collectPluginSettings(form, schema){
   }
   return values;
 }
+async function enrichPluginSchema(pluginId, schema, values){
+  const out=(schema||[]).map(f=>({...f}));
+  if(pluginId !== "botalot") return out;
+  const modelField=out.find(f=>String(f.key||f.name||"")==="openai_model");
+  if(!modelField) return out;
+  modelField.type="select";
+  try{
+    const res=await api("/api/openai/models");
+    const models=Array.isArray(res.models)?res.models:[];
+    if(models.length){
+      modelField.options=models.map(m=>({value:m,label:m}));
+      if(!values.openai_model || !models.includes(values.openai_model)) values.openai_model=models[0];
+      return out;
+    }
+    modelField.options=[{value:String(values.openai_model||""),label:res.detail||"Keine passenden Modelle gefunden"}];
+  }catch(e){
+    modelField.options=[{value:String(values.openai_model||""),label:"Modelle konnten nicht geladen werden"}];
+  }
+  return out;
+}
 async function openPluginSettings(pluginId){
   const mount=$("#pluginSettingsMount");
   if(!mount) return;
   mount.innerHTML=`<section class="card pluginSettingsCard"><h3>Settings laden...</h3></section>`;
   const d=await api(`/api/plugins/${encodeURIComponent(pluginId)}/settings`);
   if(!d.ok){mount.innerHTML=`<section class="card pluginSettingsCard"><h3>Settings</h3><div class="warnBox">${esc(d.error||"Konnte Settings nicht laden")}</div></section>`;return;}
-  const schema=d.schema||[];
+  let schema=d.schema||[];
   const values=d.values||{};
+  schema=await enrichPluginSchema(pluginId,schema,values);
   const tabs=[...new Set(schema.map(schemaTab))];
   const groups=tabs.length?tabs:["Allgemein"];
   const body=groups.map(tab=>`<div class="pluginSettingsGroup"><h4>${esc(tab)}</h4><div class="pluginSettingsFields">${schema.filter(f=>schemaTab(f)===tab || (!tabs.length&&true)).map(f=>renderPluginField(f,values)).join("")}</div></div>`).join("");
@@ -415,12 +463,38 @@ async function openPluginSettings(pluginId){
   };
   mount.scrollIntoView({behavior:"smooth",block:"start"});
 }
+async function togglePluginEnabled(pluginId, enabled){
+  const d=await api(`/api/plugins/${encodeURIComponent(pluginId)}/settings`);
+  if(!d.ok){alert(d.error||"Konnte Plugin-Settings nicht laden");return;}
+  const values={...(d.values||{}),enabled:!!enabled};
+  const out=await api(`/api/plugins/${encodeURIComponent(pluginId)}/settings`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({values})});
+  if(!out.ok){alert(out.error||"Plugin konnte nicht umgeschaltet werden");return;}
+  setTimeout(renderPlugins,500);
+}
 async function renderPlugins(){
   const s=await api("/api/status");
   const cards=(s.plugins||[]).map(p=>`<section class="card pluginCard"><div class="pluginHead"><h3>${esc(p.name)}</h3><span class="pluginState ${pluginStateClass(p.state)}">${esc(p.state||"ready")}</span></div><div class="small">${esc(p.description||"")}</div><div class="small pluginStatusText">${esc(p.status||p.message||"Bereit")}</div><div class="btnLine"><button type="button" class="pluginSettingsBtn" data-plugin="${esc(p.id)}">Settings</button><a class="btn secondary" href="/dev" title="Logs im DEV-Bereich prüfen">Logs</a></div></section>`).join("");
   shell("plugins","Plugins","Hier stellst du jedes gefundene Plugin direkt ein. Der alte nutzlose Bereit-Button ist weg.",`<div id="pluginSettingsMount"></div><div class="pluginGrid">${cards}</div>`);
   $$(".pluginSettingsBtn").forEach(b=>b.onclick=()=>openPluginSettings(b.dataset.plugin));
 }
+function addPluginToggleButtons(plugins){
+  $$(".pluginSettingsBtn").forEach(btn=>{
+    const p=(plugins||[]).find(x=>String(x.id)===String(btn.dataset.plugin));
+    if(!p || btn.parentElement?.querySelector(".pluginToggleBtn")) return;
+    const toggle=document.createElement("button");
+    toggle.type="button";
+    toggle.className=`pluginToggleBtn ${p.enabled?"secondary":""}`;
+    toggle.textContent=p.enabled?"Deaktivieren":"Aktivieren";
+    toggle.onclick=()=>togglePluginEnabled(p.id,!p.enabled);
+    btn.parentElement?.insertBefore(toggle,btn);
+  });
+}
+const renderPluginsWithoutToggle=renderPlugins;
+renderPlugins=async function(){
+  await renderPluginsWithoutToggle();
+  const s=await api("/api/status");
+  addPluginToggleButtons(s.plugins||[]);
+};
 function formatBytes(value){
   let n=Number(value||0); const units=["B","KB","MB","GB"];
   let i=0; while(n>=1024&&i<units.length-1){n/=1024;i++;}
@@ -448,6 +522,7 @@ async function renderDev(){
       <div class="devLogHead"><div><h3>Live-Log</h3><div id="devLogMeta" class="small"></div></div><label class="devAuto"><input id="devAutoRefresh" type="checkbox" checked> automatisch aktualisieren</label></div>
       <div id="devLogFilters" class="devLogFilters"></div>
       <div id="devPluginFilters" class="devLogFilters devPluginFilters"></div>
+      <div class="devLogFilters"><select id="devLogLevel"><option value="all">Alle Level</option><option value="error">Fehler</option><option value="warning">Warnungen</option><option value="status">Status</option><option value="metric">Metriken</option><option value="info">Info</option></select><input id="devLogSearch" type="search" placeholder="Log durchsuchen"></div>
       <textarea id="devLog" class="devLog" readonly spellcheck="false"></textarea>
       <div class="btnLine">
         <button id="devRefresh" type="button">Neu laden</button>
@@ -459,6 +534,8 @@ async function renderDev(){
       </div>
     </section>`);
   let devLogFilter={scope:"all",id:"",label:"Alle"};
+  let devLogLevel="all";
+  let devLogSearch="";
   const setLogFilter=(scope,id,label)=>{
     devLogFilter={scope,id:id||"",label};
     $$(".devFilter").forEach(b=>b.classList.toggle("active",b.dataset.scope===scope&&(b.dataset.id||"")===(id||"")));
@@ -515,14 +592,18 @@ async function renderDev(){
     const atBottom=box.scrollHeight-box.scrollTop-box.clientHeight<30;
     const requested={...devLogFilter};
     const requestId=++devLogRequest;
-    const query=`?scope=${encodeURIComponent(requested.scope)}&id=${encodeURIComponent(requested.id)}`;
+    const level=devLogLevel;
+    const search=devLogSearch;
+    const query=`?scope=${encodeURIComponent(requested.scope)}&id=${encodeURIComponent(requested.id)}&level=${encodeURIComponent(level)}&q=${encodeURIComponent(search)}`;
     const d=await api("/api/dev/log"+query);
-    if(requestId!==devLogRequest||requested.scope!==devLogFilter.scope||requested.id!==devLogFilter.id)return;
+    if(requestId!==devLogRequest||requested.scope!==devLogFilter.scope||requested.id!==devLogFilter.id||level!==devLogLevel||search!==devLogSearch)return;
     if(d && d.error){ box.value=`Log laden fehlgeschlagen: ${d.error}`; return; }
     box.value=d.log||"";
-    $("#devLogMeta").textContent=`${requested.label} · Serverfilter: ${d.scope||"all"}${d.id?" / "+d.id:""} · ${d.lines||0} Zeilen · ${formatBytes(d.bytes)} gesamt · bereinigte Anzeige · ${new Date().toLocaleTimeString()}`;
+    $("#devLogMeta").textContent=`${requested.label} · ${d.level||"all"}${d.search?" · Suche: "+d.search:""} · ${d.lines||0} Zeilen · ${formatBytes(d.bytes)} gesamt · bereinigte Anzeige · ${new Date().toLocaleTimeString()}`;
     if(!keepPosition||atBottom) box.scrollTop=box.scrollHeight;
   };
+  $("#devLogLevel").onchange=()=>{devLogLevel=$("#devLogLevel").value||"all";refreshLog();};
+  $("#devLogSearch").oninput=()=>{devLogSearch=$("#devLogSearch").value.trim();refreshLog();};
   $("#devRefresh").onclick=()=>{refreshInfo();refreshLog();};
   $("#devCopy").onclick=async()=>{await navigator.clipboard.writeText($("#devLog").value);$("#devCopy").textContent="Kopiert";setTimeout(()=>$("#devCopy").textContent="Log kopieren",1500);};
   $("#devClear").onclick=async()=>{if(!confirm("Logdatei wirklich leeren?"))return;await api("/api/dev/log/clear",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"});await refreshLog();};

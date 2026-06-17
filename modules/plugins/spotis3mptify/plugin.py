@@ -149,6 +149,20 @@ def _friendly_sr_error(error: Any) -> str:
     return err or 'Request failed'
 
 
+def _extract_service_command(text: str) -> str:
+    raw = _safe_text(text)
+    if not raw:
+        return ''
+    low = raw.lower().strip()
+    for cmd in ('!sr+', '!sr', '!yt'):
+        if low == cmd or low.startswith(cmd + ' '):
+            return raw.strip()
+    # Accept old bridge text like "Name from TT: !sr song" but only keep the
+    # actual command, never the bridge label.
+    match = re.search(r'(?i)(?:^|:\s)(!(?:sr\+?|yt)(?:\s+.+)?$)', raw.strip())
+    return match.group(1).strip() if match else ''
+
+
 def _clean_platform(value: Any) -> str:
     p = str(value or '').strip().lower()
     if p in {'tt', 'tiktok_live'}:
@@ -415,6 +429,7 @@ class Spotis3mptifyPlugin(ProviderPlugin):
             {'key': 'sr_command', 'label': 'Songrequest Befehl', 'default': '!sr', 'tab': 'Requests'},
             {'key': 'srplus_command', 'label': 'SR+ Befehl', 'default': '!sr+', 'tab': 'Requests'},
             {'key': 'reply_enabled', 'type': 'bool', 'label': 'Antwort in Ursprungsplattform senden', 'default': True, 'tab': 'Requests'},
+            {'key': 'broadcast_queue_reply', 'type': 'bool', 'label': 'Queue-Antwort auf andere Plattformen spiegeln', 'default': True, 'tab': 'Requests'},
             {'key': 'allowed_platforms', 'label': 'Erlaubte Plattformen leer=alle', 'placeholder': 'twitch,tiktok,youtube,kick', 'tab': 'Requests'},
             {'key': 'cooldown_minutes', 'type': 'number', 'label': 'Link Cooldown Minuten', 'default': 60, 'min': 0, 'max': 10080, 'tab': 'Requests'},
             {'key': 'playlist_prefix', 'label': 'User-Playlist Prefix', 'default': 'Spotis3mptify - ', 'tab': 'Requests'},
@@ -446,6 +461,7 @@ class Spotis3mptifyPlugin(ProviderPlugin):
             'sr_command': '!sr',
             'srplus_command': '!sr+',
             'reply_enabled': True,
+            'broadcast_queue_reply': True,
             'allowed_platforms': '',
             'cooldown_minutes': 60,
             'playlist_prefix': 'Spotis3mptify - ',
@@ -697,6 +713,15 @@ class Spotis3mptifyPlugin(ProviderPlugin):
             return set()
         return {_clean_platform(x) for x in re.split(r'[;,\s]+', raw) if _clean_platform(x)}
 
+    def _refresh_runtime_core_settings(self) -> None:
+        try:
+            effective = self._effective_settings(self._settings)
+            self._settings.update(effective)
+            if self._core is not None:
+                self._core.apply_settings(self._merged_config(self._settings))
+        except Exception as exc:
+            self._log(f'Spotify Core-Settings konnten nicht aktualisiert werden: {exc}')
+
     def on_message(self, msg: Any) -> None:
         if not _as_bool((self._settings or {}).get('enabled'), True):
             return
@@ -705,7 +730,7 @@ class Spotis3mptifyPlugin(ProviderPlugin):
             platform = _clean_platform(_msg_get(msg, 'source_plugin_id', default='')) or 'unknown'
         raw_username = _msg_get(msg, 'username', 'user', 'display_name', 'author', 'name', default='')
         username = _clean_request_user(raw_username, platform)
-        text = _safe_text(_msg_get(msg, 'text', 'message', 'content', default=''))
+        text = _extract_service_command(_msg_get(msg, 'text', 'message', 'content', default=''))
         msg_type = _safe_text(_msg_get(msg, 'message_type', 'type', default='')).lower()
         if not text or msg_type in {'viewer_count', 'followers_count', 'metric', 'stats', 'status', 'live_status'}:
             return
@@ -725,6 +750,7 @@ class Spotis3mptifyPlugin(ProviderPlugin):
             query = text[len(cmd):].strip()
         else:
             return
+        self._refresh_runtime_core_settings()
         key = f'{platform}|{username.lower()}|{text}'
         now = time.time()
         with self._lock:
@@ -762,6 +788,7 @@ class Spotis3mptifyPlugin(ProviderPlugin):
             artist = str(res.get('artist') or '').strip()
             msg = f'@{username} queued: {artist} - {title}'.strip()
             self._reply(platform, msg)
+            self._broadcast_queue_reply(platform, msg)
             self._log(f'SR OK: {username}@{platform} -> {artist} - {title}')
         except urllib.error.HTTPError as exc:
             body = ''
@@ -799,7 +826,9 @@ class Spotis3mptifyPlugin(ProviderPlugin):
                 self._reply(platform, f'@{username} SR+ Fehler: {res.get("error") or "fehlgeschlagen"}')
                 return
             dur = int(res.get('duration_min') or self._settings.get('srplus_duration_min') or 15)
-            self._reply(platform, f'@{username} SR+ gestartet fÃ¼r {dur} Minuten.')
+            msg = f'@{username} SR+ gestartet fÃ¼r {dur} Minuten.'
+            self._reply(platform, msg)
+            self._broadcast_queue_reply(platform, msg)
             self._log(f'SR+ OK: {username}@{platform}')
         except Exception as exc:
             self._reply(platform, f'@{username} SR+ Fehler: {exc}')
@@ -811,15 +840,53 @@ class Spotis3mptifyPlugin(ProviderPlugin):
         host = self._host
         if host is None:
             return False
+        self._emit_dashboard_reply(platform, message)
         try:
             if hasattr(host, 'send_platform_message'):
-                ok = bool(host.send_platform_message(platform, message))
+                ok = bool(host.send_platform_message(platform, message, sender=self.plugin_id))
                 if not ok:
                     self._log(f'Chat-Antwort an {platform} fehlgeschlagen: {message}')
                 return ok
         except Exception as exc:
             self._log(f'Chat-Antwort an {platform} fehlgeschlagen: {exc}')
         return False
+
+    def _emit_dashboard_reply(self, platform: str, message: str) -> None:
+        host = self._host
+        if host is None or not hasattr(host, 'emit_message'):
+            return
+        try:
+            host.emit_message(self.plugin_id, {
+                'platform': _clean_platform(platform) or platform,
+                'username': 'spotis3mptify',
+                'display_name': 'spotis3mptify',
+                'text': message,
+                'message': message,
+                'message_type': 'chat',
+                'type': 'chat',
+                'source_plugin_id': self.plugin_id,
+                'show_in_desktop': True,
+                'show_in_obs': False,
+            })
+        except Exception as exc:
+            self._log(f'Dashboard-Antwort konnte nicht eingetragen werden: {exc}')
+
+    def _broadcast_queue_reply(self, source_platform: str, message: str) -> None:
+        if not _as_bool((self._settings or {}).get('broadcast_queue_reply'), True):
+            return
+        host = self._host
+        if host is None or not hasattr(host, 'send_platform_message'):
+            return
+        source = _clean_platform(source_platform)
+        for target in ('twitch', 'tiktok', 'youtube', 'kick'):
+            if target == source:
+                continue
+            try:
+                ok = bool(host.send_platform_message(target, message, sender=self.plugin_id))
+                if ok:
+                    self._log(f'Queue-Antwort an {target} gespiegelt: {message}')
+            except Exception as exc:
+                self._log(f'Queue-Antwort an {target} fehlgeschlagen: {exc}')
 
     def on_settings_button(self, key: str, host: PluginHost | None = None, parent: Any = None) -> bool:
         try:
@@ -850,5 +917,3 @@ class Spotis3mptifyPlugin(ProviderPlugin):
 
 def create_plugin() -> Spotis3mptifyPlugin:
     return Spotis3mptifyPlugin()
-
-
