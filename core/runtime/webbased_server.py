@@ -1798,9 +1798,11 @@ class AppState:
 
         if account == "main":
             cfg["main_disconnected_at"] = now
+            cfg["main_login_ok"] = False
             cfg["main_connection_status"] = "getrennt"
         else:
             cfg["bot_disconnected_at"] = now
+            cfg["bot_login_ok"] = False
             cfg["connection_status"] = "getrennt"
         cfg["status"] = "nicht verbunden"
         cfg["detail"] = "getrennt"
@@ -1896,6 +1898,27 @@ class AppState:
     def platform_status(self, platform, account="main"):
         return "verbunden" if self._auth_token_ok(platform, account) else "nicht verbunden"
 
+    def _youtube_explicit_login_mode(self, cfg: dict) -> bool:
+        return isinstance(cfg, dict) and ("main_login_ok" in cfg or "bot_login_ok" in cfg)
+
+    def _youtube_account_visible_ok(self, cfg: dict, account="main") -> bool:
+        try:
+            cfg = cfg if isinstance(cfg, dict) else {}
+            account = "main" if str(account or "").lower().strip() == "main" else "bot"
+            if bool(cfg.get("main_disconnected_at" if account == "main" else "bot_disconnected_at")):
+                return False
+            if self._youtube_explicit_login_mode(cfg):
+                marker = "main_login_ok" if account == "main" else "bot_login_ok"
+                if not bool(cfg.get(marker)):
+                    return False
+            prefix = "main_" if account == "main" else ""
+            if str(cfg.get(prefix + "access_token") or cfg.get(prefix + "refresh_token") or "").strip():
+                return True
+            token = _json_load(self.auth_dir / f"youtube_{account}.json", {})
+            return isinstance(token, dict) and bool(str(token.get("access_token") or token.get("refresh_token") or "").strip())
+        except Exception:
+            return False
+
     def _plugin_connected_detail(self, plugin_id: str) -> tuple[bool, str]:
         try:
             ps = self.plugin_status.get(plugin_id, {}) or {}
@@ -1958,8 +1981,12 @@ class AppState:
             return 0.0
 
     def _set_visible_saved_account(self, cfg: dict, platform: str) -> str:
-        main_ok = self.platform_status(platform, "main") == "verbunden"
-        bot_ok = self.platform_status(platform, "bot") == "verbunden"
+        if platform == "youtube":
+            main_ok = self._youtube_account_visible_ok(cfg, "main")
+            bot_ok = self._youtube_account_visible_ok(cfg, "bot")
+        else:
+            main_ok = self.platform_status(platform, "main") == "verbunden"
+            bot_ok = self.platform_status(platform, "bot") == "verbunden"
         active = ""
         if main_ok and bot_ok:
             main_stamp = self._account_auth_stamp(platform, "main", cfg)
@@ -1980,8 +2007,12 @@ class AppState:
         if not active:
             self._set_visible_saved_account(cfg, platform)
             return
-        main_ok = self.platform_status(platform, "main") == "verbunden"
-        bot_ok = self.platform_status(platform, "bot") == "verbunden"
+        if platform == "youtube":
+            main_ok = self._youtube_account_visible_ok(cfg, "main")
+            bot_ok = self._youtube_account_visible_ok(cfg, "bot")
+        else:
+            main_ok = self.platform_status(platform, "main") == "verbunden"
+            bot_ok = self.platform_status(platform, "bot") == "verbunden"
         cfg["main_status"] = "verbunden" if (main_ok or active == "main") else "nicht verbunden"
         cfg["bot_status"] = "verbunden" if (bot_ok or active == "bot") else "nicht verbunden"
 
@@ -2227,12 +2258,13 @@ class AppState:
                 else:
                     cfg["status"], cfg["detail"] = self._disconnected_status(p, cfg, "Main nicht verbunden")
             elif p == "youtube":
-                main_saved = self._auth_token_ok("youtube", "main") or ((not bool(cfg.get("main_disconnected_at"))) and bool(str(cfg.get("main_access_token") or cfg.get("main_refresh_token") or "").strip()))
-                bot_saved = self._auth_token_ok("youtube", "bot") or ((not bool(cfg.get("bot_disconnected_at"))) and bool(str(cfg.get("access_token") or cfg.get("refresh_token") or "").strip()))
+                main_saved = self._youtube_account_visible_ok(cfg, "main")
+                bot_saved = self._youtube_account_visible_ok(cfg, "bot")
+                cfg["main_status"] = "verbunden" if main_saved else "nicht verbunden"
+                cfg["bot_status"] = "verbunden" if bot_saved else "nicht verbunden"
                 if main_saved or bot_saved:
                     ok = True
-                    active = "Bot" if bot_saved else "Main"
-                    detail = f"{active} OAuth gespeichert"
+                    detail = "Main OK · Bot OK" if (main_saved and bot_saved) else "Main OK · Bot fehlt" if main_saved else "Bot OK · Main fehlt"
                 else:
                     ok, detail = self.youtube_status(cfg)
                 self._set_visible_saved_account(cfg, p)
@@ -2332,8 +2364,11 @@ class AppState:
                 return False, detail
 
             changed = False
-            main_ok, main_detail, main_updates = (False, "getrennt", {}) if main_disconnected else _youtube_check_account(cfg, main=True)
-            bot_ok, bot_detail, bot_updates = (False, "getrennt", {}) if bot_disconnected else _youtube_check_account(cfg, main=False)
+            explicit_login = self._youtube_explicit_login_mode(cfg)
+            main_enabled = (not main_disconnected) and ((not explicit_login) or bool(cfg.get("main_login_ok")))
+            bot_enabled = (not bot_disconnected) and ((not explicit_login) or bool(cfg.get("bot_login_ok")))
+            main_ok, main_detail, main_updates = (False, "nicht verbunden", {}) if not main_enabled else _youtube_check_account(cfg, main=True)
+            bot_ok, bot_detail, bot_updates = (False, "nicht verbunden", {}) if not bot_enabled else _youtube_check_account(cfg, main=False)
             if main_updates:
                 cfg.update(main_updates)
                 changed = True
@@ -2356,12 +2391,6 @@ class AppState:
                 detail = f"Bot OK · Main fehlt/ungültig: {main_detail}"
             else:
                 detail = f"Main: {main_detail} · Bot: {bot_detail}"
-            main_saved = (not main_disconnected) and bool(str(cfg.get("main_access_token") or cfg.get("main_refresh_token") or "").strip())
-            bot_saved = (not bot_disconnected) and bool(str(cfg.get("access_token") or cfg.get("refresh_token") or "").strip())
-            if not main_ok and main_saved:
-                main_ok = True
-            if not bot_ok and bot_saved:
-                bot_ok = True
             if main_ok and bot_ok:
                 detail = "Main OK · Bot OK"
             elif main_ok:
@@ -4488,12 +4517,12 @@ class Handler(BaseHTTPRequestHandler):
                 scopes = str(token.get("scope") or cfg.get("main_scopes" if account == "main" else "scopes") or DEFAULT_SCOPES["youtube"][account]).strip()
                 if account == "main":
                     channel_name = self._clean_login(ch.get("customUrl") or ch.get("title") or ch.get("id") or cfg.get("main_account") or cfg.get("main") or cfg.get("channel"))
-                    updates.update({"enabled": True, "main_access_token": access, "main_refresh_token": refresh or cfg.get("main_refresh_token", ""), "main_scopes": scopes, "main_saved_at": int(time.time()), "main_channel_id": ch.get("id", ""), "main_channel_title": ch.get("title", ""), "main_channel_custom_url": ch.get("customUrl", ""), "broadcaster_channel_id": ch.get("id", ""), "main_connection_status": f"Main verbunden als {title}"})
+                    updates.update({"enabled": True, "main_login_ok": True, "main_access_token": access, "main_refresh_token": refresh or cfg.get("main_refresh_token", ""), "main_scopes": scopes, "main_saved_at": int(time.time()), "main_channel_id": ch.get("id", ""), "main_channel_title": ch.get("title", ""), "main_channel_custom_url": ch.get("customUrl", ""), "broadcaster_channel_id": ch.get("id", ""), "main_connection_status": f"Main verbunden als {title}"})
                     if channel_name and not self._clean_login(cfg.get("main_account") or cfg.get("main") or cfg.get("channel")):
                         updates.update({"main": channel_name, "main_account": channel_name, "channel": channel_name})
                 else:
                     bot_name = self._clean_login(ch.get("customUrl") or ch.get("title") or ch.get("id") or cfg.get("bot_account") or cfg.get("bot"))
-                    updates.update({"enabled": True, "access_token": access, "refresh_token": refresh or cfg.get("refresh_token", ""), "scopes": scopes, "saved_at": int(time.time()), "bot_channel_id": ch.get("id", ""), "bot_channel_title": ch.get("title", ""), "bot_channel_custom_url": ch.get("customUrl", ""), "connection_status": f"Bot verbunden als {title}"})
+                    updates.update({"enabled": True, "bot_login_ok": True, "access_token": access, "refresh_token": refresh or cfg.get("refresh_token", ""), "scopes": scopes, "saved_at": int(time.time()), "bot_channel_id": ch.get("id", ""), "bot_channel_title": ch.get("title", ""), "bot_channel_custom_url": ch.get("customUrl", ""), "connection_status": f"Bot verbunden als {title}"})
                     if bot_name and not self._clean_login(cfg.get("bot_account") or cfg.get("bot")):
                         updates.update({"bot": bot_name, "bot_account": bot_name, "bot_username": bot_name})
             elif platform == "kick":
