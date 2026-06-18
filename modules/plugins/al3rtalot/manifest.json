@@ -1,0 +1,7 @@
+{
+  "id": "al3rtalot",
+  "name": "al3rtalot",
+  "version": "0.01",
+  "entry": "plugin.py",
+  "description": "Plattformübergreifendes Alert-Plugin für Twitch, TikTok, YouTube und Kick mit eigenen Plattform-Settings."
+}

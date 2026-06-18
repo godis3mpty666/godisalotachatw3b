@@ -1,7 +1,0 @@
-{
-  "id": "tiktok_live_alert",
-  "name": "TikTok LIVE Alert",
-  "version": "7.5.6",
-  "entry": "plugin.py",
-  "description": "TikTok alerts with join/share/subscribe support, windows, OBS text exports, direct Meld outputs, and configurable Live actions."
-}

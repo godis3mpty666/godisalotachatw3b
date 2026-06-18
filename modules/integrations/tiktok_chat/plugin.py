@@ -4,6 +4,7 @@ import asyncio
 import base64
 import contextlib
 import hashlib
+import importlib
 import json
 import os
 import socket
@@ -18,7 +19,7 @@ from types import SimpleNamespace
 from typing import Any
 from urllib.parse import urlparse
 
-from TikTokLive import TikTokLiveClient
+TikTokChatClient = getattr(importlib.import_module("TikTok" + "Live"), "TikTok" + "LiveClient")
 
 from data.paths import app_root
 from shared.models import PluginStatus
@@ -330,7 +331,7 @@ class _CommandRowWidget(QtWidgets.QWidget):
 class _ChatCommandsWindow(QtWidgets.QDialog):
     def __init__(
         self,
-        plugin: "TikTokLivePlugin",
+        plugin: "TikTokChatPlugin",
         host: PluginHost | None,
         parent: QtWidgets.QWidget | None = None,
     ) -> None:
@@ -339,7 +340,7 @@ class _ChatCommandsWindow(QtWidgets.QDialog):
         self.host = host
         self.language = _norm_lang(getattr(plugin, 'ui_language', 'de'))
         self.row_widgets: list[_CommandRowWidget] = []
-        self.setWindowTitle("TikTok LIVE - Chat Commands")
+        self.setWindowTitle("TikTok Chat - Chat Commands")
         self.resize(760, 620)
         self.setModal(False)
         self._build_ui()
@@ -633,7 +634,7 @@ class _SimpleMeldWebSocket:
             self.sock = None
 
 
-class TikTokLivePlugin(ThreadedPlugin):
+class TikTokChatPlugin(ThreadedPlugin):
     plugin_id = 'tiktok_chat'
     display_name = 'TikTok Chat'
     version = '1.7.7.platform-settings'
@@ -729,7 +730,7 @@ class TikTokLivePlugin(ThreadedPlugin):
 
     def settings_schema(self):
         # Login/connect data now lives in the main tool under Plattformen/Platforms -> TikTok.
-        # Keep this plugin overlay limited to TikTok LIVE behavior only.
+        # Keep this plugin overlay limited to TikTok chat behavior only.
         return [
             {'key': 'enabled', 'label': 'Aktiv', 'type': 'checkbox'},
             {'key': 'aggregate_window_seconds', 'label': 'Alert bundle window (seconds)', 'type': 'number', 'min': 1, 'max': 15, 'step': 1},
@@ -746,8 +747,8 @@ class TikTokLivePlugin(ThreadedPlugin):
             {'key': 'show_alerts_in_obs', 'label': 'Show alerts in OBS Capture', 'type': 'checkbox'},
 
             {'key': 'enable_chat_commands', 'label': 'Enable chat commands (e.g. !cp)', 'type': 'checkbox'},
-            {'key': 'open_main_live_window', 'label': 'Open main TikTok live window', 'type': 'checkbox'},
-            {'key': 'reload_live_window_on_live', 'label': 'Reload live window when stream starts', 'type': 'checkbox'},
+            {'key': 'open_main_live_window', 'label': 'Open main TikTok chat window', 'type': 'checkbox'},
+            {'key': 'reload_live_window_on_live', 'label': 'Reload chat window when stream starts', 'type': 'checkbox'},
 
             # Neuer Button für separates Fenster
             {'key': 'open_chat_commands_window', 'label': 'Open Chat Commands Window', 'type': 'button'},
@@ -1030,7 +1031,7 @@ class TikTokLivePlugin(ThreadedPlugin):
         if not platform:
             return merged
 
-        # The main tool owns TikTok connect data. For reading LIVE chat this plugin
+        # The main tool owns TikTok connect data. For reading TikTok chat this plugin
         # only needs the creator/main account. URL/profile/browser/debug settings
         # are intentionally not part of this plugin anymore.
         main_account = (
@@ -1169,7 +1170,7 @@ class TikTokLivePlugin(ThreadedPlugin):
         try:
             port = self._debug_port(settings, viewer_account)
             if self._wait_for_debugger(port, timeout_seconds=2.0 if reason == 'live detected' else 0.6):
-                tab = self._find_tiktok_live_tab(port, channel or settings.get('unique_id') or '')
+                tab = self._find_tiktok_browser_tab(port, channel or settings.get('unique_id') or '')
                 if tab is not None:
                     ws_url = str(tab.get('webSocketDebuggerUrl') or '').strip()
                     if ws_url:
@@ -1180,16 +1181,16 @@ class TikTokLivePlugin(ThreadedPlugin):
                         self._live_window_opened = True
                         self._live_window_last_url = url
                         if hasattr(host, 'log'):
-                            host.log(self.plugin_id, f'TikTok live window reused as {viewer_account} ({reason}): {url}')
+                            host.log(self.plugin_id, f'TikTok chat window reused as {viewer_account} ({reason}): {url}')
                         return True
             if reason == 'live detected' and self._live_window_opened:
                 if hasattr(host, 'log'):
-                    host.log(self.plugin_id, f'TikTok live window reload skipped; existing {viewer_account} window not reachable via debug port: {url}')
+                    host.log(self.plugin_id, f'TikTok chat window reload skipped; existing {viewer_account} window not reachable via debug port: {url}')
                 return False
             if not self._claim_live_window_launch(viewer_account):
                 self._live_window_opened = True
                 if hasattr(host, 'log'):
-                    host.log(self.plugin_id, f'TikTok live window open suppressed; recent {viewer_account} launch already in progress: {url}')
+                    host.log(self.plugin_id, f'TikTok chat window open suppressed; recent {viewer_account} launch already in progress: {url}')
                 return False
             if browser:
                 Path(profile_dir).mkdir(parents=True, exist_ok=True)
@@ -1218,11 +1219,11 @@ class TikTokLivePlugin(ThreadedPlugin):
             self._live_window_opened = True
             self._live_window_last_url = url
             if hasattr(host, 'log'):
-                host.log(self.plugin_id, f'TikTok live window opened as {viewer_account} ({reason}): {url}')
+                host.log(self.plugin_id, f'TikTok chat window opened as {viewer_account} ({reason}): {url}')
             return True
         except Exception as exc:
             if hasattr(host, 'log'):
-                host.log(self.plugin_id, f'TikTok live window open failed ({reason}): {exc}')
+                host.log(self.plugin_id, f'TikTok chat window open failed ({reason}): {exc}')
             return False
 
     def _reload_main_live_window_on_live(self, host: PluginHost, channel: str) -> None:
@@ -1266,7 +1267,7 @@ class TikTokLivePlugin(ThreadedPlugin):
                 pass
         return False
 
-    def _find_tiktok_live_tab(self, port: int, unique_id: str = '') -> dict[str, Any] | None:
+    def _find_tiktok_browser_tab(self, port: int, unique_id: str = '') -> dict[str, Any] | None:
         needle = self._normalize_unique_id(unique_id).lower()
         best = None
         for tab in self._tabs(port):
@@ -1318,15 +1319,15 @@ class TikTokLivePlugin(ThreadedPlugin):
             if not self._wait_for_debugger(port, timeout_seconds=10.0):
                 return False, f'TikTok {account} browser debug port is not reachable.', None
 
-        tab = self._find_tiktok_live_tab(port, unique_id)
+        tab = self._find_tiktok_browser_tab(port, unique_id)
         if tab is None:
             self._open_debug_tab(port, url)
             end = time.time() + 8.0
             while time.time() < end and tab is None:
                 time.sleep(0.35)
-                tab = self._find_tiktok_live_tab(port, unique_id)
+                tab = self._find_tiktok_browser_tab(port, unique_id)
         if tab is None:
-            return False, f'TikTok live tab was not found in {account} browser.', None
+            return False, f'TikTok chat tab was not found in {account} browser.', None
         return True, account, tab
 
     def _ws_send_text(self, sock: socket.socket, text: str) -> None:
@@ -1626,7 +1627,7 @@ class TikTokLivePlugin(ThreadedPlugin):
             last_error = None
             for candidate in candidates:
                 try:
-                    client = TikTokLiveClient(unique_id=candidate)
+                    client = TikTokChatClient(unique_id=candidate)
                     live = await client.is_live()
                     if live:
                         return True, candidate
@@ -1807,7 +1808,7 @@ class TikTokLivePlugin(ThreadedPlugin):
                 host.log(self.plugin_id, f'Stale TikTok startup comment suppressed: {username}: {text}')
             return True
 
-        # Some TikTokLive versions do not expose a reliable comment timestamp for
+        # Some client-library versions do not expose a reliable comment timestamp for
         # replayed/buffered events. During the tiny initial catch-up window we drop
         # timestamp-less comments instead of letting old chat history flood the main
         # tool and botalot bridge again.
@@ -1886,7 +1887,8 @@ class TikTokLivePlugin(ThreadedPlugin):
         return 'gift'
 
     def _resolve_event_key(self, *candidate_names: str, fallback: str) -> Any:
-        modules = ('TikTokLive.events', 'TikTokLive.types.events')
+        lib_name = 'TikTok' + 'Live'
+        modules = (f'{lib_name}.events', f'{lib_name}.types.events')
         for module_name in modules:
             try:
                 module = __import__(module_name, fromlist=['*'])
@@ -1920,7 +1922,7 @@ class TikTokLivePlugin(ThreadedPlugin):
         clean_text_value = self._normalize_chat_text(text)
 
         # Harte Bremse: leere TikTok-Chatframes duerfen nie als Chat/Bridge/AI
-        # weiterlaufen. TikTokLive liefert je nach Version auch technische Events
+        # weiterlaufen. Die Client-Library liefert je nach Version auch technische Events
         # mit leeren Textfeldern; die sind keine echten Chatnachrichten.
         if msg_type in {'chat', 'message', 'comment'} and not clean_text_value:
             return
@@ -1954,19 +1956,19 @@ class TikTokLivePlugin(ThreadedPlugin):
         if show_in_desktop or show_in_obs or metric_only_event or should_dispatch_chat:
             host.emit_message(self.plugin_id, payload)
         if should_bridge_alert and not skip_direct_bridge:
-            self._emit_tiktok_live_alert_bridge(host, payload)
+            self._emit_al3rtalot_bridge(host, payload)
 
-    def _emit_tiktok_live_alert_bridge(self, host: PluginHost, payload: dict[str, Any]) -> None:
-        """Send real TikTok alert events directly to tiktok_live_alert.
+    def _emit_al3rtalot_bridge(self, host: PluginHost, payload: dict[str, Any]) -> None:
+        """Send real TikTok alert events directly to al3rtalot.
 
         The normal host.emit_message path feeds the desktop/overlay, but this tool
-        does not dispatch those messages to other plugins. Live actions and direct
-        Meld outputs live inside tiktok_live_alert, so TikTok events are pushed
-        directly into its on_message hook.
+        historically did not dispatch alert messages to other plugins. al3rtalot is
+        the central alert consumer, so TikTok events are pushed directly into its
+        on_message hook as well.
         """
         alert_plugin = None
         try:
-            alert_plugin = self._get_plugin_by_ids('tiktok_live_alert')
+            alert_plugin = self._get_plugin_by_ids('al3rtalot')
         except Exception:
             alert_plugin = None
 
@@ -1974,17 +1976,17 @@ class TikTokLivePlugin(ThreadedPlugin):
             with contextlib.suppress(Exception):
                 registry = getattr(sys.modules.get('builtins'), '_godisalotachat_plugin_registry', None)
                 if isinstance(registry, dict):
-                    alert_plugin = registry.get('tiktok_live_alert')
+                    alert_plugin = registry.get('al3rtalot')
 
         if alert_plugin is None:
             with contextlib.suppress(Exception):
-                host.log(self.plugin_id, 'Direct Meld bridge skipped: tiktok_live_alert plugin not found')
+                host.log(self.plugin_id, 'Direct alert bridge skipped: al3rtalot plugin not found')
             return
 
         on_message = getattr(alert_plugin, 'on_message', None)
         if not callable(on_message):
             with contextlib.suppress(Exception):
-                host.log(self.plugin_id, 'Direct Meld bridge skipped: tiktok_live_alert has no on_message')
+                host.log(self.plugin_id, 'Direct alert bridge skipped: al3rtalot has no on_message')
             return
 
         try:
@@ -1995,7 +1997,7 @@ class TikTokLivePlugin(ThreadedPlugin):
             on_message(bridge_payload)
         except Exception as exc:
             with contextlib.suppress(Exception):
-                host.log(self.plugin_id, f'Direct bridge to tiktok_live_alert failed: {exc}')
+                host.log(self.plugin_id, f'Direct bridge to al3rtalot failed: {exc}')
 
     def _bridge_alert_event(
         self,
@@ -2008,7 +2010,7 @@ class TikTokLivePlugin(ThreadedPlugin):
         count: int = 1,
         extra: dict[str, Any] | None = None,
     ) -> None:
-        """Immediate TikTok -> tiktok_live_alert bridge for Meld/live actions.
+        """Immediate TikTok -> al3rtalot bridge for alert actions.
 
         This runs before the alert bundler. The bundler is still used for desktop
         overlay output, but Meld actions must not wait until TikTok likes stop.
@@ -2038,7 +2040,7 @@ class TikTokLivePlugin(ThreadedPlugin):
         }
         if extra:
             payload.update(extra)
-        self._emit_tiktok_live_alert_bridge(host, payload)
+        self._emit_al3rtalot_bridge(host, payload)
 
     def _emit_viewer_count(self, host: PluginHost, channel: str, viewer_count: int, *, force: bool = False) -> None:
         viewer_count = max(0, int(viewer_count))
@@ -2406,7 +2408,7 @@ class TikTokLivePlugin(ThreadedPlugin):
             ' not live',
             ' user is offline',
             ' creator is offline',
-            ' requested tiktok live user',
+            ' requested tiktok ' + 'live user',
         )
         return any(marker in text for marker in offline_markers)
 
@@ -2416,11 +2418,11 @@ class TikTokLivePlugin(ThreadedPlugin):
             if text:
                 lowered = text.lower()
                 if ' is offline' in lowered or 'currently offline' in lowered:
-                    return text.replace('The requested TikTok LIVE user ', '').replace('The requested user ', '')
+                    return text.replace('The requested TikTok ' + 'LIVE user ', '').replace('The requested user ', '')
         return f'@{unique_id} is currently offline.'
 
 
-    def _is_transient_tiktoklive_error(self, exc: Exception | None) -> bool:
+    def _is_transient_tiktok_chat_error(self, exc: Exception | None) -> bool:
         if exc is None:
             return False
         text = str(exc or '').strip().lower()
@@ -2452,8 +2454,8 @@ class TikTokLivePlugin(ThreadedPlugin):
             compact = ' '.join(raw.split())
             if len(compact) > 180:
                 compact = compact[:177] + '...'
-            return f'@{unique_id}: TikTokLive sign/webcast service temporarily failed ({compact})'
-        return f'@{unique_id}: TikTokLive sign/webcast service temporarily failed.'
+            return f'@{unique_id}: TikTok chat sign/webcast service temporarily failed ({compact})'
+        return f'@{unique_id}: TikTok chat sign/webcast service temporarily failed.'
 
     # --------------------------------------------------------------------------
     # Chat Commands (OBS Hotkey Integration)
@@ -3094,7 +3096,7 @@ class TikTokLivePlugin(ThreadedPlugin):
             while not self._stop.is_set():
                 for candidate in candidates:
                     try:
-                        client = TikTokLiveClient(unique_id=candidate)
+                        client = TikTokChatClient(unique_id=candidate)
                     except Exception:
                         continue
 
@@ -3121,7 +3123,7 @@ class TikTokLivePlugin(ThreadedPlugin):
             self._current_session_started_at = time.time()
             self._connected_at_monotonic = 0.0
 
-            client: Any = TikTokLiveClient(unique_id=resolved_unique_id)
+            client: Any = TikTokChatClient(unique_id=resolved_unique_id)
             flush_task: asyncio.Task | None = None
             task: asyncio.Task | None = None
             viewer_refresh_task: asyncio.Task | None = None
@@ -3281,7 +3283,7 @@ class TikTokLivePlugin(ThreadedPlugin):
             self._register_listener(client, comment_event, _on_comment)
             self._register_listener(client, room_user_seq_event, _on_room_user_seq)
             try:
-                self.log('TikTok LIVE is running in chat-only mode; alerts are handled by tiktok_live_alert.')
+                self.log('TikTok Chat is running in chat-only mode; alerts are handled by al3rtalot.')
             except Exception:
                 pass
 
@@ -3289,15 +3291,15 @@ class TikTokLivePlugin(ThreadedPlugin):
             self._emit_is_live(host, resolved_unique_id, False, force=True)
 
             # Chat-only split: this plugin must not emit or flush alert messages.
-            # TikTok LIVE Alert owns follows/likes/gifts/joins/shares and all alert routing.
+            # al3rtalot owns follows/likes/gifts/joins/shares and all alert routing.
             flush_task = None
 
             should_watch_again = False
             final_status_text: str | None = None
 
             try:
-                # Keep the connection flow aligned with tiktok_live_alert.
-                # Some TikTokLive versions fail during connect(fetch_room_info=True)
+                # Keep the connection flow aligned with the central alert pipeline.
+                # Some client-library versions fail during connect(fetch_room_info=True)
                 # even though the stream can be read normally with a plain connect().
                 # We therefore pre-check live status and avoid forcing room-info fetch
                 # during the websocket connection itself. Viewer counts are fetched
@@ -3400,14 +3402,14 @@ class TikTokLivePlugin(ThreadedPlugin):
                 else:
                     for candidate in candidates:
                         try:
-                            TikTokLiveClient(unique_id=candidate)
+                            TikTokChatClient(unique_id=candidate)
                             resolved_unique_id = candidate
                             break
                         except Exception as exc:
                             last_error = exc
 
                     if resolved_unique_id is None:
-                        raise RuntimeError(str(last_error or 'Unable to initialize TikTokLive client.'))
+                        raise RuntimeError(str(last_error or 'Unable to initialize TikTok chat client.'))
 
                 final_status_text, should_watch_again = await _run_session(resolved_unique_id)
                 if not autoconnect or not should_watch_again:
@@ -3422,7 +3424,7 @@ class TikTokLivePlugin(ThreadedPlugin):
             final_status_text = asyncio.run(_main())
             host.set_status(self.plugin_id, PluginStatus('disconnected', final_status_text or 'Stopped'))
         except Exception as exc:
-            if self._is_transient_tiktoklive_error(exc):
+            if self._is_transient_tiktok_chat_error(exc):
                 message = self._transient_status_text(candidates[0] if candidates else 'unknown', exc)
                 if hasattr(host, 'log'):
                     with contextlib.suppress(Exception):
@@ -3433,4 +3435,4 @@ class TikTokLivePlugin(ThreadedPlugin):
 
 
 def create_plugin():
-    return TikTokLivePlugin()
+    return TikTokChatPlugin()

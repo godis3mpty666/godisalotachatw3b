@@ -341,9 +341,49 @@ class WebbasedPluginHost:
                 self.state.messages = self.state.messages[-300:]
             if item.get("message_type", "chat") in {"chat", "message", "comment"}:
                 self.log(plugin_id, f"chat | {item.get('platform')}:{item.get('user')}: {str(item.get('text') or '')[:180]}")
+            self._dispatch_alert_message(plugin_id, item)
             self._dispatch_chat_message(plugin_id, item)
         except Exception as exc:
             self.log(plugin_id, f"emit_message failed: {exc}")
+
+    def _dispatch_alert_message(self, plugin_id: str, item: dict) -> None:
+        try:
+            source_plugin_id = str(item.get("source_plugin_id") or plugin_id or "").strip()
+            if source_plugin_id == "al3rtalot" or str(plugin_id or "").strip() == "al3rtalot":
+                return
+            platform = str(item.get("platform") or "").strip().lower()
+            if platform not in {"twitch", "tiktok", "youtube", "kick"}:
+                return
+            message_type = str(item.get("message_type") or item.get("type") or item.get("event_type") or "").strip().lower()
+            event_type = str(item.get("event_type") or item.get("type") or item.get("message_type") or "").strip().lower()
+            alert_type = event_type[len(platform) + 1:] if event_type.startswith(platform + "_") else event_type
+            if message_type in {"chat", "message", "comment"} and alert_type in {"chat", "message", "comment"}:
+                return
+            if alert_type not in {
+                "follow", "follower", "new_follow", "new_follower",
+                "join", "viewer_join", "user_join", "like", "likes",
+                "gift", "gifts", "share", "shares", "subscribe", "sub",
+                "subscription", "raid", "member", "membership", "superchat",
+                "super_chat", "super-chat",
+            }:
+                return
+            plugin = getattr(self.state, "plugin_instances", {}).get("al3rtalot")
+            handler = getattr(plugin, "on_message", None) if plugin is not None else None
+            if not callable(handler):
+                return
+            msg = dict(item)
+            msg.setdefault("source_platform", platform)
+            msg["source_plugin_id"] = source_plugin_id or str(plugin_id or "")
+
+            def run_dispatch() -> None:
+                try:
+                    handler(dict(msg))
+                except Exception as exc:
+                    self.log("al3rtalot", f"on_message failed: {exc}")
+
+            threading.Thread(target=run_dispatch, daemon=True, name="al3rtalot-alert-dispatch").start()
+        except Exception as exc:
+            self.log("al3rtalot", f"dispatch failed: {exc}")
 
     def _dispatch_chat_message(self, plugin_id: str, item: dict) -> None:
         try:
@@ -519,7 +559,7 @@ class WebbasedPluginManager:
         if self.started:
             return
         self.started = True
-        for plugin_id in ("twitch_chat", "tiktok_chat", "youtube_chat", "kick_chat", "spotis3mptify", "gam3pick3r", "botalot", "bridg3alot", "modalot"):
+        for plugin_id in ("twitch_chat", "tiktok_chat", "youtube_chat", "kick_chat", "spotis3mptify", "al3rtalot", "gam3pick3r", "botalot", "bridg3alot", "modalot"):
             self.start_plugin(plugin_id)
 
     def load_plugin(self, plugin_id: str):
@@ -2465,6 +2505,8 @@ class AppState:
                 return any(bool(platforms.get(key, {}).get("enabled", False)) for key in ("twitch", "tiktok", "youtube", "kick"))
             if plugin_id == "modalot" and "enabled" not in pcfg:
                 return any(bool(platforms.get(key, {}).get("enabled", False)) for key in ("twitch", "youtube", "kick"))
+            if plugin_id == "al3rtalot" and "enabled" not in pcfg:
+                return any(bool(platforms.get(key, {}).get("enabled", False)) for key in ("twitch", "tiktok", "youtube", "kick"))
             return bool(pcfg.get("enabled", False))
         except Exception:
             return False
@@ -2486,10 +2528,6 @@ class AppState:
         except Exception:
             pass
         try:
-            if plugin_id == "tiktok_chat":
-                legacy = self.settings().get("plugins", {}).get("tiktok_live", {})
-                if isinstance(legacy, dict):
-                    cfg.update(legacy)
             in_main = self.settings().get("plugins", {}).get(plugin_id, {})
             if isinstance(in_main, dict):
                 cfg.update(in_main)
@@ -3113,7 +3151,7 @@ def _available_dev_log_sources(text, plugin_ids):
 
 DEV_PLATFORM_LOG_SOURCES = {
     "twitch": {"twitch", "twitch_chat"},
-    "tiktok": {"tiktok", "tiktok_chat", "tiktok_live_alert"},
+    "tiktok": {"tiktok", "tiktok_chat", "al3rtalot"},
     "youtube": {"youtube", "youtube_chat"},
     "kick": {"kick", "kick_chat"},
     "spotify": {"spotify", "spotis3mptify"},
