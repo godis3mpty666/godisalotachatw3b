@@ -1631,6 +1631,31 @@ class AppState:
         except Exception:
             return False, ""
 
+    def _plugin_active_account(self, plugin_id: str) -> str:
+        try:
+            plugin = self.plugin_instances.get(plugin_id)
+            if plugin is None:
+                return ""
+            for name in ("active_account", "get_active_account"):
+                fn = getattr(plugin, name, None)
+                if callable(fn):
+                    value = str(fn() or "").strip().lower()
+                    if value in {"main", "bot"}:
+                        return value
+            value = str(getattr(plugin, "_active_account", "") or "").strip().lower()
+            return value if value in {"main", "bot"} else ""
+        except Exception:
+            return ""
+
+    def _set_visible_active_account(self, cfg: dict, plugin_id: str, platform: str) -> None:
+        active = self._plugin_active_account(plugin_id)
+        if not active and platform == "tiktok":
+            active = "bot" if bool(cfg.get("bot_login_ok")) else "main" if bool(cfg.get("main_login_ok")) else ""
+        if not active:
+            active = "main"
+        cfg["main_status"] = "verbunden" if active == "main" else "nicht verbunden"
+        cfg["bot_status"] = "verbunden" if active == "bot" else "nicht verbunden"
+
     def _log_line_ts(self, line: str) -> float:
         try:
             head = str(line or "")[:19]
@@ -1824,14 +1849,8 @@ class AppState:
                 if plug_ok:
                     cfg["status"] = "verbunden"
                     cfg["detail"] = plug_msg
-                    if p in {"twitch", "kick", "youtube"}:
-                        cfg["main_status"] = self.platform_status(p, "main")
-                        cfg["bot_status"] = self.platform_status(p, "bot")
-                    elif p == "tiktok":
-                        main_ok, _ = self.tiktok_account_status(cfg, "main")
-                        bot_ok, _ = self.tiktok_account_status(cfg, "bot")
-                        cfg["main_status"] = "verbunden" if main_ok else "nicht verbunden"
-                        cfg["bot_status"] = "verbunden" if bot_ok else "nicht verbunden"
+                    if p in {"twitch", "kick", "youtube", "tiktok"}:
+                        self._set_visible_active_account(cfg, plugin_id, p)
                     out[p] = cfg
                     continue
 

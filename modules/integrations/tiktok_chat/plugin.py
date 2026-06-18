@@ -1096,6 +1096,10 @@ class TikTokLivePlugin(ThreadedPlugin):
             return 'main'
         return 'main'
 
+    def active_account(self) -> str:
+        settings = self._settings if isinstance(self._settings, dict) else {}
+        return self._preferred_viewer_account(settings)
+
     def _live_window_lock_path(self, account: str) -> Path:
         try:
             return app_root() / 'data' / 'tiktok' / f'live_window_{account}.lock'

@@ -50,6 +50,7 @@ class YouTubeChatPlugin(ThreadedPlugin):
         self._web_client_version = '2.20240601.00.00'
         self._host: PluginHost | None = None
         self._broadcast_type_all_supported: bool | None = None
+        self._active_account = ''
 
     def settings_schema(self):
         # Login/auth is intentionally only in the main tool under Platforms -> YouTube.
@@ -1164,6 +1165,9 @@ class YouTubeChatPlugin(ThreadedPlugin):
     def is_connected(self) -> bool:
         return bool(self._connected)
 
+    def active_account(self) -> str:
+        return self._active_account or 'main'
+
     def test_connection(self, settings):
         host = getattr(self, '_host', None)
         settings = self._merge_platform_settings(settings, host)
@@ -1248,6 +1252,7 @@ class YouTubeChatPlugin(ThreadedPlugin):
             raise RuntimeError('Missing YouTube main OAuth token from main tool.')
         if self._as_bool(settings.get('write_enabled'), True) and not self._token_for(settings, 'bot'):
             host.log(self.plugin_id, 'YouTube bot token is missing; main token will be used for writing.')
+        self._active_account = 'bot' if self._token_for(settings, 'bot') else 'main'
 
         self._connected = True
         self._reset_chat_runtime()

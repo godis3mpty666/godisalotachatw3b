@@ -100,6 +100,7 @@ class TwitchChatPlugin(ThreadedPlugin):
         self._host: PluginHost | None = None
         self._send_lock = threading.RLock()
         self._current_channel: str = ''
+        self._active_account: str = ''
     def settings_schema(self):
         # Login/auth data now lives in the main tool under Plattformen/Platforms -> Twitch.
         # Keep this plugin overlay limited to Twitch-chat specific behavior only.
@@ -1354,9 +1355,13 @@ class TwitchChatPlugin(ThreadedPlugin):
             pass
         self._sock = None
         self._current_channel = ''
+        self._active_account = ''
 
     def is_connected(self) -> bool:
         return self._sock is not None
+
+    def active_account(self) -> str:
+        return self._active_account or 'main'
 
     def send_message(self, message: str, settings: dict | None = None, host: PluginHost | None = None):
         text = self._normalize_chat_text(str(message or '')).replace('\r', ' ').replace('\n', ' ').strip()
@@ -1389,6 +1394,7 @@ class TwitchChatPlugin(ThreadedPlugin):
         ok, username, auth_msg, cache = self._resolve_auth(settings, allow_oauth=False)
         if not ok:
             raise RuntimeError(auth_msg)
+        self._active_account = str(cache.get('auth_account') or 'main').strip().lower() or 'main'
         self._last_viewer_count = None
         self._last_followers_count = None
         self._last_is_live = None
@@ -1421,6 +1427,7 @@ class TwitchChatPlugin(ThreadedPlugin):
                 ok_auth, username, auth_msg, cache = self._refresh_runtime_auth(settings, cache)
                 if not ok_auth:
                     raise RuntimeError(auth_msg)
+                self._active_account = str(cache.get('auth_account') or self._active_account or 'main').strip().lower() or 'main'
                 token = self._clean_token(cache.get('access_token') or '')
                 if not username:
                     username = self._clean_username(settings.get('username', ''))
