@@ -67,7 +67,6 @@ class KickChatPlugin(ThreadedPlugin):
     def settings_schema(self):
         return [
             {'key': 'channel', 'label': 'Kick Channel', 'placeholder': 'godis3mpty'},
-            {'key': 'enable_browser_chatroom_resolver', 'label': 'Browser-Resolver fuer Chatroom-ID nutzen', 'type': 'checkbox'},
             {'key': 'diag_log', 'label': 'Diagnosis Log', 'type': 'multiline', 'placeholder': ''},
             {'key': 'diag_path', 'label': 'Diagnosis file path', 'placeholder': ''},
         ]
@@ -75,7 +74,6 @@ class KickChatPlugin(ThreadedPlugin):
     def default_settings(self):
         return {
             'channel': '',
-            'enable_browser_chatroom_resolver': False,
             'diag_log': self._read_diag() or 'No diagnosis yet. Press Test or Connect once.',
             'diag_path': str(self._diag_path()),
             'autoconnect': False,
@@ -148,7 +146,7 @@ class KickChatPlugin(ThreadedPlugin):
         # channel/token values must not redirect Kick away from the main channel.
         merged: dict[str, Any] = dict(self._host_platform_settings(host))
         if isinstance(settings, dict):
-            local_keys = {'enable_browser_chatroom_resolver', 'diag_log', 'diag_path', 'autoconnect'}
+            local_keys = {'diag_log', 'diag_path', 'autoconnect'}
             for key in local_keys:
                 value = settings.get(key)
                 if value not in (None, ''):
@@ -877,17 +875,7 @@ class KickChatPlugin(ThreadedPlugin):
             if chatroom_id:
                 break
 
-        if not chatroom_id and self._as_bool(settings.get('enable_browser_chatroom_resolver'), False):
-            try:
-                data = self._fetch_browser_chatroom_data(settings, channel)
-                broadcaster_user_id = self._parse_int(data.get('broadcaster_user_id')) or broadcaster_user_id
-                channel_id = self._parse_int(data.get('channel_id')) or channel_id
-                chatroom_id = self._parse_int(data.get('chatroom_id')) or chatroom_id
-                if data:
-                    source_parts.append('browser_chatroom')
-            except Exception as exc:
-                self._append_diag(f'browser_chatroom unavailable: {exc}')
-        elif not chatroom_id:
+        if not chatroom_id:
             self._append_diag('browser_chatroom skipped: browser resolver disabled')
 
         source = ' + '.join(source_parts) if source_parts else 'unknown'

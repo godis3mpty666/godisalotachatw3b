@@ -1762,23 +1762,28 @@ class AppState:
             plugin = self.plugin_instances.get(plugin_id)
             if plugin is None:
                 return ""
-            for name in ("active_account", "get_active_account"):
-                fn = getattr(plugin, name, None)
-                if callable(fn):
-                    value = str(fn() or "").strip().lower()
-                    if value in {"main", "bot"}:
-                        return value
             value = str(getattr(plugin, "_active_account", "") or "").strip().lower()
-            return value if value in {"main", "bot"} else ""
+            if value in {"main", "bot"}:
+                return value
+            return ""
         except Exception:
             return ""
+
+    def _set_visible_saved_account(self, cfg: dict, platform: str) -> str:
+        main_ok = self.platform_status(platform, "main") == "verbunden"
+        bot_ok = self.platform_status(platform, "bot") == "verbunden"
+        active = "bot" if bot_ok else "main" if main_ok else ""
+        cfg["main_status"] = "verbunden" if active == "main" else "nicht verbunden"
+        cfg["bot_status"] = "verbunden" if active == "bot" else "nicht verbunden"
+        return active
 
     def _set_visible_active_account(self, cfg: dict, plugin_id: str, platform: str) -> None:
         active = self._plugin_active_account(plugin_id)
         if not active and platform == "tiktok":
             active = "bot" if bool(cfg.get("bot_login_ok")) else "main" if bool(cfg.get("main_login_ok")) else ""
         if not active:
-            active = "main"
+            self._set_visible_saved_account(cfg, platform)
+            return
         cfg["main_status"] = "verbunden" if active == "main" else "nicht verbunden"
         cfg["bot_status"] = "verbunden" if active == "bot" else "nicht verbunden"
 
@@ -1999,14 +2004,14 @@ class AppState:
                 main_saved = self._auth_token_ok("youtube", "main") or bool(str(cfg.get("main_access_token") or cfg.get("main_refresh_token") or "").strip())
                 bot_saved = self._auth_token_ok("youtube", "bot") or bool(str(cfg.get("access_token") or cfg.get("refresh_token") or "").strip())
                 if main_saved or bot_saved:
-                    ok = False
-                    detail = "Main/Bot OAuth gespeichert" if main_saved and bot_saved else "Main OAuth gespeichert" if main_saved else "Bot OAuth gespeichert"
+                    ok = True
+                    active = "Bot" if bot_saved else "Main"
+                    detail = f"{active} OAuth gespeichert"
                 else:
                     ok, detail = self.youtube_status(cfg)
                 cfg["status"] = "verbunden" if ok else "nicht verbunden"
                 cfg["detail"] = detail
-                cfg["main_status"] = self.platform_status(p, "main")
-                cfg["bot_status"] = self.platform_status(p, "bot")
+                self._set_visible_saved_account(cfg, p)
             elif p == "spotify":
                 ok, detail = self.spotify_status(cfg)
                 cfg["status"] = "verbunden" if ok else "nicht verbunden"
@@ -2018,12 +2023,9 @@ class AppState:
                 cfg.pop("model", None)
                 cfg.pop("api_key", None)
             else:
-                main = self.platform_status(p, "main")
-                bot = self.platform_status(p, "bot")
-                cfg["status"] = "nicht verbunden"
-                cfg["main_status"] = main
-                cfg["bot_status"] = bot
-                cfg["detail"] = "Main/Bot OAuth gespeichert" if (main == "verbunden" or bot == "verbunden") else "kein OAuth gespeichert"
+                active = self._set_visible_saved_account(cfg, p)
+                cfg["status"] = "verbunden" if active else "nicht verbunden"
+                cfg["detail"] = ("Bot OAuth gespeichert" if active == "bot" else "Main OAuth gespeichert") if active else "kein OAuth gespeichert"
             out[p] = cfg
         return out
 
@@ -3937,65 +3939,10 @@ class Handler(BaseHTTPRequestHandler):
         return {}
 
     def _kick_resolve_chatroom_after_main_auth(self, channel_slug: str):
-        global STATE
-        st = STATE
-        slug = self._clean_login(channel_slug)
-        if not slug:
-            return
-
-        def worker():
-            try:
-                st.log("kick_chat", "resolving chatroom id after main OAuth", slug)
-                plugin_path = st.base / "modules" / "integrations" / "kick_chat" / "plugin.py"
-                spec = importlib.util.spec_from_file_location("kick_chat_resolver", plugin_path)
-                if not spec or not spec.loader:
-                    st.log("kick_chat", "chatroom resolver unavailable: plugin.py not found")
-                    return
-                module = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(module)
-                plugin = module.KickChatPlugin()
-                settings = WebbasedPluginHost(st).platform_settings("kick")
-                settings["channel"] = slug
-                settings["browser_resolver_visible"] = True
-                settings.pop("chatroom_id", None)
-                settings.pop("chatroom_channel", None)
-                data = plugin._fetch_browser_chatroom_data(settings, slug)
-                chatroom_id = str(data.get("chatroom_id") or "").strip()
-                if not chatroom_id:
-                    st.log("kick_chat", "chatroom resolver found no chatroom_id")
-                    return
-                channel_id = str(data.get("channel_id") or "").strip()
-                st.log("kick_chat", f"chatroom_id {chatroom_id} catched from browser for {slug}" + (f" | channel_id {channel_id} catched from browser" if channel_id else ""))
-                updates = {"chatroom_id": chatroom_id, "chatroom_channel": slug}
-                if channel_id:
-                    updates["channel_id"] = channel_id
-                s = st.settings()
-                cfg = s.setdefault("platforms", {}).setdefault("kick", {})
-                current = self._clean_login(cfg.get("channel") or cfg.get("main") or cfg.get("main_account") or cfg.get("channel_slug"))
-                if current and current != slug:
-                    st.log("kick_chat", f"chatroom resolver ignored stale result for {slug}; current channel is {current}")
-                    return
-                cfg.update(updates)
-                st.save_settings(s)
-                st.log("kick_chat", f"chatroom id resolved after main OAuth: {chatroom_id}" + (f" channel_id={channel_id}" if channel_id else ""))
-                try:
-                    old = st.plugin_instances.get("kick_chat")
-                    if old is not None:
-                        try:
-                            old.stop(wait=True)
-                        except TypeError:
-                            old.stop()
-                    st.plugin_manager.start_plugin("kick_chat")
-                    st.log("kick_chat", "restarted after chatroom id resolve")
-                except Exception as exc:
-                    st.log("kick_chat", f"restart after chatroom id resolve failed: {exc}")
-            except Exception as exc:
-                try:
-                    st.log("kick_chat", f"chatroom resolver after main OAuth failed: {exc}")
-                except Exception:
-                    pass
-
-        threading.Thread(target=worker, daemon=True, name="kick-chatroom-resolver").start()
+        try:
+            STATE.log("kick_chat", "browser chatroom resolver disabled; no browser window opened after OAuth")
+        except Exception:
+            pass
 
     def _oauth_state_prefix(self, platform, account):
         # gla2 carries platform/account in the state itself. The verifier is appended
@@ -4320,11 +4267,7 @@ class Handler(BaseHTTPRequestHandler):
                 updates.update({"access_token": access, "refresh_token": refresh or cfg.get("refresh_token", ""), "scopes": str(token.get("scope") or cfg.get("scopes") or DEFAULT_SCOPES["spotify"]["main"]), "saved_at": int(time.time()), "connection_status": "Verbunden"})
             self._save_platform_updates(platform, updates)
             if platform == "kick" and account == "main":
-                try:
-                    self._kick_resolve_chatroom_after_main_auth(updates.get("channel_slug") or updates.get("main_username") or cfg.get("channel") or cfg.get("main_account"))
-                except Exception as exc:
-                    try: st.log("kick_chat", "chatroom resolver start failed", exc)
-                    except Exception: pass
+                self._kick_resolve_chatroom_after_main_auth(updates.get("channel_slug") or updates.get("main_username") or cfg.get("channel") or cfg.get("main_account"))
             if platform == "spotify":
                 try: st.log("spotify", "status", "connected", "OAuth gespeichert")
                 except Exception: pass
