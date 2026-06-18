@@ -1548,7 +1548,7 @@ class TikTokLiveAlertPlugin(ThreadedPlugin):
             # Accept the direct alert bridge from the TikTok chat plugin.
             # Do NOT consume our own emitted tiktok_live_alert messages again;
             # that can create alert/log feedback loops, especially for joins.
-            if source_plugin and source_plugin not in {'tiktok_chat', 'tiktok_live'}:
+            if source_plugin and source_plugin != 'tiktok_chat':
                 return
             platform = str(self._msg_value(msg, 'platform', '') or '').strip().lower()
             if platform and platform != 'tiktok':

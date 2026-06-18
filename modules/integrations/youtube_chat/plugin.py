@@ -1145,11 +1145,8 @@ class YouTubeChatPlugin(ThreadedPlugin):
                     except urllib.error.HTTPError as bot_exc:
                         bot_detail = self._http_error_short(bot_exc)
                         send_errors.append(f'bot={bot_detail}')
-                        # A browser chat post can work while the Data API rejects the bot token.
-                        # In that case retry once with the broadcaster/main token. This is not
-                        # guessing; the log will say which token YouTube accepted or rejected.
-                        if int(getattr(bot_exc, 'code', 0) or 0) != 403:
-                            raise
+                        # Main-alone mode is mandatory. Any bot failure (401/403/quota/scope/etc.)
+                        # falls through to the broadcaster/main token instead of blocking output.
                     except Exception as bot_exc:
                         send_errors.append(f'bot={self._http_error_short(bot_exc)}')
 
@@ -1250,7 +1247,7 @@ class YouTubeChatPlugin(ThreadedPlugin):
         if not main_token:
             raise RuntimeError('Missing YouTube main OAuth token from main tool.')
         if self._as_bool(settings.get('write_enabled'), True) and not self._token_for(settings, 'bot'):
-            host.log(self.plugin_id, 'YouTube bot token is missing; reading can still run, writing will fail until Bot OAuth exists.')
+            host.log(self.plugin_id, 'YouTube bot token is missing; main token will be used for writing.')
 
         self._connected = True
         self._reset_chat_runtime()

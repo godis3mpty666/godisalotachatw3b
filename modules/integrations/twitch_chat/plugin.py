@@ -48,7 +48,7 @@ def _main_data_dir(plugin_name: str) -> Path:
         if parent.name.lower() == 'modules':
             return parent.parent / 'data' / plugin_name
     return Path(__file__).resolve().parent / 'data'
-DEFAULT_SCOPES = 'chat:read chat:edit moderator:manage:banned_users moderator:manage:chat_messages channel:manage:broadcast'
+DEFAULT_SCOPES = 'chat:read chat:edit user:read:chat user:write:chat moderator:read:chatters moderator:manage:banned_users moderator:manage:chat_messages channel:manage:broadcast'
 EMOTE_REFRESH_SECONDS = 900.0
 IMG_STYLE = 'display:inline;vertical-align:-0.10em;height:1em;max-height:1em;width:auto;margin:0;padding:0;border:0;'
 _TOKEN_RE = re.compile(r'(\s+)')
@@ -300,6 +300,13 @@ class TwitchChatPlugin(ThreadedPlugin):
             if self._as_bool(merged.get('moderation_rights_enabled'), True):
                 scopes += ' moderator:manage:banned_users moderator:manage:chat_messages'
         scopes = scopes.replace('moderator:manage_banned_users', 'moderator:manage:banned_users')
+        scope_items = []
+        for raw in (scopes, DEFAULT_SCOPES):
+            for part in str(raw or '').split():
+                part = part.strip()
+                if part and part not in scope_items:
+                    scope_items.append(part)
+        scopes = ' '.join(scope_items)
         merged['scopes'] = scopes
         merged['read_enabled'] = self._as_bool(merged.get('read_enabled'), True)
         merged['write_enabled'] = self._as_bool(merged.get('write_enabled'), True)
@@ -448,35 +455,54 @@ class TwitchChatPlugin(ThreadedPlugin):
             value = settings.get(key)
             if value not in (None, ''):
                 cache[key] = value
-        # Prefer the bot token when a bot account is actually connected. If not,
-        # use the main token so channels without a separate bot can still read
-        # and write chat as the main account.
-        token = self._clean_token(cache.get('access_token') or cache.get('main_access_token') or '')
-        username = self._clean_username(
-            settings.get('username')
-            or settings.get('bot_username')
-            or settings.get('bot_account')
-            or settings.get('main_oauth_login')
-            or settings.get('main_username')
-            or settings.get('main_account')
-            or cache.get('username')
-            or ''
-        )
-        if not token:
-            return False, '', 'Missing Twitch access token from core Platforms.', cache
-        ok, login, msg, scopes = self._validate_token(token)
-        if not ok:
-            return False, '', msg, cache
-        if login:
-            username = login
-        cache.update({
-            'access_token': token,
-            'username': username,
-            'client_id': (settings.get('client_id') or '').strip(),
-            'scopes': scopes,
-            'saved_at': int(time.time()),
-        })
-        return True, username, 'Using core Twitch authorization.', cache
+
+        # Main-alone mode is mandatory: a missing or stale bot token must never
+        # block Twitch chat. Try the bot first only when it really has a token,
+        # then fall back to the broadcaster/main token before reporting failure.
+        candidates: list[tuple[str, str, str]] = []
+        bot_token = self._clean_token(cache.get('access_token') or '')
+        main_token = self._clean_token(cache.get('main_access_token') or '')
+        if bot_token:
+            candidates.append(('bot', bot_token, self._clean_username(
+                settings.get('username')
+                or settings.get('bot_username')
+                or settings.get('bot_account')
+                or settings.get('bot')
+                or ''
+            )))
+        if main_token and main_token != bot_token:
+            candidates.append(('main', main_token, self._clean_username(
+                settings.get('main_oauth_login')
+                or settings.get('main_username')
+                or settings.get('main_account')
+                or settings.get('main')
+                or settings.get('channel')
+                or ''
+            )))
+
+        if not candidates:
+            return False, '', 'Missing Twitch main/bot access token from core Platforms.', cache
+
+        errors: list[str] = []
+        for account, token, username in candidates:
+            ok, login, msg, scopes = self._validate_token(token)
+            if not ok:
+                errors.append(f'{account}: {msg}')
+                continue
+            if login:
+                username = login
+            cache.update({
+                'access_token': token,
+                'username': username,
+                'auth_account': account,
+                'client_id': (settings.get('client_id') or '').strip(),
+                'scopes': scopes,
+                'saved_at': int(time.time()),
+            })
+            suffix = 'bot' if account == 'bot' else 'main fallback'
+            return True, username, f'Using core Twitch authorization ({suffix}).', cache
+
+        return False, '', 'Twitch OAuth unusable: ' + ' | '.join(errors), cache
     def _refresh_runtime_auth(self, settings: dict, cache: dict) -> tuple[bool, str, str, dict]:
         ok, username, msg, fresh_cache = self._resolve_auth(settings, allow_oauth=False)
         if ok:
@@ -1466,11 +1492,20 @@ class TwitchChatPlugin(ThreadedPlugin):
                                     host.emit_message(self.plugin_id, {
                                         'platform': 'twitch',
                                         'username': display_name,
+                                        'display_name': display_name,
                                         'text': message_text,
+                                        'message': message_text,
+                                        'content': message_text,
                                         'overlay_html': overlay_html,
                                         'channel': channel,
+                                        'message_id': tags.get('id') or '',
+                                        'user_id': tags.get('user-id') or '',
+                                        'raw_tags': dict(tags),
                                         'message_type': 'chat',
+                                        'type': 'chat',
+                                        'event_type': 'chat',
                                         'source_plugin_id': self.plugin_id,
+                                        'source': self.plugin_id,
                                         'show_in_desktop': True,
                                         'show_in_obs': True,
                                     })

@@ -19,7 +19,7 @@ class PlatformOutputs:
 
     def _normalize_platform(self, platform: str) -> str:
         p = str(platform or "").strip().lower()
-        if p in {"tt", "tiktok", "tiktok_chat", "tiktok_live"}:
+        if p in {"tt", "tiktok", "tiktok_chat"}:
             return "tiktok"
         if p in {"twitch", "twitch_chat"}:
             return "twitch"

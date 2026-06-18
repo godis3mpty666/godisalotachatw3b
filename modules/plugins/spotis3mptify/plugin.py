@@ -165,7 +165,7 @@ def _extract_service_command(text: str) -> str:
 
 def _clean_platform(value: Any) -> str:
     p = str(value or '').strip().lower()
-    if p in {'tt', 'tiktok_live'}:
+    if p in {'tt', 'tiktok_chat'}:
         return 'tiktok'
     if p in {'tw', 'twitch_chat'}:
         return 'twitch'
@@ -515,6 +515,7 @@ class Spotis3mptifyPlugin(ProviderPlugin):
             merged['spotify_refresh_token'] = _safe_text(spotify.get('refresh_token'))
             merged['spotify_expires_at'] = _spotify_expires_at(spotify)
             merged['spotify_scope'] = _safe_text(spotify.get('scope') or spotify.get('scopes'))
+            merged['autoconnect'] = _as_bool(spotify.get('autoconnect'), _as_bool(merged.get('autoconnect'), True))
         return merged
 
     def _host_platform_settings(self, platform: str) -> dict[str, Any]:
@@ -610,6 +611,9 @@ class Spotis3mptifyPlugin(ProviderPlugin):
         self._settings = self._effective_settings(dict(settings or {}))
         if not _as_bool(self._settings.get('enabled'), True):
             host.set_status(self.plugin_id, PluginStatus('disabled', 'Disabled'))
+            return
+        if not _as_bool(self._settings.get('autoconnect'), True):
+            host.set_status(self.plugin_id, PluginStatus('stopped', 'Autoconnect aus'))
             return
         core = self._load_core()
         core.set_logger(lambda level, line: self._log(str(line)))

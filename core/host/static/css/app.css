@@ -152,6 +152,47 @@ h2{
   color:var(--muted);
   font-size:clamp(12px,1.1vw,14px);
 }
+
+.shutdownBtn{
+  background:linear-gradient(135deg,#ff5577,#b91f45);
+  border:1px solid rgba(255,255,255,.14);
+  box-shadow:0 10px 30px rgba(255,85,119,.18);
+}
+.shutdownBtn:hover{
+  box-shadow:0 5px 18px rgba(255,85,119,.42);
+}
+.shutdownBtn:disabled{
+  opacity:.7;
+  cursor:wait;
+  transform:none;
+}
+.shutdownScreen{
+  min-height:100vh;
+  display:grid;
+  place-items:center;
+  padding:32px;
+  background:radial-gradient(circle at top left,#19154a 0,#090b16 38%,#05060d 100%);
+  color:#fff;
+  font-family:Segoe UI,Inter,Arial,sans-serif;
+  text-align:center;
+}
+.shutdownScreen>div{
+  max-width:620px;
+  padding:28px;
+  border-radius:18px;
+  background:rgba(17,20,33,.94);
+  border:1px solid #2c3150;
+  box-shadow:0 18px 50px rgba(0,0,0,.26);
+}
+.shutdownScreen h1{
+  margin:0 0 10px;
+  font-size:32px;
+}
+.shutdownScreen p{
+  margin:0;
+  color:#9ca6c9;
+}
+
 .pill{
   border:1px solid var(--line);
   border-radius:999px;
@@ -582,3 +623,29 @@ button.secondary{
 .settingsBool{display:flex;align-items:center;gap:10px;min-height:42px;background:rgba(8,10,22,.45);border:1px solid rgba(255,255,255,.08);border-radius:12px;padding:10px 12px}
 .settingsBool input{width:auto;flex:0 0 auto}
 .settingsBool span{font-weight:800;color:#dce2ff}
+.settingsAction button{width:100%}
+
+.pluginSettingsTabs{display:flex;gap:8px;flex-wrap:wrap;margin:6px 0 14px}
+.pluginSettingsTabBtn{border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.05);color:inherit;border-radius:999px;padding:8px 12px;cursor:pointer}
+.pluginSettingsTabBtn.active{border-color:rgba(134,92,255,.85);background:rgba(134,92,255,.22)}
+.pluginSettingsGroup{display:none}
+.pluginSettingsGroup.active{display:block}
+
+.pluginSettingsFields .compact input,.pluginSettingsFields .compact select{padding:7px 9px;border-radius:9px;font-size:12px}
+.pluginSettingsFields .compact > div:first-child{font-size:11px;margin-bottom:3px}
+.pluginSettingsFields .compact{margin:0}
+
+.settingsFieldTitle{font-size:13px;font-weight:900;color:#dce2ff;margin-bottom:8px}
+.settingsTagListField,.settingsTemplateField{background:rgba(8,10,22,.35);border:1px solid rgba(255,255,255,.08);border-radius:14px;padding:12px}
+.settingsTagListField textarea.tagListValue{display:none}
+.tagListInput{width:100%;margin-bottom:10px}
+.tagListChips{display:flex;flex-wrap:wrap;gap:8px;min-height:34px;align-items:center}
+.tagChip{display:inline-flex;align-items:center;gap:8px;border-radius:999px;border:1px solid rgba(134,92,255,.45);background:rgba(134,92,255,.18);color:#eef1ff;padding:7px 10px;font-weight:800;cursor:pointer}
+.tagChip span{opacity:.8;font-size:15px;line-height:1}
+.emptyChips{color:#9ca6d6;font-size:12px}
+.settingsTemplateField textarea{min-height:62px;resize:vertical}
+.templateTokenRow{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+.templateTokenRow .templateToken{padding:6px 9px;border-radius:999px;font-size:12px}
+.templatePreview{margin-top:8px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.07);border-radius:10px;padding:8px 10px;font-size:12px;color:#cbd2f5}
+.templatePreview span{opacity:.75;margin-right:4px}
+.templatePreview b{color:#fff;font-weight:800}

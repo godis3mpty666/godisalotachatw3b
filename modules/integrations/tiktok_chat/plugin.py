@@ -1054,7 +1054,11 @@ class TikTokLivePlugin(ThreadedPlugin):
         return self._bot_profile_dir(settings) if str(account or '').lower() == 'bot' else self._main_profile_dir(settings)
 
     def _preferred_viewer_account(self, settings: dict[str, Any]) -> str:
-        return 'bot' if self._as_bool(settings.get('bot_login_ok'), False) else 'main'
+        if self._as_bool(settings.get('bot_login_ok'), False):
+            return 'bot'
+        if self._as_bool(settings.get('main_login_ok'), False):
+            return 'main'
+        return 'main'
 
     def _live_window_lock_path(self, account: str) -> Path:
         try:

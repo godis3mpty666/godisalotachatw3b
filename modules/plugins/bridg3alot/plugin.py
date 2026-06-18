@@ -390,7 +390,7 @@ class Bridg3alotPlugin(ProviderPlugin):
     def _platform_plugin_ids(self, key: str) -> tuple[str, ...]:
         return {
             'twitch': ('twitch_chat',),
-            'tiktok': ('tiktok_chat', 'tiktok_live'),
+            'tiktok': ('tiktok_chat',),
             'youtube': ('youtube_chat', 'youtube_live'),
             'kick': ('kick_chat',),
         }.get(str(key or '').lower(), ())
@@ -419,7 +419,7 @@ class Bridg3alotPlugin(ProviderPlugin):
 
     def _normalize_platform(self, value: Any) -> str:
         p = str(value or '').strip().lower()
-        if p in {'tt', 'tiktok_chat', 'tiktok_live'}:
+        if p in {'tt', 'tiktok_chat'}:
             return 'tiktok'
         if p == 'twitch_chat':
             return 'twitch'
@@ -491,8 +491,6 @@ class Bridg3alotPlugin(ProviderPlugin):
         bridge_prefixes = (
             'tt-message from ', 'tiktok-message from ', 'twitch-message from ',
             'youtube-message from ', 'kick-message from ',
-            'tt-ai answer to ', 'tiktok-ai answer to ', 'twitch-ai answer to ',
-            'youtube-ai answer to ', 'kick-ai answer to ',
         )
         return low_text.startswith(bridge_prefixes)
 
@@ -519,7 +517,8 @@ class Bridg3alotPlugin(ProviderPlugin):
         channel = self._message_channel(msg)
         if not platform or platform not in {'twitch', 'tiktok', 'youtube', 'kick'} or not text:
             return
-        if self._is_recent_outbound_echo(platform, username, text) or self._is_echo_text(text):
+        is_botalot_reply = isinstance(msg, dict) and bool(msg.get('botalot_reply') or msg.get('source_plugin_id') == 'botalot')
+        if self._is_recent_outbound_echo(platform, username, text) or (self._is_echo_text(text) and not is_botalot_reply):
             return
         if self._is_recent_duplicate(platform, username, text, ttl=12.0):
             return

@@ -1,5 +1,5 @@
 from __future__ import annotations
-import base64, hashlib, json, mimetypes, os, re, secrets, socket, struct, sys, threading, time, urllib.parse, urllib.request, urllib.error, webbrowser, tempfile, subprocess, sqlite3, shutil, ctypes, importlib.util
+import base64, hashlib, json, mimetypes, os, re, secrets, socket, struct, sys, threading, time, urllib.parse, urllib.request, urllib.error, webbrowser, tempfile, subprocess, sqlite3, shutil, ctypes, importlib.util, traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -9,7 +9,7 @@ APP_NAME = "godisalotachat webbased"
 VERSION = APP_VERSION
 
 PLATFORM_ORDER = ["twitch", "tiktok", "youtube", "kick", "spotify", "openai", "meld", "obs"]
-CHAT_INPUT_PLUGIN_IDS = {"twitch_chat", "tiktok_chat", "tiktok_live", "youtube_chat", "kick_chat"}
+CHAT_INPUT_PLUGIN_IDS = {"twitch_chat", "tiktok_chat", "youtube_chat", "kick_chat"}
 CALLBACK_PORT = 5173
 MAIN_PORT = 17890
 OPENAI_API_BASE = "https://api.openai.com/v1"
@@ -17,14 +17,14 @@ OPENAI_API_BASE = "https://api.openai.com/v1"
 DEFAULT_SCOPES = {
     # Original-Logik: Bot bleibt Chat/Moderation, Main ist separat für Broadcast/Editor-Funktionen.
     "twitch": {
-        "main": "channel:manage:broadcast",
-        "bot": "chat:read chat:edit moderator:manage:banned_users moderator:manage:chat_messages channel:manage:broadcast",
+        "main": "chat:read chat:edit user:read:chat user:write:chat moderator:read:chatters moderator:manage:banned_users moderator:manage:chat_messages channel:manage:broadcast",
+        "bot": "chat:read chat:edit user:read:chat user:write:chat moderator:read:chatters moderator:manage:banned_users moderator:manage:chat_messages channel:manage:broadcast",
     },
     "youtube": {
-        "main": "https://www.googleapis.com/auth/youtube.force-ssl https://www.googleapis.com/auth/youtube.readonly",
-        "bot": "https://www.googleapis.com/auth/youtube.force-ssl https://www.googleapis.com/auth/youtube.readonly",
+        "main": "https://www.googleapis.com/auth/youtube https://www.googleapis.com/auth/youtube.force-ssl https://www.googleapis.com/auth/youtube.readonly",
+        "bot": "https://www.googleapis.com/auth/youtube https://www.googleapis.com/auth/youtube.force-ssl https://www.googleapis.com/auth/youtube.readonly",
     },
-    "kick": {"main": "user:read channel:read channel:write chat:write", "bot": "user:read channel:read channel:write chat:write"},
+    "kick": {"main": "user:read channel:read channel:write chat:write moderation:ban moderation:chat_message:manage", "bot": "user:read channel:read channel:write chat:write moderation:ban moderation:chat_message:manage"},
     "spotify": {"main": "user-modify-playback-state user-read-playback-state user-read-currently-playing playlist-modify-private playlist-modify-public playlist-read-private ugc-image-upload"},
 }
 
@@ -66,6 +66,26 @@ def _json_save(path: Path, data):
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
     os.replace(tmp, path)
+
+def _desktop_dir() -> Path:
+    home = Path.home()
+    candidates = [home / "Desktop", home / "OneDrive" / "Desktop"]
+    for path in candidates:
+        try:
+            if path.exists():
+                return path
+        except Exception:
+            pass
+    return home
+
+def _open_text_file(path: Path) -> None:
+    try:
+        if os.name == "nt":
+            subprocess.Popen(["notepad.exe", str(path)], creationflags=_win_hidden_flags())
+        else:
+            subprocess.Popen(["xdg-open", str(path)], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    except Exception:
+        pass
 
 def _find_free_port(start: int) -> int:
     for port in range(start, start + 50):
@@ -237,7 +257,18 @@ class WebbasedPluginHost:
                 "html": overlay_html,
                 "channel": str(payload.get("channel") or ""),
                 "message_type": str(payload.get("message_type") or "chat"),
+                "type": str(payload.get("type") or payload.get("message_type") or "chat"),
+                "event_type": str(payload.get("event_type") or payload.get("type") or payload.get("message_type") or "chat"),
                 "source_plugin_id": str(payload.get("source_plugin_id") or plugin_id),
+                "source": str(payload.get("source") or payload.get("source_plugin_id") or plugin_id),
+                "dispatch_to_plugins": bool(payload.get("dispatch_to_plugins") or payload.get("bridge_to_platforms")),
+                "botalot_reply": bool(payload.get("botalot_reply")),
+                "message_id": str(payload.get("message_id") or payload.get("id") or ""),
+                "user_id": str(payload.get("user_id") or ""),
+                "raw_tags": payload.get("raw_tags") if isinstance(payload.get("raw_tags"), dict) else {},
+                "content": str(payload.get("content") or payload.get("message") or text),
+                "live_chat_id": str(payload.get("live_chat_id") or payload.get("liveChatId") or ""),
+                "author_channel_id": str(payload.get("author_channel_id") or payload.get("authorChannelId") or ""),
                 "time": time.strftime("%H:%M:%S"),
             }
 
@@ -282,7 +313,8 @@ class WebbasedPluginHost:
     def _dispatch_chat_message(self, plugin_id: str, item: dict) -> None:
         try:
             source_plugin_id = str(item.get("source_plugin_id") or plugin_id or "").strip()
-            if source_plugin_id not in CHAT_INPUT_PLUGIN_IDS and str(plugin_id or "").strip() not in CHAT_INPUT_PLUGIN_IDS:
+            allow_plugin_dispatch = bool(item.get("dispatch_to_plugins") or item.get("bridge_to_platforms"))
+            if not allow_plugin_dispatch and source_plugin_id not in CHAT_INPUT_PLUGIN_IDS and str(plugin_id or "").strip() not in CHAT_INPUT_PLUGIN_IDS:
                 return
             message_type = str(item.get("message_type") or "chat").strip().lower()
             if message_type not in {"chat", "message", "comment"}:
@@ -452,7 +484,7 @@ class WebbasedPluginManager:
         if self.started:
             return
         self.started = True
-        for plugin_id in ("twitch_chat", "tiktok_chat", "youtube_chat", "kick_chat", "spotis3mptify", "gam3pick3r", "botalot", "bridg3alot"):
+        for plugin_id in ("twitch_chat", "tiktok_chat", "youtube_chat", "kick_chat", "spotis3mptify", "gam3pick3r", "botalot", "bridg3alot", "modalot"):
             self.start_plugin(plugin_id)
 
     def load_plugin(self, plugin_id: str):
@@ -563,7 +595,15 @@ class AppState:
         self.started = time.time()
         self.last_ui_heartbeat = 0.0
         self.ui_heartbeat_enabled = False
+        self.ui_heartbeat_lost = False
+        self.last_ui_reopen = 0.0
+        self.ui_reload_requested = False
+        self.ui_reload_nonce = 0
+        self.last_ui_reload_request = 0.0
+        self.main_url = ""
         self.shutting_down = False
+        self._tiktok_cookie_backoff = {}
+        self._tiktok_cookie_warned = set()
         self._meld_status_cache = {"ts": 0.0, "host": "", "port": 0, "ok": False, "detail": "nicht verbunden", "locked": False}
         self._obs_status_cache = {"ts": 0.0, "host": "", "port": 0, "ok": False, "detail": "nicht verbunden", "locked": False}
         self._youtube_status_cache = {"ts": 0.0, "ok": False, "detail": "nicht verbunden", "locked": False, "key": None}
@@ -582,12 +622,193 @@ class AppState:
         self.log_dir = self.data / "logs"
         self.log_dir.mkdir(parents=True, exist_ok=True)
         self.log_file = self.log_dir / "webbased.log"
+        self.run_state_path = self.log_dir / "run_state.json"
+        self.crash_report_path = self.log_dir / "godisalotachat_crashlog.txt"
+        try:
+            self.auth_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+        self._import_auth_from_source_data_fallback()
         self.plugin_status = {}
         self.plugin_instances = {}
         self.metrics = {}
         self.desktop_chat_editing = False
+        self._unclean_exit_marked = False
+        # Do not create/open desktop crash report text files on startup.
+        # The persistent run_state.json is enough for diagnostics and keeps Invoke/image workflows unobstructed.
+        self._write_run_state("running", clean=False, reason="started")
         self.plugin_manager = WebbasedPluginManager(self)
         self.log("start", "base=" + str(self.base), "resource=" + str(self.resource_base), "templates=" + str(self.templates), "static=" + str(self.static))
+
+    def _json_has_runtime_token(self, path: Path) -> bool:
+        try:
+            data = _json_load(path, {})
+            return isinstance(data, dict) and bool(str(data.get("access_token") or data.get("refresh_token") or "").strip())
+        except Exception:
+            return False
+
+    def _source_data_fallback_dirs(self) -> list[Path]:
+        """Runtime safety net for rebuilt EXEs.
+
+        A rebuilt EXE runs from dist/webbased and normally uses dist/webbased/data.
+        If that folder is freshly created or stale while the project-root data folder
+        still contains OAuth files, autoconnect must hydrate from that source copy
+        instead of forcing a new OAuth round.
+        """
+        out: list[Path] = []
+        try:
+            # C:\project\dist\webbased -> C:\project\data
+            if self.base.name.lower() == "webbased" and self.base.parent.name.lower() == "dist":
+                out.append(self.base.parent.parent / "data")
+        except Exception:
+            pass
+        try:
+            cwd_data = Path.cwd().resolve() / "data"
+            out.append(cwd_data)
+        except Exception:
+            pass
+        clean: list[Path] = []
+        seen: set[str] = set()
+        for item in out:
+            try:
+                resolved = item.resolve()
+                if resolved == self.data.resolve():
+                    continue
+                key = str(resolved).lower()
+                if key in seen or not resolved.exists():
+                    continue
+                seen.add(key)
+                clean.append(resolved)
+            except Exception:
+                pass
+        return clean
+
+    def _merge_auth_settings_from_source(self, dst: dict, src: dict) -> bool:
+        if not isinstance(dst, dict) or not isinstance(src, dict):
+            return False
+        changed = False
+        dst_platforms = dst.setdefault("platforms", {})
+        src_platforms = src.get("platforms", {}) if isinstance(src.get("platforms", {}), dict) else {}
+        keys = {
+            "enabled", "autoconnect", "main", "bot", "channel", "main_account", "bot_account", "username",
+            "bot_username", "main_username", "channel_slug", "client_id", "client_secret", "redirect_uri", "redirect_url",
+            "redirect_port", "scopes", "main_scopes", "access_token", "refresh_token", "main_access_token",
+            "main_refresh_token", "bot_access_token", "bot_refresh_token", "oauth_login", "oauth_user_id",
+            "main_oauth_login", "main_oauth_user_id", "broadcaster_user_id", "broadcaster_id", "chatroom_id",
+            "chatroom_channel", "channel_id", "main_user_id", "bot_user_id", "main_channel_id", "bot_channel_id",
+            "main_channel_title", "bot_channel_title", "broadcaster_channel_id", "expires_at", "expires_in",
+            "main_expires_at", "main_expires_in", "saved_at", "main_saved_at", "token_type", "main_token_type",
+        }
+        for platform, src_cfg in src_platforms.items():
+            if not isinstance(src_cfg, dict):
+                continue
+            dst_cfg = dst_platforms.setdefault(platform, {})
+            if not isinstance(dst_cfg, dict):
+                dst_platforms[platform] = {}
+                dst_cfg = dst_platforms[platform]
+                changed = True
+            for key in keys:
+                value = src_cfg.get(key)
+                if value in (None, ""):
+                    continue
+                current = dst_cfg.get(key)
+                # Preserve explicit user switches, but fill missing account/auth fields.
+                if key in {"enabled", "autoconnect"} and key in dst_cfg:
+                    continue
+                if current in (None, ""):
+                    dst_cfg[key] = value
+                    changed = True
+        return changed
+
+    def _import_auth_from_source_data_fallback(self) -> None:
+        try:
+            sources = self._source_data_fallback_dirs()
+            if not sources:
+                return
+            self.auth_dir.mkdir(parents=True, exist_ok=True)
+            imported = []
+            for src_data in sources:
+                src_auth = src_data / "auth"
+                if src_auth.exists():
+                    for src_file in src_auth.glob("*.json"):
+                        dst_file = self.auth_dir / src_file.name
+                        if self._json_has_runtime_token(dst_file):
+                            continue
+                        if self._json_has_runtime_token(src_file):
+                            try:
+                                dst_file.parent.mkdir(parents=True, exist_ok=True)
+                                shutil.copy2(src_file, dst_file)
+                                imported.append(f"auth/{src_file.name}")
+                            except Exception:
+                                pass
+                src_settings_path = src_data / "settings.json"
+                if src_settings_path.exists():
+                    dst_settings = _json_load(self.settings_path, {})
+                    src_settings = _json_load(src_settings_path, {})
+                    if not isinstance(dst_settings, dict) or not dst_settings:
+                        try:
+                            shutil.copy2(src_settings_path, self.settings_path)
+                            imported.append("settings.json")
+                        except Exception:
+                            pass
+                    elif self._merge_auth_settings_from_source(dst_settings, src_settings):
+                        _json_save(self.settings_path, dst_settings)
+                        imported.append("settings.json auth fields")
+            if imported:
+                try:
+                    self.log("auth", "imported runtime auth fallback", ", ".join(sorted(set(imported))))
+                except Exception:
+                    pass
+        except Exception as exc:
+            try:
+                self.log("auth", "runtime auth fallback failed", exc)
+            except Exception:
+                pass
+
+    def _write_run_state(self, state: str, *, clean: bool, reason: str = "", extra: dict | None = None) -> None:
+        try:
+            payload = {
+                "app": APP_NAME,
+                "version": VERSION,
+                "pid": os.getpid(),
+                "state": str(state or ""),
+                "clean_shutdown": bool(clean),
+                "reason": str(reason or ""),
+                "base": str(self.base),
+                "data": str(self.data),
+                "log": str(self.log_file),
+                "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "updated_ts": time.time(),
+            }
+            if isinstance(extra, dict):
+                payload.update(extra)
+            _json_save(self.run_state_path, payload)
+        except Exception:
+            pass
+
+    def mark_clean_shutdown(self, reason: str = "normal shutdown") -> None:
+        if self._unclean_exit_marked:
+            return
+        self._write_run_state("stopped", clean=True, reason=reason)
+
+    def mark_unclean_exit(self, reason: str, detail: str = "") -> None:
+        self._unclean_exit_marked = True
+        extra = {"detail": str(detail or "")}
+        self._write_run_state("unclean-exit", clean=False, reason=reason, extra=extra)
+
+    def _report_previous_unclean_exit(self) -> None:
+        previous = _json_load(self.run_state_path, {})
+        if not isinstance(previous, dict) or previous.get("clean_shutdown") is True or not previous:
+            return
+        try:
+            self.log(
+                "startup",
+                "previous run was not clean",
+                "reason=" + str(previous.get("reason", "") or "unbekannt"),
+                "state=" + str(previous.get("state", "")),
+            )
+        except Exception:
+            pass
 
     def module_folder(self, module_id: str) -> Path:
         for module_root in self.module_roots:
@@ -624,25 +845,44 @@ class AppState:
                 s["platforms"][k]["redirect_uri"] = v
                 s["platforms"][k]["redirect_url"] = v
         self._migrate_platform_defaults(s["platforms"])
+        self._ensure_auth_files_from_settings(s)
         return s
 
     def _migrate_platform_defaults(self, platforms):
+        def merge_scopes(current, required):
+            items = []
+            for raw in (str(current or ""), str(required or "")):
+                for part in raw.split():
+                    part = part.strip()
+                    if part and part not in items:
+                        items.append(part)
+            return " ".join(items)
+
         tw = platforms.setdefault("twitch", {})
+        tw.setdefault("enabled", True); tw.setdefault("autoconnect", True)
         tw.setdefault("redirect_port", 17564); tw.setdefault("redirect_url", DEFAULT_REDIRECTS["twitch"]); tw.setdefault("redirect_uri", DEFAULT_REDIRECTS["twitch"])
         tw.setdefault("scopes", DEFAULT_SCOPES["twitch"]["bot"]); tw.setdefault("main_scopes", DEFAULT_SCOPES["twitch"]["main"])
+        tw["scopes"] = merge_scopes(tw.get("scopes"), DEFAULT_SCOPES["twitch"]["bot"])
+        tw["main_scopes"] = merge_scopes(tw.get("main_scopes"), DEFAULT_SCOPES["twitch"]["main"])
         tw.setdefault("channel", tw.get("main") or tw.get("main_account") or ""); tw.setdefault("bot_username", tw.get("bot") or tw.get("bot_account") or "")
         for k in ("access_token","refresh_token","oauth_login","oauth_user_id","main_access_token","main_refresh_token","main_oauth_login","main_oauth_user_id","broadcaster_user_id","broadcaster_id"):
             tw.setdefault(k, "")
 
         yt = platforms.setdefault("youtube", {})
+        yt.setdefault("enabled", True); yt.setdefault("autoconnect", True)
         yt.setdefault("redirect_port", 17566); yt.setdefault("redirect_url", DEFAULT_REDIRECTS["youtube"]); yt.setdefault("redirect_uri", DEFAULT_REDIRECTS["youtube"])
         yt.setdefault("scopes", DEFAULT_SCOPES["youtube"]["bot"]); yt.setdefault("main_scopes", DEFAULT_SCOPES["youtube"]["main"])
+        yt["scopes"] = merge_scopes(yt.get("scopes"), DEFAULT_SCOPES["youtube"]["bot"])
+        yt["main_scopes"] = merge_scopes(yt.get("main_scopes"), DEFAULT_SCOPES["youtube"]["main"])
         for k in ("access_token","refresh_token","main_access_token","main_refresh_token","bot_channel_id","bot_channel_title","bot_channel_custom_url","main_channel_id","main_channel_title","main_channel_custom_url","broadcaster_channel_id"):
             yt.setdefault(k, "")
 
         kk = platforms.setdefault("kick", {})
+        kk.setdefault("enabled", True); kk.setdefault("autoconnect", True)
         kk.setdefault("redirect_url", DEFAULT_REDIRECTS["kick"]); kk.setdefault("redirect_uri", DEFAULT_REDIRECTS["kick"])
         kk.setdefault("scopes", DEFAULT_SCOPES["kick"]["bot"]); kk.setdefault("main_scopes", DEFAULT_SCOPES["kick"]["main"])
+        kk["scopes"] = merge_scopes(kk.get("scopes"), DEFAULT_SCOPES["kick"]["bot"])
+        kk["main_scopes"] = merge_scopes(kk.get("main_scopes"), DEFAULT_SCOPES["kick"]["main"])
         kk.setdefault("channel", kk.get("main") or kk.get("main_account") or ""); kk.setdefault("bot_username", kk.get("bot") or kk.get("bot_account") or "")
         if not str(kk.get("channel") or "").strip():
             kk["channel"] = str(kk.get("main") or kk.get("main_account") or "").strip()
@@ -652,10 +892,12 @@ class AppState:
             kk.setdefault(k, "")
 
         sp = platforms.setdefault("spotify", {})
+        sp.setdefault("enabled", True); sp.setdefault("autoconnect", True)
         sp.setdefault("redirect_uri", DEFAULT_REDIRECTS["spotify"]); sp.setdefault("scopes", DEFAULT_SCOPES["spotify"]["main"]); sp.setdefault("port", 5173)
 
         ai = platforms.setdefault("openai", {})
         ai.setdefault("enabled", False)
+        ai.setdefault("autoconnect", True)
         ai.setdefault("api_key", "")
         ai.setdefault("organization", "")
         ai.setdefault("project", "")
@@ -1039,8 +1281,15 @@ class AppState:
 
     def _tiktok_cookie_names(self, profile_dir: Path):
         names = set()
+        now = time.time()
         for db in self._tiktok_cookie_db_candidates(profile_dir):
             rows = []
+            db_key = str(db)
+            try:
+                if now < float(self._tiktok_cookie_backoff.get(db_key, 0.0) or 0.0):
+                    continue
+            except Exception:
+                pass
             try:
                 if not db.exists() or db.stat().st_size <= 0:
                     continue
@@ -1064,8 +1313,16 @@ class AppState:
                     finally:
                         con.close()
                 except Exception:
-                    try: self.log("tiktok", "cookie read failed", str(db), exc)
-                    except Exception: pass
+                    msg = str(exc)
+                    if "WinError 32" in msg or "being used by another process" in msg or "Der Prozess kann nicht auf die Datei zugreifen" in msg:
+                        self._tiktok_cookie_backoff[db_key] = time.time() + 45.0
+                        if db_key not in self._tiktok_cookie_warned:
+                            self._tiktok_cookie_warned.add(db_key)
+                            try: self.log("tiktok", "cookie DB locked; delaying next read", str(db))
+                            except Exception: pass
+                    else:
+                        try: self.log("tiktok", "cookie read failed", str(db), exc)
+                        except Exception: pass
             for host, name in rows:
                 if host and name:
                     names.add(str(name))
@@ -1087,16 +1344,16 @@ class AppState:
 
     def tiktok_account_status(self, cfg, account):
         account = "bot" if str(account or "").lower().strip() == "bot" else "main"
-        ok, detail = self._tiktok_account_status_raw(cfg, account)
-        if ok:
-            return True, detail
         # Wenn ein Login einmal sauber erkannt wurde, bleibt der Status erhalten,
-        # solange der Nutzer nicht explizit trennt. Das verhindert, dass Main/Bot
-        # sich gegenseitig optisch verlieren, nur weil Chromiums Cookie-DB kurz gelockt ist.
+        # solange der Nutzer nicht explizit trennt. Dadurch muss die gesperrte
+        # Chromium-Cookie-DB nicht dauerhaft im UI-Polling gelesen werden.
         sticky_key = "bot_login_ok" if account == "bot" else "main_login_ok"
         profile = self._tiktok_profile_dir(cfg, account)
         if bool((cfg or {}).get(sticky_key)) and profile.exists():
             return True, "Login gespeichert"
+        ok, detail = self._tiktok_account_status_raw(cfg, account)
+        if ok:
+            return True, detail
         return False, detail
 
     def tiktok_status(self, cfg):
@@ -1163,12 +1420,89 @@ class AppState:
         s["version"] = VERSION
         _json_save(self.settings_path, s)
 
+    def _settings_token_snapshot(self, platform: str, account: str, cfg: dict | None = None) -> dict:
+        """Build a canonical auth-file-shaped token from platform settings.
+
+        This is the safety net for new builds: if settings.json survived but
+        data/auth/*.json is missing, the app can recreate the auth files and
+        plugins can autoconnect without forcing a fresh OAuth login.
+        """
+        cfg = cfg if isinstance(cfg, dict) else {}
+        platform = str(platform or "").lower().strip()
+        account = "main" if str(account or "").lower().strip() == "main" else "bot"
+        prefix = "" if (platform == "spotify" or account == "bot") else "main_"
+        access = str(cfg.get(prefix + "access_token") or "").strip()
+        refresh = str(cfg.get(prefix + "refresh_token") or "").strip()
+        if not access and not refresh:
+            return {}
+        token = {"platform": platform, "account": account}
+        if access:
+            token["access_token"] = access
+        if refresh:
+            token["refresh_token"] = refresh
+        for key in ("expires_in", "expires_at", "scope", "token_type", "saved_at"):
+            value = cfg.get(prefix + key)
+            if value not in (None, ""):
+                token[key] = value
+        if "scope" not in token:
+            scopes_key = "main_scopes" if account == "main" else "scopes"
+            scopes = str(cfg.get(scopes_key) or DEFAULT_SCOPES.get(platform, {}).get(account) or DEFAULT_SCOPES.get(platform, {}).get("main") or "").strip()
+            if scopes:
+                token["scope"] = scopes
+        if "saved_at" not in token:
+            token["saved_at"] = time.time()
+        return token
+
+    def _ensure_auth_files_from_settings(self, settings: dict | None = None) -> None:
+        """Recreate missing data/auth token files from settings.json tokens.
+
+        Builds should preserve data/auth, but in practice users often copy only
+        the source package or rebuild into a fresh dist. Since OAuth callbacks
+        also mirror tokens into data/settings.json, this makes existing auth
+        portable across builds and prevents unnecessary re-auth.
+        """
+        try:
+            settings = settings if isinstance(settings, dict) else _json_load(self.settings_path, {})
+            platforms = settings.get("platforms", {}) if isinstance(settings.get("platforms", {}), dict) else {}
+            for platform in ("twitch", "youtube", "kick"):
+                cfg = platforms.get(platform, {}) if isinstance(platforms.get(platform, {}), dict) else {}
+                for account in ("main", "bot"):
+                    path = self.auth_dir / f"{platform}_{account}.json"
+                    existing = _json_load(path, {})
+                    if isinstance(existing, dict) and str(existing.get("access_token") or existing.get("refresh_token") or "").strip():
+                        continue
+                    token = self._settings_token_snapshot(platform, account, cfg)
+                    if token:
+                        _json_save(path, token)
+            cfg = platforms.get("spotify", {}) if isinstance(platforms.get("spotify", {}), dict) else {}
+            path = self.auth_dir / "spotify_main.json"
+            existing = _json_load(path, {})
+            if not (isinstance(existing, dict) and str(existing.get("access_token") or existing.get("refresh_token") or "").strip()):
+                token = self._settings_token_snapshot("spotify", "main", cfg)
+                if token:
+                    _json_save(path, token)
+        except Exception as exc:
+            try:
+                self.log("auth", "settings auth restore failed", exc)
+            except Exception:
+                pass
+
     def _auth_token_ok(self, platform, account="main") -> bool:
         try:
+            platform = str(platform or "").lower().strip()
+            account = "main" if str(account or "").lower().strip() == "main" else "bot"
             token = _json_load(self.auth_dir / f"{platform}_{account}.json", {})
-            return isinstance(token, dict) and bool(str(token.get("access_token") or token.get("refresh_token") or "").strip())
+            if isinstance(token, dict) and bool(str(token.get("access_token") or token.get("refresh_token") or "").strip()):
+                return True
+            s = self.settings()
+            cfg = s.get("platforms", {}).get(platform, {}) if isinstance(s.get("platforms", {}), dict) else {}
+            restored = self._settings_token_snapshot(platform, account, cfg)
+            if restored:
+                _json_save(self.auth_dir / f"{platform}_{account}.json", restored)
+                return True
         except Exception:
             return False
+        return False
 
     def platform_status(self, platform, account="main"):
         return "verbunden" if self._auth_token_ok(platform, account) else "nicht verbunden"
@@ -1236,8 +1570,6 @@ class AppState:
                 detail = str(cfg.get("connection_status") or "OAuth gespeichert").strip()
                 try:
                     np_candidates = [
-                        self.data / "plugins" / "spotis3mptify" / "nowplaying" / "nowplaying.json",
-                        self.data / "plugins" / "spotis3mptify" / "nowplaying.json",
                         self.data / "spotis3mptify" / "nowplaying" / "nowplaying.json",
                         self.data / "spotis3mptify" / "nowplaying.json",
                     ]
@@ -1273,6 +1605,21 @@ class AppState:
                         continue
                 cfg["status"] = "nicht verbunden"
                 cfg.setdefault("detail", "inaktiv")
+                out[p] = cfg
+                continue
+
+            autoconnect = bool(cfg.get("autoconnect", True))
+            if not autoconnect and p in {"twitch", "tiktok", "youtube", "kick", "spotify", "meld", "obs"}:
+                cfg["status"] = "nicht verbunden"
+                cfg["detail"] = "Autoconnect aus"
+                if p in {"twitch", "youtube", "kick"}:
+                    cfg["main_status"] = self.platform_status(p, "main")
+                    cfg["bot_status"] = self.platform_status(p, "bot")
+                elif p == "tiktok":
+                    main_ok, _ = self.tiktok_account_status(cfg, "main")
+                    bot_ok, _ = self.tiktok_account_status(cfg, "bot")
+                    cfg["main_status"] = "verbunden" if main_ok else "nicht verbunden"
+                    cfg["bot_status"] = "verbunden" if bot_ok else "nicht verbunden"
                 out[p] = cfg
                 continue
 
@@ -1476,22 +1823,22 @@ class AppState:
     def plugin_enabled(self, plugin_id: str) -> bool:
         try:
             s = self.settings()
+            platforms = s.get("platforms", {}) if isinstance(s.get("platforms", {}), dict) else {}
+            platform_for_plugin = {"twitch_chat": "twitch", "tiktok_chat": "tiktok", "youtube_chat": "youtube", "kick_chat": "kick"}.get(plugin_id)
+            if platform_for_plugin:
+                pdata = platforms.get(platform_for_plugin, {}) if isinstance(platforms.get(platform_for_plugin, {}), dict) else {}
+                # Core platform switch is the source of truth for chat plugins.
+                # Old plugin-local enabled=false values must not block autoconnect.
+                return bool(pdata.get("enabled", False)) and bool(pdata.get("autoconnect", True))
+            if plugin_id == "spotis3mptify":
+                spotify = platforms.get("spotify", {}) if isinstance(platforms.get("spotify", {}), dict) else {}
+                # Same rule: Spotify page controls Spotis3mptify autostart.
+                return bool(spotify.get("enabled", False)) and bool(spotify.get("autoconnect", True))
             pcfg = s.setdefault("plugins", {}).setdefault(plugin_id, {})
-            platform_for_plugin = {"twitch_chat": "twitch", "tiktok_chat": "tiktok", "tiktok_live": "tiktok", "youtube_chat": "youtube", "kick_chat": "kick"}.get(plugin_id)
-            if platform_for_plugin and "enabled" not in pcfg:
-                if platform_for_plugin == "tiktok":
-                    tt = s.get("platforms", {}).get("tiktok", {})
-                    if isinstance(tt, dict) and bool(tt.get("main_login_ok") or tt.get("bot_login_ok")):
-                        return True
-                pdata = s.get("platforms", {}).get(platform_for_plugin, {})
-                if isinstance(pdata, dict) and any(str(pdata.get(k) or "").strip() for k in ("main_access_token", "main_refresh_token", "access_token", "refresh_token")):
-                    return True
-                return bool(s.get("platforms", {}).get(platform_for_plugin, {}).get("enabled", False))
-            if plugin_id == "spotis3mptify" and "enabled" not in pcfg:
-                return bool(s.get("platforms", {}).get("spotify", {}).get("enabled", False))
             if plugin_id == "bridg3alot" and "enabled" not in pcfg:
-                platforms = s.get("platforms", {})
                 return any(bool(platforms.get(key, {}).get("enabled", False)) for key in ("twitch", "tiktok", "youtube", "kick"))
+            if plugin_id == "modalot" and "enabled" not in pcfg:
+                return any(bool(platforms.get(key, {}).get("enabled", False)) for key in ("twitch", "youtube", "kick"))
             return bool(pcfg.get("enabled", False))
         except Exception:
             return False
@@ -2140,7 +2487,7 @@ def _available_dev_log_sources(text, plugin_ids):
 
 DEV_PLATFORM_LOG_SOURCES = {
     "twitch": {"twitch", "twitch_chat"},
-    "tiktok": {"tiktok", "tiktok_chat", "tiktok_live", "tiktok_live_alert"},
+    "tiktok": {"tiktok", "tiktok_chat", "tiktok_live_alert"},
     "youtube": {"youtube", "youtube_chat"},
     "kick": {"kick", "kick_chat"},
     "spotify": {"spotify", "spotis3mptify"},
@@ -2603,6 +2950,60 @@ class Handler(BaseHTTPRequestHandler):
         path = parsed.path
         data = self._read_json()
 
+        m_plugin_action = re.match(r"^/api/plugins/([^/]+)/action$", path)
+        if m_plugin_action:
+            plugin_id = urllib.parse.unquote(m_plugin_action.group(1)).strip()
+            key = str(data.get("key") or data.get("action") or "").strip() if isinstance(data, dict) else ""
+            if not plugin_id or not key:
+                return self._json({"ok": False, "error": "plugin_id oder action fehlt"}, 400)
+            try:
+                incoming = data.get("values") if isinstance(data, dict) and isinstance(data.get("values"), dict) else {}
+                current = st.settings()
+                current.setdefault("plugins", {})
+                old_cfg = current["plugins"].get(plugin_id, {})
+                if not isinstance(old_cfg, dict):
+                    old_cfg = {}
+                new_cfg = dict(old_cfg)
+                if isinstance(incoming, dict):
+                    new_cfg.update(incoming)
+                current["plugins"][plugin_id] = new_cfg
+                st.save_settings(current)
+
+                plugin = st.plugin_manager.load_plugin(plugin_id)
+                if hasattr(plugin, "_settings"):
+                    try:
+                        plugin._settings = dict(new_cfg)
+                    except Exception:
+                        pass
+                if hasattr(plugin, "_host"):
+                    try:
+                        plugin._host = st.plugin_manager.host
+                    except Exception:
+                        pass
+
+                handler = None
+                for name in ("on_settings_button", "handle_settings_button", "on_settings_action"):
+                    fn = getattr(plugin, name, None)
+                    if callable(fn):
+                        handler = fn
+                        break
+                if handler is None:
+                    return self._json({"ok": False, "error": "Plugin unterstuetzt keine Settings-Aktionen"}, 400)
+                try:
+                    result = handler(key, st.plugin_manager.host, None)
+                except TypeError:
+                    try:
+                        result = handler(key, st.plugin_manager.host)
+                    except TypeError:
+                        result = handler(key)
+                ok = bool(result)
+                detail = "Aktion ausgeführt." if ok else "Aktion fehlgeschlagen. Details stehen im DEV-Log."
+                self._json({"ok": ok, "plugin_id": plugin_id, "key": key, "detail": detail, "values": st.plugin_settings(plugin_id, plugin)})
+            except Exception as exc:
+                st.log(plugin_id or "plugins", "settings action failed", exc)
+                self._json({"ok": False, "error": str(exc)}, 500)
+            return
+
         m_plugin_settings = re.match(r"^/api/plugins/([^/]+)/settings$", path)
         if m_plugin_settings:
             plugin_id = urllib.parse.unquote(m_plugin_settings.group(1)).strip()
@@ -2683,23 +3084,38 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"ok": True})
 
         if path == "/api/ui-heartbeat":
+            reload_requested = bool(getattr(st, "ui_reload_requested", False))
+            reload_nonce = int(getattr(st, "ui_reload_nonce", 0) or 0)
+            if st.ui_heartbeat_lost:
+                try: st.log("ui", "main ui heartbeat recovered")
+                except Exception: pass
             st.last_ui_heartbeat = time.time()
             st.ui_heartbeat_enabled = True
-            return self._json({"ok": True, "version": VERSION})
+            st.ui_heartbeat_lost = False
+            if reload_requested:
+                st.ui_reload_requested = False
+            return self._json({"ok": True, "version": VERSION, "reload": reload_requested, "reload_nonce": reload_nonce})
 
         if path == "/api/shutdown":
-            st.log("shutdown", "requested by ui")
-            try: st.plugin_manager.stop_all()
-            except Exception: pass
-            try: st._close_obs_connection()
-            except Exception: pass
-            _schedule_hard_exit(0.4)
-            return self._json({"ok": True})
+            # UI button means exactly one thing: close the EXE process.
+            # Do not run plugin-specific shutdown routines here; Windows will tear down
+            # the child threads/process state with this process. Browser/tab close stays separate.
+            st.shutting_down = True
+            try:
+                st.log("shutdown", "exe close requested by ui")
+            except Exception:
+                pass
+            try:
+                st.mark_clean_shutdown("exe close requested by ui")
+            except Exception:
+                pass
+            _schedule_hard_exit(0.15)
+            return self._json({"ok": True, "shutdown": True, "mode": "exe_exit"})
 
         if path == "/api/spotis3mptify/overlay-state":
             try:
                 clean = self._clean_overlay_settings(data)
-                _json_save(st.data / "plugins" / "spotis3mptify" / "overlay_settings.json", clean)
+                _json_save(self._spotis_overlay_settings_path(), clean)
                 return self._json({"ok": True, "state": clean})
             except Exception as e:
                 return self._json({"ok": False, "error": str(e)}, 500)
@@ -2800,10 +3216,26 @@ class Handler(BaseHTTPRequestHandler):
             "extras": []
         }
 
+    def _spotis_overlay_settings_path(self):
+        global STATE
+        return STATE.data / "spotis3mptify" / "config" / "overlay_settings.json"
+
+    def _legacy_spotis_overlay_settings_path(self):
+        global STATE
+        return STATE.data / "plugins" / "spotis3mptify" / "overlay_settings.json"
+
     def _overlay_settings(self):
         global STATE
         default = self._overlay_default()
-        cfg = _json_load(STATE.data / "plugins" / "spotis3mptify" / "overlay_settings.json", default)
+        path = self._spotis_overlay_settings_path()
+        legacy_path = self._legacy_spotis_overlay_settings_path()
+        if not path.exists() and legacy_path.exists():
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(legacy_path, path)
+            except Exception:
+                pass
+        cfg = _json_load(path, default)
         # migrate old card settings if present
         if "background" not in cfg:
             old = cfg if isinstance(cfg, dict) else {}
@@ -2986,7 +3418,7 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 pass
             try:
-                npdir = STATE.data / "plugins" / "spotis3mptify" / "nowplaying"
+                npdir = STATE.data / "spotis3mptify" / "nowplaying"
                 npdir.mkdir(parents=True, exist_ok=True)
                 _json_save(npdir / "nowplaying.json", out)
             except Exception:
@@ -3003,7 +3435,6 @@ class Handler(BaseHTTPRequestHandler):
         if live.get("active"):
             return live
         bases = [
-            STATE.data / "plugins" / "spotis3mptify",
             STATE.data / "spotis3mptify",
         ]
         data = {}
@@ -3639,11 +4070,19 @@ def _start_ui_watchdog():
             if st is None or st.shutting_down:
                 continue
             try:
-                if st.ui_heartbeat_enabled and st.last_ui_heartbeat > 0 and time.time() - st.last_ui_heartbeat > 14.0:
-                    st.shutting_down = True
-                    try: st.log("shutdown", "main ui heartbeat lost")
-                    except Exception: pass
-                    os._exit(0)
+                if st.ui_heartbeat_enabled and st.last_ui_heartbeat > 0 and time.time() - st.last_ui_heartbeat > 8.0:
+                    now = time.time()
+                    st.ui_heartbeat_lost = True
+                    # Der Backend-Server ist das Fundament fuer Plugins, Overlays und Callback-Listener.
+                    # Ein verlorener UI-Heartbeat darf deshalb niemals den Server beenden und auch
+                    # keinen neuen Browser-Tab aufmachen. Stattdessen wird ein Reload-Flag gesetzt,
+                    # das der vorhandene Tab beim naechsten Heartbeat im selben Tab verarbeitet.
+                    if now - float(getattr(st, "last_ui_reload_request", 0.0) or 0.0) > 15.0:
+                        st.last_ui_reload_request = now
+                        st.ui_reload_requested = True
+                        st.ui_reload_nonce = _now_ms()
+                        try: st.log("ui", "main ui heartbeat lost - reload requested for existing tab")
+                        except Exception: pass
             except Exception:
                 pass
     threading.Thread(target=_watch, daemon=True).start()
@@ -3766,6 +4205,7 @@ def run(base_dir: str, open_browser: bool = True):
     httpd = WebbasedHTTPServer(("127.0.0.1", port), Handler)
     callback_servers = _start_extra_callback_servers(port)
     url = f"http://127.0.0.1:{port}/?v={VERSION}&t={_now_ms()}"
+    STATE.main_url = url
     if port != preferred_port:
         STATE.log("port_warning", f"{preferred_port} belegt, nutze {port}", "hauptseite nutzt ersatzport; callback bleibt 5173 falls frei")
     if open_browser:
@@ -3779,7 +4219,18 @@ def run(base_dir: str, open_browser: bool = True):
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
+        try:
+            STATE.mark_clean_shutdown("keyboard interrupt")
+        except Exception:
+            pass
         pass
+    except Exception as exc:
+        try:
+            STATE.log("crash", traceback.format_exc())
+            STATE.mark_unclean_exit("server exception", traceback.format_exc())
+        except Exception:
+            pass
+        raise
     finally:
         try:
             STATE.plugin_manager.stop_all()
@@ -3787,5 +4238,10 @@ def run(base_dir: str, open_browser: bool = True):
             pass
         try:
             STATE._close_obs_connection()
+        except Exception:
+            pass
+        try:
+            if STATE is not None and not STATE.shutting_down:
+                STATE.mark_clean_shutdown("server stopped")
         except Exception:
             pass

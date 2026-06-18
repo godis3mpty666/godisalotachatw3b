@@ -20,16 +20,25 @@ rem Browserfenster mit alten TikTok-Profilen beenden, sonst bleiben Cookie-Daten
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$root=(Resolve-Path '.').Path; $distData=(Join-Path $root 'dist\webbased\data'); if(Test-Path $distData){ Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and $_.CommandLine.Contains($distData) } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } }" >nul 2>nul
 
 rem Einen Moment warten, damit Browser/SQLite-Cookie-Daten sauber freigegeben werden.
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Sleep -Milliseconds 900" >nul 2>nul
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Sleep -Milliseconds 2500" >nul 2>nul
 
 rem Zuletzt in der EXE verwendete Einstellungen, Tokens und Plugin-Daten sichern.
+rem Wichtig: vorhandene Root-Auth vorher sichern. Ein leerer/frischer dist\webbased\data
+rem darf beim Rebuild keine funktionierenden OAuth-Dateien im Projektroot plattmachen.
+if exist temp rmdir /s /q temp
+if exist "data\auth" (
+    mkdir "temp\root_auth_backup" >nul 2>nul
+    robocopy "data\auth" "temp\root_auth_backup" /E /R:2 /W:1 /NFL /NDL /NJH /NJS /NP >nul
+)
 if exist "dist\webbased\data" (
     echo Uebernehme vorhandene Laufzeit- und Anmeldedaten aus dist...
-    robocopy "dist\webbased\data" "data" /E /XD %DATA_EXCLUDE_DIRS% /XF %DATA_EXCLUDE_FILES% /NFL /NDL /NJH /NJS /NP >nul
+    robocopy "dist\webbased\data" "data" /E /R:5 /W:1 /XD %DATA_EXCLUDE_DIRS% /XF %DATA_EXCLUDE_FILES% /NFL /NDL /NJH /NJS /NP >nul
     if errorlevel 8 goto :fail
 )
+if exist "temp\root_auth_backup" (
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "$backup='temp\root_auth_backup'; $auth='data\auth'; New-Item -ItemType Directory -Force -Path $auth | Out-Null; Get-ChildItem $backup -Filter *.json -ErrorAction SilentlyContinue | ForEach-Object { $dst=Join-Path $auth $_.Name; $has=$false; if(Test-Path $dst){ try{ $j=Get-Content $dst -Raw | ConvertFrom-Json; if($j.access_token -or $j.refresh_token){ $has=$true } } catch{} }; if(-not $has){ Copy-Item $_.FullName $dst -Force } }"
+)
 
-if exist temp rmdir /s /q temp
 if exist dist rmdir /s /q dist
 
 rem Virtuelle Umgebung neben dist dauerhaft verwenden.
@@ -51,12 +60,12 @@ if errorlevel 1 goto :fail
 
 rem Module bleiben neben der EXE erweiterbar; die Kopie in _internal ist nur der gebuendelte Fallback.
 if exist "dist\webbased\modules" rmdir /s /q "dist\webbased\modules"
-robocopy "modules" "dist\webbased\modules" /E /NFL /NDL /NJH /NJS /NP >nul
+robocopy "modules" "dist\webbased\modules" /E /XD __pycache__ /NFL /NDL /NJH /NJS /NP >nul
 if errorlevel 8 goto :fail
 
 rem Alle portablen Einstellungen, Tokens und Plugin-Daten neben die neue EXE kopieren.
 if not exist "dist\webbased\data" mkdir "dist\webbased\data"
-robocopy "data" "dist\webbased\data" /E /XD %DATA_EXCLUDE_DIRS% /XF %DATA_EXCLUDE_FILES% /NFL /NDL /NJH /NJS /NP >nul
+robocopy "data" "dist\webbased\data" /E /R:5 /W:1 /XD %DATA_EXCLUDE_DIRS% /XF %DATA_EXCLUDE_FILES% /NFL /NDL /NJH /NJS /NP >nul
 if errorlevel 8 goto :fail
 if not exist "dist\webbased\data\plugins" mkdir "dist\webbased\data\plugins"
 

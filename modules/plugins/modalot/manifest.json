@@ -1,0 +1,8 @@
+{
+  "id": "modalot",
+  "name": "modalot ver. 0.10",
+  "version": "0.10",
+  "description": "Standalone moderation plugin with per-platform blacklist rule tabs for Twitch, Kick and YouTube. TikTok moderation is hidden and disabled because TikTok currently has no supported moderation API here.",
+  "entry": "plugin.py",
+  "display_name": "modalot ver. 0.10"
+}

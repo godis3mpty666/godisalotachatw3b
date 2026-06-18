@@ -99,7 +99,7 @@ def _to_int(value: Any, default: int = 0, min_value: int | None = None, max_valu
 
 def _clean_platform(value: Any) -> str:
     p = str(value or '').strip().lower()
-    if p in {'tt', 'tiktok_live'}:
+    if p in {'tt', 'tiktok_chat'}:
         return 'tiktok'
     if p in {'tw', 'twitch_chat'}:
         return 'twitch'

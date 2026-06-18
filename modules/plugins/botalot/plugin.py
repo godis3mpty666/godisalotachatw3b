@@ -19,6 +19,7 @@ from common import as_bool, clean_text, to_int
 from context_memory import ContextMemory
 PLUGIN_VERSION = "1.22"
 PLUGIN_NAME = f"botalot ver. {PLUGIN_VERSION}"
+CHAT_PLATFORMS = ("twitch", "tiktok", "youtube", "kick")
 
 
 def _data_dir() -> Path:
@@ -59,6 +60,7 @@ class BotalotPlugin(ProviderPlugin):
             {"key": "custom_system_prompt", "label": "Eigener Prompt", "type": "multiline", "wide": True},
             {"key": "trigger_commands", "label": "Commands", "placeholder": "!bot,!ask,!ai", "wide": True},
             {"key": "reply_to_source", "label": "Antwort an Ursprungsplattform senden", "type": "bool"},
+            {"key": "bridge_replies", "label": "Antwort an andere Plattformen bridgen", "type": "bool"},
             {"key": "emit_to_desktop", "label": "Antwort im Desktopchat anzeigen", "type": "bool"},
             {"key": "cooldown_seconds", "label": "Cooldown Sekunden", "type": "number", "min": 0, "max": 600},
             {"key": "context_messages", "label": "Kontext-Nachrichten pro User", "type": "number", "min": 1, "max": 30},
@@ -75,6 +77,7 @@ class BotalotPlugin(ProviderPlugin):
             "custom_system_prompt": "Du bist ein Chatbot fuer einen Livestream. Bleibe im Charakter, reagiere natuerlich und halte dich an die Kanalregeln.",
             "trigger_commands": "!bot,!ask,!ai",
             "reply_to_source": True,
+            "bridge_replies": True,
             "emit_to_desktop": True,
             "cooldown_seconds": 8,
             "context_messages": 8,
@@ -171,7 +174,7 @@ class BotalotPlugin(ProviderPlugin):
         else:
             raw = getattr(payload, "platform", "") or getattr(payload, "source_plugin_id", "") or plugin_id
         text = str(raw or "").strip().lower()
-        return {"twitch_chat": "twitch", "tiktok_chat": "tiktok", "tiktok_live": "tiktok", "youtube_chat": "youtube", "kick_chat": "kick"}.get(text, text)
+        return {"twitch_chat": "twitch", "tiktok_chat": "tiktok", "youtube_chat": "youtube", "kick_chat": "kick"}.get(text, text)
 
     def _message_text(self, payload: Any) -> str:
         if isinstance(payload, dict):
@@ -192,6 +195,58 @@ class BotalotPlugin(ProviderPlugin):
         if isinstance(payload, dict):
             return str(payload.get("message_type") or payload.get("type") or payload.get("event_type") or "chat").strip().lower()
         return str(getattr(payload, "message_type", "") or getattr(payload, "type", "") or "chat").strip().lower()
+
+    def _platform_write_available(self, platform: str) -> bool:
+        cfg = self._host_platform_settings(platform)
+        if not isinstance(cfg, dict):
+            return False
+        if "enabled" in cfg and not as_bool(cfg.get("enabled"), False):
+            if platform != "tiktok" or not (cfg.get("main_login_ok") or cfg.get("bot_login_ok")):
+                return False
+        if not as_bool(cfg.get("write_enabled"), True):
+            return False
+        if platform == "tiktok":
+            return bool(cfg.get("main_login_ok") or cfg.get("bot_login_ok") or cfg.get("main_account") or cfg.get("bot_account"))
+        if platform == "youtube":
+            has_token = any(str(cfg.get(k) or "").strip() for k in ("access_token", "refresh_token", "main_access_token", "main_refresh_token"))
+            has_channel = any(str(cfg.get(k) or "").strip() for k in ("main_channel_id", "broadcaster_channel_id", "main_account", "channel"))
+            return bool(has_token and has_channel)
+        if platform == "kick":
+            has_token = any(str(cfg.get(k) or "").strip() for k in ("access_token", "refresh_token", "main_access_token", "main_refresh_token"))
+            has_channel = any(str(cfg.get(k) or "").strip() for k in ("broadcaster_user_id", "channel_id", "main_user_id", "channel_slug", "main_account", "channel"))
+            return bool(has_token and has_channel)
+        if platform == "twitch":
+            has_token = any(str(cfg.get(k) or "").strip() for k in ("access_token", "refresh_token", "main_access_token", "main_refresh_token"))
+            has_channel = any(str(cfg.get(k) or "").strip() for k in ("channel", "main_account", "main", "broadcaster_user_id", "broadcaster_id"))
+            return bool(has_token and has_channel)
+        return False
+
+    def _copy_reply_text(self, source_platform: str, username: str, reply: str, target_platform: str) -> str:
+        source = {"twitch": "Twitch", "tiktok": "TT", "youtube": "YouTube", "kick": "Kick"}.get(source_platform, source_platform)
+        text = f"{source}-AI answer to {username}: {reply}"
+        limit = 150 if target_platform == "tiktok" else 240
+        if len(text) > limit:
+            text = text[: max(20, limit - 3)].rstrip() + "..."
+        return text
+
+    def _send_reply_to_platforms(self, settings: dict[str, Any], source_platform: str, username: str, reply: str) -> None:
+        if self._host is None:
+            return
+        if as_bool(settings.get("reply_to_source"), True):
+            sent = bool(self._host.send_platform_message(source_platform, reply, sender=self.plugin_id))
+            if not sent:
+                self._log(f"Antwort konnte nicht an {source_platform} gesendet werden.")
+        if not as_bool(settings.get("bridge_replies"), True):
+            return
+        for target in CHAT_PLATFORMS:
+            if target == source_platform:
+                continue
+            if not self._platform_write_available(target):
+                continue
+            copy_text = self._copy_reply_text(source_platform, username, reply, target)
+            sent = bool(self._host.send_platform_message(target, copy_text, sender=self.plugin_id))
+            if not sent:
+                self._log(f"Antwortkopie konnte nicht an {target} gesendet werden.")
 
     def _command_trigger(self, settings: dict[str, Any], text: str) -> tuple[bool, str, str]:
         commands = self._command_triggers(settings)
@@ -275,11 +330,10 @@ class BotalotPlugin(ProviderPlugin):
                     "channel": channel,
                     "message_type": "chat",
                     "source_plugin_id": self.plugin_id,
+                    "dispatch_to_plugins": False,
+                    "botalot_reply": True,
                 })
-            if as_bool(settings.get("reply_to_source"), True) and self._host is not None:
-                sent = bool(self._host.send_platform_message(platform, reply, sender=self.plugin_id))
-                if not sent:
-                    self._log(f"Antwort konnte nicht an {platform} gesendet werden.")
+            self._send_reply_to_platforms(settings, platform, username, reply)
         finally:
             self._worker_lock.release()
 

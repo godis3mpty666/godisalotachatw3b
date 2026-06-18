@@ -1,5 +1,12 @@
 # godisalotachat webbased
 
+## 0.68
+
+- Autoconnect-Auswahl im Core jetzt für alle Plattformen ergänzt: Twitch, TikTok, YouTube, Kick, Spotify, OpenAI, Meld und OBS.
+- Plattform-Plugins starten beim App-Start nur noch automatisch, wenn die jeweilige Plattform aktiv ist und Autoconnect eingeschaltet ist.
+- Spotify/Spotis3mptify respektiert den Autoconnect-Schalter aus der Plattform-Seite.
+
+
 Lokales Web-Dashboard mit Plugins fuer Twitch, YouTube, TikTok, Kick, Spotify,
 OBS und Meld.
 
@@ -66,3 +73,20 @@ einem erfolgreichen Build wird er automatisch entfernt.
 - [psychoedge](https://github.com/psychoedge)
 
 Historische Versionshinweise stehen in `README.txt`.
+
+
+## 0.62
+
+- UI-Heartbeat öffnet keine neuen Tabs mehr.
+- Reload erfolgt ausschließlich im vorhandenen Tab per Heartbeat-Flag.
+- Backend, Plugins, Overlays und Callback-Listener bleiben weiter aktiv.
+
+## v0.65
+
+- Neuer Beenden-Button oben rechts in der Weboberfläche.
+- Der Button stoppt Plugins, lokale Verbindungen und beendet danach die EXE/den Server sauber.
+- Browser/Tab schließen beendet weiterhin nicht automatisch die EXE.
+
+
+## 0.74
+- modalot: Plattform-Reiter auf die anklickbaren Regeln reduziert; Status/Rechte/Textfeld-Bereich aus den Plattform-Tabs entfernt.

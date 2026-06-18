@@ -437,7 +437,7 @@ class Info3ditorPlugin(ThreadedPlugin):
         custom = _clean_text(settings.get('main_profile_dir') or settings.get('profile_dir') or settings.get('browser_profile_dir')).strip('"')
         if custom:
             return Path(custom).expanduser()
-        return data_dir() / 'tiktok_live' / 'profile'
+        return data_dir() / 'tiktok' / 'main_profile'
 
     def _tiktok_profile_has_login_hint(self, profile_dir: Path) -> bool:
         try:

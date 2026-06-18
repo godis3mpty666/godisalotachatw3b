@@ -13,7 +13,22 @@ function nav(active){
   return `<aside class="sidebar"><div class="brand"><div class="logo"></div><div><h1>godisalotachat</h1><div class="ver">Ver. ${window.WEB_VERSION}</div></div><div class="webbased">webbased</div></div><nav class="nav">${items.map(i=>`<a class="${active===i[0]?'active':''}" href="${i[2]}">${i[1]}</a>`).join("")}</nav></aside>`;
 }
 function shell(active, title, sub, body){
-  $("#app").innerHTML = `<div class="layout">${nav(active)}<main class="content"><div class="top"><div><h2>${title}</h2><div class="sub">${sub||""}</div></div></div>${body}</main></div>`;
+  $("#app").innerHTML = `<div class="layout">${nav(active)}<main class="content"><div class="top"><div><h2>${title}</h2><div class="sub">${sub||""}</div></div><button type="button" id="shutdownApp" class="shutdownBtn" title="EXE schließen">Beenden</button></div>${body}</main></div>`;
+  wireShutdownButton();
+}
+async function shutdownApp(){
+  const btn = $("#shutdownApp");
+  if(btn && btn.disabled) return;
+  if(!confirm("EXE wirklich schließen?")) return;
+  if(btn){ btn.disabled = true; btn.textContent = "Schließt…"; }
+  try{
+    await api("/api/shutdown",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}",timeoutMs:2500});
+  }catch(_){ }
+  document.body.innerHTML = `<div class="shutdownScreen"><div><h1>godisalotachat wird geschlossen</h1><p>Die EXE wird beendet. Falls der Tab offen bleibt, kannst du ihn schließen.</p></div></div>`;
+}
+function wireShutdownButton(){
+  const btn = $("#shutdownApp");
+  if(btn) btn.onclick = shutdownApp;
 }
 async function api(url, opts){
   const r=await fetch(url,{cache:"no-store",...(opts||{})});
@@ -198,6 +213,19 @@ async function refreshNowPlaying(){
   }
 }
 function field(name,label,val,type="text"){ return `<label><div>${label}</div><input name="${name}" type="${type}" value="${esc(val||"")}" autocomplete="on" autocapitalize="off" spellcheck="false"></label>`; }
+function applyFormValues(target, form, options={}){
+  target = target || {};
+  const preserveEmptyPassword = options.preserveEmptyPassword !== false;
+  const boolKeys = new Set(options.boolKeys || ["enabled","autoconnect"]);
+  for(const [k,v] of new FormData(form).entries()){
+    const el = form.elements[k];
+    if(preserveEmptyPassword && el && el.type === "password" && !String(v||"").trim() && target[k]){
+      continue;
+    }
+    target[k] = boolKeys.has(k) ? (v==="true") : String(v);
+  }
+  return target;
+}
 const DEV_LINKS = {
   twitch: "https://dev.twitch.tv/console/apps",
   youtube: "https://console.cloud.google.com/apis/credentials",
@@ -237,9 +265,9 @@ function platformForm(p,cfg){
   if(p==="tiktok") return `<form class="platformForm" data-platform="${p}">${sel("enabled","Aktiv",cfg.enabled)}${sel("autoconnect","Autoconnect",cfg.autoconnect ?? true)}${field("main","Main/Kanal",cfg.main)}${field("bot","Botaccount",cfg.bot)}<div class="hint">TikTok nutzt getrennte gespeicherte Browserprofile für Main und Bot. Es gibt keine Redirect URL. Beim Login öffnet sich die TikTok-Anmeldeseite, dort kannst du dich z.B. per QR-Code anmelden.</div><div class="btnLine"><button type="submit">Speichern</button><button type="button" class="btn tiktokLogin" data-account="main">Main anmelden</button><button type="button" class="btn tiktokLogin" data-account="bot">Bot anmelden</button><button type="button" class="secondary disconnect" data-platform="${p}" data-account="main">Main trennen</button><button type="button" class="secondary disconnect" data-platform="${p}" data-account="bot">Bot trennen</button><span class="small">Status: ${esc(cfg.status||"nicht verbunden")}${cfg.detail ? " · "+esc(cfg.detail) : ""}</span></div></form>`;
   if(p==="meld") return `<form class="platformForm" data-platform="${p}">${sel("enabled","Aktiv",cfg.enabled)}${sel("autoconnect","Autoconnect",cfg.autoconnect ?? true)}${field("host","Host",cfg.host || "127.0.0.1")}${field("port","Port",cfg.port || "13376")}<div class="hint">Meld Studio braucht keine Anmeldedaten. Wie im Original wird nur per lokalem WebSocket verbunden.</div><div class="btnLine"><button type="submit">Speichern</button><button type="button" class="secondary testMeld">Verbindung testen</button><span class="small">Status: ${esc(cfg.status||"nicht verbunden")}${cfg.detail ? " · "+esc(cfg.detail) : ""}</span></div></form>`;
   if(p==="obs") return `<form class="platformForm" data-platform="${p}">${sel("enabled","Aktiv",cfg.enabled)}${sel("autoconnect","Autoconnect",cfg.autoconnect ?? true)}${field("host","Host",cfg.host || "127.0.0.1")}${field("port","Port",cfg.port || "4455")}${field("password","Passwort",cfg.password,"password")}<div class="hint">OBS WebSocket Standard: <b>ws://127.0.0.1:4455</b>. In OBS muss unter <b>Werkzeuge &gt; WebSocket-Servereinstellungen</b> der WebSocket-Server aktiviert sein.</div><div class="btnLine"><button type="submit">Speichern</button><button type="button" class="secondary testObs">Verbindung testen</button><span class="small">Status: ${esc(cfg.status||"nicht verbunden")}${cfg.detail ? " · "+esc(cfg.detail) : ""}</span></div></form>`;
-  if(p==="spotify") return `<form class="platformForm" data-platform="${p}">${sel("enabled","Aktiv",cfg.enabled)}${field("client_id","Client ID",cfg.client_id)}${field("client_secret","Client Secret",cfg.client_secret,"password")}${redirectFieldOnly("Redirect URI",cfg.redirect_uri || "http://127.0.0.1:5173/callback")}<div class="hint">Spotify braucht keinen Accountnamen. Die Redirect URI ist manuell einstellbar und wird genau so für OAuth benutzt.</div><div class="btnLine"><button type="submit">Speichern</button><a class="btn login" data-platform="${p}" data-account="main" href="#">Spotify anmelden</a><button type="button" class="secondary disconnect" data-platform="${p}" data-account="main">Trennen</button>${devButton(p)}<span class="small">Status: ${esc(cfg.status||"nicht verbunden")}</span></div></form>`;
-  if(p==="openai") return `<form class="platformForm" data-platform="${p}">${sel("enabled","Aktiv",cfg.enabled)}${field("api_key","API-Key",cfg.api_key,"password")}${field("organization","Organisations-ID (optional)",cfg.organization)}${field("project","Projekt-ID (optional)",cfg.project)}<div class="hint">Der API-Key wird lokal in <b>data/settings.json</b> gespeichert. Ein ChatGPT-Abo enthaelt nicht automatisch API-Guthaben. Der Verbindungstest ruft nur die Modellliste der offiziellen OpenAI-API ab und erzeugt keine Antwort. Modelle waehlst du im jeweiligen Plugin.</div><div class="btnLine"><button type="submit">Speichern</button><button type="button" class="secondary testOpenAI">Verbindung testen</button><button type="button" class="secondary disconnect" data-platform="${p}" data-account="main">API-Key entfernen</button>${devButton(p)}<span class="small">Status: ${esc(cfg.status||"nicht verbunden")}${cfg.detail ? " - "+esc(cfg.detail) : ""}</span></div></form>`;
-  return `<form class="platformForm" data-platform="${p}">${sel("enabled","Aktiv",cfg.enabled)}${field("main","Main/Kanal",cfg.main)}${field("bot","Bot",cfg.bot)}${field("client_id","Client ID",cfg.client_id)}${field("client_secret","Client Secret",cfg.client_secret,"password")}${redirectFieldOnly("Redirect URI",cfg.redirect_uri)}<div class="btnLine"><button type="submit">Speichern</button><a class="btn login" data-platform="${p}" data-account="main" href="#">OAuth Main</a><a class="btn login" data-platform="${p}" data-account="bot" href="#">OAuth Bot</a><button type="button" class="secondary disconnect" data-platform="${p}" data-account="main">Main trennen</button><button type="button" class="secondary disconnect" data-platform="${p}" data-account="bot">Bot trennen</button>${devButton(p)}<span class="small">Status: ${esc(cfg.status||"nicht verbunden")}</span></div></form>`;
+  if(p==="spotify") return `<form class="platformForm" data-platform="${p}">${sel("enabled","Aktiv",cfg.enabled)}${sel("autoconnect","Autoconnect",cfg.autoconnect ?? true)}${field("client_id","Client ID",cfg.client_id)}${field("client_secret","Client Secret",cfg.client_secret,"password")}${redirectFieldOnly("Redirect URI",cfg.redirect_uri || "http://127.0.0.1:5173/callback")}<div class="hint">Spotify braucht keinen Accountnamen. Die Redirect URI ist manuell einstellbar und wird genau so für OAuth benutzt.</div><div class="btnLine"><button type="submit">Speichern</button><a class="btn login" data-platform="${p}" data-account="main" href="#">Spotify anmelden</a><button type="button" class="secondary disconnect" data-platform="${p}" data-account="main">Trennen</button>${devButton(p)}<span class="small">Status: ${esc(cfg.status||"nicht verbunden")}</span></div></form>`;
+  if(p==="openai") return `<form class="platformForm" data-platform="${p}">${sel("enabled","Aktiv",cfg.enabled)}${sel("autoconnect","Autoconnect",cfg.autoconnect ?? true)}${field("api_key","API-Key",cfg.api_key,"password")}${field("organization","Organisations-ID (optional)",cfg.organization)}${field("project","Projekt-ID (optional)",cfg.project)}<div class="hint">Der API-Key wird lokal in <b>data/settings.json</b> gespeichert. Ein ChatGPT-Abo enthaelt nicht automatisch API-Guthaben. Der Verbindungstest ruft nur die Modellliste der offiziellen OpenAI-API ab und erzeugt keine Antwort. Modelle waehlst du im jeweiligen Plugin.</div><div class="btnLine"><button type="submit">Speichern</button><button type="button" class="secondary testOpenAI">Verbindung testen</button><button type="button" class="secondary disconnect" data-platform="${p}" data-account="main">API-Key entfernen</button>${devButton(p)}<span class="small">Status: ${esc(cfg.status||"nicht verbunden")}${cfg.detail ? " - "+esc(cfg.detail) : ""}</span></div></form>`;
+  return `<form class="platformForm" data-platform="${p}">${sel("enabled","Aktiv",cfg.enabled)}${sel("autoconnect","Autoconnect",cfg.autoconnect ?? true)}${field("main","Main/Kanal",cfg.main)}${field("bot","Bot",cfg.bot)}${field("client_id","Client ID",cfg.client_id)}${field("client_secret","Client Secret",cfg.client_secret,"password")}${redirectFieldOnly("Redirect URI",cfg.redirect_uri)}<div class="btnLine"><button type="submit">Speichern</button><a class="btn login" data-platform="${p}" data-account="main" href="#">OAuth Main</a><a class="btn login" data-platform="${p}" data-account="bot" href="#">OAuth Bot</a><button type="button" class="secondary disconnect" data-platform="${p}" data-account="main">Main trennen</button><button type="button" class="secondary disconnect" data-platform="${p}" data-account="bot">Bot trennen</button>${devButton(p)}<span class="small">Status: ${esc(cfg.status||"nicht verbunden")}</span></div></form>`;
 }
 async function renderPlatforms(){
   const {settings,status}=await loadAll(); const p=settings.platforms;
@@ -247,12 +275,11 @@ async function renderPlatforms(){
   $$("form[data-platform]").forEach(form=>{
     form.onsubmit=async(e)=>{
       e.preventDefault();
-      const pf=form.dataset.platform; const fd=new FormData(form);
+      const pf=form.dataset.platform;
       settingsCache = settingsCache || await api("/api/settings");
       settingsCache.platforms[pf] = settingsCache.platforms[pf] || {};
       if(pf === "obs") normalizeObsFields(form);
-      const fd2=new FormData(form);
-      for(const [k,v] of fd2.entries()) settingsCache.platforms[pf][k] = (k==="enabled"||k==="autoconnect") ? (v==="true") : String(v);
+      applyFormValues(settingsCache.platforms[pf], form);
       if(pf === "openai"){ delete settingsCache.platforms[pf].model; }
       if(pf === "spotify"){ delete settingsCache.platforms[pf].main; delete settingsCache.platforms[pf].bot; }
       if(pf === "tiktok"){
@@ -269,10 +296,9 @@ async function renderPlatforms(){
   });
   $$(".testMeld").forEach(b=>b.onclick=async()=>{
     const form=b.closest("form");
-    const fd=new FormData(form);
     settingsCache = settingsCache || await api("/api/settings");
     settingsCache.platforms.meld = settingsCache.platforms.meld || {};
-    for(const [k,v] of fd.entries()) settingsCache.platforms.meld[k] = (k==="enabled"||k==="autoconnect") ? (v==="true") : String(v);
+    applyFormValues(settingsCache.platforms.meld, form);
     delete settingsCache.platforms.meld.password;
     await api("/api/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(settingsCache)});
     const res=await api("/api/test-platform/meld");
@@ -282,10 +308,9 @@ async function renderPlatforms(){
   $$(".testObs").forEach(b=>b.onclick=async()=>{
     const form=b.closest("form");
     normalizeObsFields(form);
-    const fd=new FormData(form);
     settingsCache = settingsCache || await api("/api/settings");
     settingsCache.platforms.obs = settingsCache.platforms.obs || {};
-    for(const [k,v] of fd.entries()) settingsCache.platforms.obs[k] = (k==="enabled"||k==="autoconnect") ? (v==="true") : String(v);
+    applyFormValues(settingsCache.platforms.obs, form);
     await api("/api/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(settingsCache)});
     const res=await api("/api/test-platform/obs");
     alert((res.ok ? "Verbunden: " : "Nicht verbunden: ") + (res.detail || ""));
@@ -293,10 +318,9 @@ async function renderPlatforms(){
   });
   $$(".testOpenAI").forEach(b=>b.onclick=async()=>{
     const form=b.closest("form");
-    const fd=new FormData(form);
     settingsCache = settingsCache || await api("/api/settings");
     settingsCache.platforms.openai = settingsCache.platforms.openai || {};
-    for(const [k,v] of fd.entries()) settingsCache.platforms.openai[k] = (k==="enabled") ? (v==="true") : String(v);
+    applyFormValues(settingsCache.platforms.openai, form);
     await api("/api/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(settingsCache)});
     const res=await api("/api/test-platform/openai");
     alert((res.ok ? "Verbunden: " : "Nicht verbunden: ") + (res.detail || ""));
@@ -304,10 +328,9 @@ async function renderPlatforms(){
   });
   $$(".tiktokLogin").forEach(b=>b.onclick=async()=>{
     const form=b.closest("form");
-    const fd=new FormData(form);
     settingsCache = settingsCache || await api("/api/settings");
     settingsCache.platforms.tiktok = settingsCache.platforms.tiktok || {};
-    for(const [k,v] of fd.entries()) settingsCache.platforms.tiktok[k] = (k==="enabled"||k==="autoconnect") ? (v==="true") : String(v);
+    applyFormValues(settingsCache.platforms.tiktok, form);
     settingsCache.platforms.tiktok.main_account = (settingsCache.platforms.tiktok.main || "").replace(/^@/, "");
     settingsCache.platforms.tiktok.bot_account = (settingsCache.platforms.tiktok.bot || "").replace(/^@/, "");
     settingsCache.platforms.tiktok.unique_id = settingsCache.platforms.tiktok.main_account;
@@ -326,10 +349,9 @@ async function renderPlatforms(){
     const pf=form.dataset.platform;
     const oauthUrl=`/oauth/start/${a.dataset.platform}/${a.dataset.account}`;
     const oauthWindow=window.open("about:blank",`oauth_${a.dataset.platform}_${a.dataset.account}`,"width=1000,height=800");
-    const fd=new FormData(form);
     settingsCache = settingsCache || await api("/api/settings");
     settingsCache.platforms[pf] = settingsCache.platforms[pf] || {};
-    for(const [k,v] of fd.entries()) settingsCache.platforms[pf][k] = (k==="enabled") ? (v==="true") : String(v);
+    applyFormValues(settingsCache.platforms[pf], form, {boolKeys:["enabled"]});
     if(pf === "spotify"){ delete settingsCache.platforms[pf].main; delete settingsCache.platforms[pf].bot; }
     await api("/api/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(settingsCache)});
     if(oauthWindow) oauthWindow.location.href=oauthUrl;
@@ -378,10 +400,19 @@ function renderPluginField(field, values){
   const readonly=field.readonly||field.disabled;
   const ro=readonly?"readonly disabled":"";
   const wide=(field.wide||field.full_width||field.fullWidth||field.span==="full")?" wide":"";
+  const compact=(field.compact||field.dense)?" compact":"";
+  const hideIf=field.hide_if||field.hideIf||null;
+  const hideMode=field.hide_mode||field.hideMode||"";
+  const hideAttrs=hideIf&&hideIf.key?` data-hide-key="${esc(hideIf.key)}" data-hide-value="${esc(hideIf.value??"")}"${hideMode?` data-hide-mode="${esc(hideMode)}"`:""}`:"";
+  const cls=(wide+compact).trim();
   const helpHtml=help?`<div class="hint${wide}">${esc(help)}</div>`:"";
+  if(type==="button" || type==="action"){
+    const buttonText=field.button_text||field.text||label||"Ausführen";
+    return `<label class="settingsAction${wide}${compact}"${hideAttrs}><div>${label}</div><button type="button" class="secondary pluginActionBtn" data-key="${esc(key)}" ${readonly?"disabled":""}>${esc(buttonText)}</button></label>${helpHtml}`;
+  }
   if(type==="bool" || type==="boolean" || type==="checkbox"){
     const checked=(value===true||String(value).toLowerCase()==="true"||String(value)==="1")?"checked":"";
-    return `<label class="settingsBool${wide}"><input name="${esc(key)}" type="checkbox" ${checked} ${readonly?"disabled":""}><span>${label}</span></label>${helpHtml}`;
+    return `<label class="settingsBool${wide}${compact}"${hideAttrs}><input name="${esc(key)}" type="checkbox" ${checked} ${readonly?"disabled":""}><span>${label}</span></label>${helpHtml}`;
   }
   const opts=field.options||field.choices||field.values;
   if((type==="select" || Array.isArray(opts)) && Array.isArray(opts)){
@@ -394,22 +425,91 @@ function renderPluginField(field, values){
       const l=typeof o==="object"?(o.label??o.name??v):o;
       return `<option value="${esc(v)}" ${String(value??"")===String(v)?"selected":""}>${esc(l)}</option>`;
     }).join("");
-    return `<label class="${wide.trim()}"><div>${label}</div><select name="${esc(key)}" ${readonly?"disabled":""}>${options}</select></label>${helpHtml}`;
+    return `<label class="${cls}"${hideAttrs}><div>${label}</div><select name="${esc(key)}" ${readonly?"disabled":""}>${options}</select></label>${helpHtml}`;
+  }
+  if(type==="taglist" || type==="chips" || type==="userlist"){
+    return `<div class="settingsTagListField ${cls}"${hideAttrs} data-enhanced-taglist="1" data-key="${esc(key)}"><div class="settingsFieldTitle">${label}</div><input class="tagListInput" type="text" placeholder="${esc(field.placeholder||"Eintrag eingeben und Enter drücken")}" ${readonly?"disabled":""}><div class="tagListChips"></div><textarea name="${esc(key)}" class="tagListValue" ${ro}>${esc(value??field.default??"")}</textarea></div>${helpHtml}`;
+  }
+  if(type==="template" || type==="template_editor"){
+    const tokens=Array.isArray(field.tokens)?field.tokens:["{user}","{platform}","{word}","{action}","{duration}"];
+    return `<div class="settingsTemplateField ${cls}"${hideAttrs} data-enhanced-template="1" data-key="${esc(key)}"><div class="settingsFieldTitle">${label}</div><textarea name="${esc(key)}" ${ro} placeholder="${esc(field.placeholder||"")}">${esc(value??field.default??"")}</textarea><div class="templateTokenRow">${tokens.map(t=>`<button type="button" class="secondary templateToken" data-token="${esc(t)}" ${readonly?"disabled":""}>${esc(t)}</button>`).join("")}</div><div class="templatePreview"><span>Vorschau:</span> <b></b></div></div>${helpHtml}`;
   }
   if(type==="multiline" || type==="textarea"){
-    return `<label class="${wide.trim()}"><div>${label}</div><textarea name="${esc(key)}" ${ro} placeholder="${esc(field.placeholder||"")}">${esc(value??field.default??"")}</textarea></label>${helpHtml}`;
+    return `<label class="${cls}"${hideAttrs}><div>${label}</div><textarea name="${esc(key)}" ${ro} placeholder="${esc(field.placeholder||"")}">${esc(value??field.default??"")}</textarea></label>${helpHtml}`;
   }
   const inputType=(type==="number"||type==="int"||type==="float")?"number":(type==="password"?"password":"text");
-  return `<label class="${wide.trim()}"><div>${label}</div><input name="${esc(key)}" type="${inputType}" value="${esc(value??field.default??"")}" ${ro} placeholder="${esc(field.placeholder||"")}"></label>${helpHtml}`;
+  return `<label class="${cls}"${hideAttrs}><div>${label}</div><input name="${esc(key)}" type="${inputType}" value="${esc(value??field.default??"")}" ${ro} placeholder="${esc(field.placeholder||"")}"></label>${helpHtml}`;
 }
+
+function initPluginEnhancedFields(root){
+  if(!root) return;
+  $$('[data-enhanced-taglist="1"]', root).forEach(box=>{
+    const area=box.querySelector('textarea.tagListValue');
+    const input=box.querySelector('input.tagListInput');
+    const chips=box.querySelector('.tagListChips');
+    if(!area || !input || !chips || box.dataset.ready === "1") return;
+    box.dataset.ready="1";
+    const parse=()=>String(area.value||"").split(/[\n,;]+/).map(x=>x.trim()).filter(Boolean);
+    const sync=(items)=>{area.value=[...new Set(items.map(x=>x.trim()).filter(Boolean))].join("\n"); render(); area.dispatchEvent(new Event('change',{bubbles:true}));};
+    const render=()=>{
+      const items=parse();
+      chips.innerHTML=items.length?items.map((item,idx)=>`<button type="button" class="tagChip" data-idx="${idx}" title="Entfernen">${esc(item)}<span>×</span></button>`).join(""):`<div class="emptyChips">Noch keine ignorierten User.</div>`;
+      $$('.tagChip', chips).forEach(btn=>btn.onclick=()=>{const next=parse(); next.splice(Number(btn.dataset.idx||0),1); sync(next);});
+    };
+    input.addEventListener('keydown', ev=>{
+      if(ev.key !== 'Enter') return;
+      ev.preventDefault();
+      const val=String(input.value||"").trim().replace(/^[@#]+/,"");
+      if(!val) return;
+      sync([...parse(), val]);
+      input.value="";
+    });
+    input.addEventListener('blur', ()=>{
+      const val=String(input.value||"").trim().replace(/^[@#]+/,"");
+      if(!val) return;
+      sync([...parse(), val]);
+      input.value="";
+    });
+    render();
+  });
+  $$('[data-enhanced-template="1"]', root).forEach(box=>{
+    const area=box.querySelector('textarea');
+    const preview=box.querySelector('.templatePreview b');
+    if(!area || box.dataset.ready === "1") return;
+    box.dataset.ready="1";
+    const update=()=>{
+      if(preview){
+        let sample=String(area.value||"");
+        const repl={"{user}":"baduser","{platform}":"twitch","{word}":"spamwort","{action}":"timeout","{duration}":"600"};
+        for(const [k,v] of Object.entries(repl)) sample=sample.split(k).join(v);
+        preview.textContent=sample || "leer";
+      }
+    };
+    $$('.templateToken', box).forEach(btn=>btn.onclick=()=>{
+      const token=btn.dataset.token||"";
+      const start=area.selectionStart ?? area.value.length;
+      const end=area.selectionEnd ?? area.value.length;
+      area.value=area.value.slice(0,start)+token+area.value.slice(end);
+      const pos=start+token.length;
+      area.focus();
+      area.setSelectionRange(pos,pos);
+      area.dispatchEvent(new Event('input',{bubbles:true}));
+      area.dispatchEvent(new Event('change',{bubbles:true}));
+      update();
+    });
+    area.addEventListener('input', update);
+    update();
+  });
+}
+
 function collectPluginSettings(form, schema){
   const values={};
   for(const field of (schema||[])){
     const key=String(field.key||field.name||"");
-    if(!key || field.readonly || field.disabled || String(field.type||"").toLowerCase()==="separator") continue;
+    const type=String(field.type||"").toLowerCase();
+    if(!key || field.readonly || field.disabled || ["separator","section","button","action"].includes(type)) continue;
     const el=form.elements[key];
     if(!el) continue;
-    const type=String(field.type||"").toLowerCase();
     if(type==="bool"||type==="boolean"||type==="checkbox") values[key]=!!el.checked;
     else if(type==="number"||type==="int") values[key]=parseInt(el.value||"0",10)||0;
     else if(type==="float") values[key]=parseFloat(el.value||"0")||0;
@@ -437,6 +537,31 @@ async function enrichPluginSchema(pluginId, schema, values){
   }
   return out;
 }
+function applyPluginSettingsVisibility(root){
+  if(!root) return;
+  const refresh=()=>{
+    $$('[data-hide-key]', root).forEach(el=>{
+      const key=el.dataset.hideKey;
+      const val=el.dataset.hideValue;
+      const ctrl=root.elements ? root.elements[key] : root.querySelector(`[name="${CSS.escape(key)}"]`);
+      let current="";
+      if(ctrl){
+        if(ctrl.type==="checkbox") current=ctrl.checked?"true":"false";
+        else current=String(ctrl.value??"");
+      }
+      const shouldHide=current===String(val);
+      if(el.dataset.hideMode === "invisible"){
+        el.style.visibility=shouldHide?"hidden":"";
+        el.style.pointerEvents=shouldHide?"none":"";
+        el.setAttribute("aria-hidden", shouldHide?"true":"false");
+      }else{
+        el.style.display=shouldHide?"none":"";
+      }
+    });
+  };
+  refresh();
+  $$('select,input,textarea', root).forEach(el=>el.addEventListener('change', refresh));
+}
 async function openPluginSettings(pluginId){
   const mount=$("#pluginSettingsMount");
   if(!mount) return;
@@ -448,10 +573,26 @@ async function openPluginSettings(pluginId){
   schema=await enrichPluginSchema(pluginId,schema,values);
   const tabs=[...new Set(schema.map(schemaTab))];
   const groups=tabs.length?tabs:["Allgemein"];
-  const body=groups.map(tab=>`<div class="pluginSettingsGroup"><h4>${esc(tab)}</h4><div class="pluginSettingsFields">${schema.filter(f=>schemaTab(f)===tab || (!tabs.length&&true)).map(f=>renderPluginField(f,values)).join("")}</div></div>`).join("");
-  mount.innerHTML=`<section class="card pluginSettingsCard"><div class="pluginSettingsHead"><div><h3>${esc(d.plugin_id)} Settings</h3><div class="small">Wird in data/settings.json unter plugins/${esc(d.plugin_id)} gespeichert und danach neu gestartet.</div></div><button type="button" class="secondary" id="pluginSettingsClose">Schließen</button></div><form id="pluginSettingsForm">${body||"<div class='small'>Dieses Plugin hat kein Settings-Schema.</div>"}<div class="btnLine"><button type="submit">Speichern & neu starten</button><button type="button" class="secondary" id="pluginSettingsCancel">Abbrechen</button><span class="small" id="pluginSettingsResult"></span></div></form></section>`;
+  const tabButtons=groups.map((tab,i)=>`<button type="button" class="pluginSettingsTabBtn ${i===0?"active":""}" data-tab="${esc(tab)}">${esc(tab)}</button>`).join("");
+  const body=groups.map((tab,i)=>`<div class="pluginSettingsGroup ${i===0?"active":""}" data-tab="${esc(tab)}"><div class="pluginSettingsFields">${schema.filter(f=>schemaTab(f)===tab || (!tabs.length&&true)).map(f=>renderPluginField(f,values)).join("")}</div></div>`).join("");
+  mount.innerHTML=`<section class="card pluginSettingsCard"><div class="pluginSettingsHead"><div><h3>${esc(d.plugin_id)} Settings</h3><div class="small">Wird in data/settings.json unter plugins/${esc(d.plugin_id)} gespeichert und danach neu gestartet.</div></div><button type="button" class="secondary" id="pluginSettingsClose">Schließen</button></div>${groups.length>1?`<div class="pluginSettingsTabs">${tabButtons}</div>`:""}<form id="pluginSettingsForm">${body||"<div class='small'>Dieses Plugin hat kein Settings-Schema.</div>"}<div class="btnLine"><button type="submit">Speichern & neu starten</button><button type="button" class="secondary" id="pluginSettingsCancel">Abbrechen</button><span class="small" id="pluginSettingsResult"></span></div></form></section>`;
   $("#pluginSettingsClose").onclick=()=>mount.innerHTML="";
   $("#pluginSettingsCancel").onclick=()=>mount.innerHTML="";
+  $$(".pluginSettingsTabBtn", mount).forEach(btn=>btn.onclick=()=>{
+    const tab=btn.dataset.tab;
+    $$(".pluginSettingsTabBtn", mount).forEach(b=>b.classList.toggle("active", b===btn));
+    $$(".pluginSettingsGroup", mount).forEach(g=>g.classList.toggle("active", g.dataset.tab===tab));
+  });
+  initPluginEnhancedFields($("#pluginSettingsForm"));
+  applyPluginSettingsVisibility($("#pluginSettingsForm"));
+  $$(".pluginActionBtn", $("#pluginSettingsForm")).forEach(btn=>btn.onclick=async()=>{
+    const form=$("#pluginSettingsForm");
+    const result=$("#pluginSettingsResult");
+    result.textContent="Führe Aktion aus...";
+    const values=collectPluginSettings(form,schema);
+    const out=await api(`/api/plugins/${encodeURIComponent(pluginId)}/action`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({key:btn.dataset.key,values})});
+    result.textContent=out.ok?(out.detail||"Aktion ausgeführt."):`Fehler: ${out.error||out.detail||"Aktion fehlgeschlagen"}`;
+  });
   $("#pluginSettingsForm").onsubmit=async(ev)=>{
     ev.preventDefault();
     const result=$("#pluginSettingsResult");
@@ -459,7 +600,7 @@ async function openPluginSettings(pluginId){
     const values=collectPluginSettings(ev.currentTarget,schema);
     const out=await api(`/api/plugins/${encodeURIComponent(pluginId)}/settings`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({values})});
     result.textContent=out.ok?"Gespeichert und neu gestartet.":`Fehler: ${out.error||"unbekannt"}`;
-    if(out.ok) setTimeout(renderPlugins,700);
+    if(out.ok) setTimeout(()=>{ mount.innerHTML=""; renderPlugins(); },700);
   };
   mount.scrollIntoView({behavior:"smooth",block:"start"});
 }
@@ -611,15 +752,60 @@ async function renderDev(){
   await refreshInfo(); await refreshLog();
   setInterval(()=>{if($("#devAutoRefresh")?.checked){refreshInfo();refreshLog(true);}},2000);
 }
-({dashboard:renderDashboard,platforms:renderPlatforms,chat:renderChat,spotify:renderSpotify,overlays:renderOverlays,plugins:renderPlugins,dev:renderDev}[page]||renderDashboard)();
-setInterval(()=>{ if(page==="dashboard"||page==="chat") refreshMessages(); if(page==="dashboard"||page==="spotify") refreshNowPlaying();},2500);
+async function bootPage(){
+  try{
+    await (({dashboard:renderDashboard,platforms:renderPlatforms,chat:renderChat,spotify:renderSpotify,overlays:renderOverlays,plugins:renderPlugins,dev:renderDev}[page]||renderDashboard)());
+  }catch(e){
+    try{
+      await api("/api/client-error",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({level:"error",message:String(e&&e.stack||e)})});
+    }catch(_){}
+    shell(page,"Fehler","Die Oberfläche läuft weiter; Details stehen im DEV-Log.",`<section class="card"><div class="warnBox">${esc(String(e&&e.message||e||"Unbekannter Fehler"))}</div><div class="btnLine"><button onclick="location.reload()">Neu laden</button><a class="btn secondary" href="/dev">DEV-Log</a></div></section>`);
+  }
+}
+bootPage();
+setInterval(()=>{
+  if(page==="dashboard"||page==="chat") refreshMessages().catch(()=>{});
+  if(page==="dashboard"||page==="spotify") refreshNowPlaying().catch(()=>{});
+},2500);
 
 
-// Main-UI heartbeat: wenn das Webbased-Browserfenster per X geschlossen wird,
-// beendet sich auch der lokale Server/EXE kurz danach. Overlays zählen bewusst
-// nicht als Main-UI, damit alte Versionen nicht weiter im Hintergrund hängen.
-function webbasedUiHeartbeat(){
-  fetch('/api/ui-heartbeat',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}',cache:'no-store'}).catch(()=>{});
+// Main-UI heartbeat: dient nur noch zur Erkennung/Reparatur der Oberfläche.
+// Der lokale Server darf davon niemals beendet werden. Es wird auch kein neuer
+// Browser-Tab geöffnet: Reload passiert ausschließlich im bereits vorhandenen Tab.
+let webbasedHeartbeatBusy = false;
+let webbasedHeartbeatMisses = 0;
+let webbasedLastReloadNonce = String(sessionStorage.getItem('webbasedLastReloadNonce') || '');
+function webbasedReloadSameTab(nonce){
+  const n = String(nonce || Date.now());
+  if(webbasedLastReloadNonce === n) return;
+  webbasedLastReloadNonce = n;
+  try{ sessionStorage.setItem('webbasedLastReloadNonce', n); }catch(_){}
+  const url = new URL(location.href);
+  url.searchParams.set('reload', n);
+  setTimeout(()=>{ location.replace(url.toString()); }, 250);
+}
+async function webbasedUiHeartbeat(){
+  if(webbasedHeartbeatBusy) return;
+  webbasedHeartbeatBusy = true;
+  try{
+    const r = await fetch('/api/ui-heartbeat',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}',cache:'no-store'});
+    if(!r.ok) throw new Error('heartbeat '+r.status);
+    const data = await r.json().catch(()=>({}));
+    webbasedHeartbeatMisses = 0;
+    if(data && data.reload){
+      webbasedReloadSameTab(data.reload_nonce);
+      return;
+    }
+  }catch(_){
+    webbasedHeartbeatMisses++;
+    if(webbasedHeartbeatMisses >= 2){
+      webbasedReloadSameTab('miss-'+Date.now());
+    }
+  }finally{
+    webbasedHeartbeatBusy = false;
+  }
 }
 webbasedUiHeartbeat();
 setInterval(webbasedUiHeartbeat, 2500);
+window.addEventListener('focus', webbasedUiHeartbeat);
+document.addEventListener('visibilitychange', ()=>{ if(!document.hidden) webbasedUiHeartbeat(); });
