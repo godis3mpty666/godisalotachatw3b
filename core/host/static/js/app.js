@@ -362,7 +362,7 @@ async function renderPlatforms(){
     await api("/api/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(settingsCache)});
     const res=await api(`/api/tiktok/open/${b.dataset.account || "main"}`);
     const oldText = b.textContent;
-    b.textContent = res.ok ? "Loginfenster geöffnet" : "Öffnen fehlgeschlagen";
+    b.textContent = res.ok ? (res.already_logged_in ? "Bereits angemeldet" : "Loginfenster geöffnet") : "Öffnen fehlgeschlagen";
     setTimeout(()=>{ b.textContent = oldText; }, 3000);
     if(!res.ok) alert(res.error || "TikTok konnte nicht geöffnet werden");
   });

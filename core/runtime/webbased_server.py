@@ -1337,21 +1337,29 @@ class AppState:
             try: self.log("tiktok", "mark login failed", account, exc)
             except Exception: pass
 
+    def _accept_tiktok_login(self, settings: dict, account: str, detail: str) -> None:
+        account = "bot" if str(account or "").lower().strip() == "bot" else "main"
+        tt = settings.setdefault("platforms", {}).setdefault("tiktok", {})
+        tt["bot_login_ok" if account == "bot" else "main_login_ok"] = True
+        tt["bot_disconnected_at" if account == "bot" else "main_disconnected_at"] = 0
+        tt["last_login_account"] = account
+        self.save_settings(settings)
+        self.log("tiktok", f"{account} login accepted", detail)
+
     def _monitor_tiktok_login_success(self, account: str, pid: int = 0, profile_dir: Path | None = None, port: int | None = None):
         """Wait until the selected profile has real TikTok session cookies, then close the login popup."""
         account = "bot" if str(account or "").lower().strip() == "bot" else "main"
         deadline = time.time() + 600.0
+        close_after = time.time() + 8.0
         # Give Chromium time to create and flush the cookie DB.
         time.sleep(2.0)
         while time.time() < deadline and not self.shutting_down:
             try:
                 s = self.settings()
                 tt = s.setdefault("platforms", {}).setdefault("tiktok", {})
-                ok, detail = self._tiktok_account_status_raw(tt, account)
-                if ok:
-                    tt["bot_login_ok" if account == "bot" else "main_login_ok"] = True
-                    self.save_settings(s)
-                    self.log("tiktok", f"{account} login detected", detail)
+                ok, detail = self._tiktok_account_status_raw(tt, account, port=port)
+                if ok and time.time() >= close_after:
+                    self._accept_tiktok_login(s, account, detail)
                     time.sleep(1.0)
                     self._close_tiktok_login_windows(pid=pid, profile_dir=profile_dir, port=port)
                     return
@@ -1368,6 +1376,123 @@ class AppState:
             profile_dir / "Network" / "Cookies",
             profile_dir / "Cookies",
         ]
+
+    def _ws_send_text(self, sock: socket.socket, text: str) -> None:
+        payload = text.encode("utf-8")
+        header = bytearray([0x81])
+        ln = len(payload)
+        if ln < 126:
+            header.append(0x80 | ln)
+        elif ln < 65536:
+            header.append(0x80 | 126)
+            header += struct.pack("!H", ln)
+        else:
+            header.append(0x80 | 127)
+            header += struct.pack("!Q", ln)
+        mask = os.urandom(4)
+        header += mask
+        sock.sendall(bytes(header) + bytes(b ^ mask[i % 4] for i, b in enumerate(payload)))
+
+    def _ws_recv_text(self, sock: socket.socket) -> str:
+        h = sock.recv(2)
+        if len(h) < 2:
+            return ""
+        b1, b2 = h[0], h[1]
+        opcode = b1 & 0x0F
+        ln = b2 & 0x7F
+        if ln == 126:
+            ln = struct.unpack("!H", sock.recv(2))[0]
+        elif ln == 127:
+            ln = struct.unpack("!Q", sock.recv(8))[0]
+        if b2 & 0x80:
+            mask = sock.recv(4)
+            data = sock.recv(ln)
+            data = bytes(b ^ mask[i % 4] for i, b in enumerate(data))
+        else:
+            data = b""
+            while len(data) < ln:
+                chunk = sock.recv(ln - len(data))
+                if not chunk:
+                    break
+                data += chunk
+        if opcode == 8:
+            return ""
+        return data.decode("utf-8", errors="replace")
+
+    def _cdp_call(self, ws_url: str, method: str, params: dict | None = None, timeout: float = 4.0) -> dict:
+        parsed = urllib.parse.urlparse(ws_url)
+        host = parsed.hostname or "127.0.0.1"
+        port = int(parsed.port or 80)
+        path = (parsed.path or "/") + (("?" + parsed.query) if parsed.query else "")
+        sock = socket.create_connection((host, port), timeout=timeout)
+        try:
+            sock.settimeout(timeout)
+            key = base64.b64encode(os.urandom(16)).decode("ascii")
+            req = (
+                f"GET {path} HTTP/1.1\r\n"
+                f"Host: {host}:{port}\r\n"
+                "Upgrade: websocket\r\n"
+                "Connection: Upgrade\r\n"
+                f"Sec-WebSocket-Key: {key}\r\n"
+                "Sec-WebSocket-Version: 13\r\n\r\n"
+            )
+            sock.sendall(req.encode("ascii"))
+            header = b""
+            while b"\r\n\r\n" not in header:
+                chunk = sock.recv(4096)
+                if not chunk:
+                    break
+                header += chunk
+            if b" 101 " not in header.split(b"\r\n", 1)[0]:
+                raise RuntimeError("WebSocket handshake failed")
+            msg = {"id": 1, "method": method, "params": params or {}}
+            self._ws_send_text(sock, json.dumps(msg, ensure_ascii=False))
+            end_time = time.time() + timeout
+            while time.time() < end_time:
+                frame = self._ws_recv_text(sock)
+                if not frame:
+                    continue
+                data = json.loads(frame)
+                if data.get("id") == 1:
+                    if data.get("error"):
+                        raise RuntimeError(str(data.get("error")))
+                    return data
+            raise TimeoutError("no CDP response from browser")
+        finally:
+            try:
+                sock.close()
+            except Exception:
+                pass
+
+    def _tiktok_debug_tabs(self, port: int | None):
+        if not port:
+            return []
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{int(port)}/json", timeout=1.2) as resp:
+                data = json.loads(resp.read().decode("utf-8", errors="replace") or "[]")
+            return data if isinstance(data, list) else []
+        except Exception:
+            return []
+
+    def _tiktok_account_status_debug(self, port: int | None):
+        strong = {"sessionid", "sessionid_ss", "sid_tt", "uid_tt", "uid_tt_ss", "sid_guard"}
+        for tab in self._tiktok_debug_tabs(port):
+            try:
+                combined = (str(tab.get("url") or "") + " " + str(tab.get("title") or "")).lower()
+                if "tiktok.com" not in combined:
+                    continue
+                ws_url = str(tab.get("webSocketDebuggerUrl") or "").strip()
+                if not ws_url:
+                    continue
+                data = self._cdp_call(ws_url, "Network.getAllCookies", timeout=3.0)
+                cookies = ((data.get("result") or {}).get("cookies") or [])
+                names = {str(row.get("name") or "") for row in cookies if "tiktok" in str(row.get("domain") or "").lower()}
+                if names.intersection(strong):
+                    return True, "Login-Cookies in Browser-Session erkannt"
+            except Exception as exc:
+                try: self.log("tiktok", "debug cookie read failed", exc)
+                except Exception: pass
+        return False, ""
 
     def _tiktok_cookie_names(self, profile_dir: Path):
         names = set()
@@ -1418,14 +1543,17 @@ class AppState:
                     names.add(str(name))
         return names
 
-    def _tiktok_account_status_raw(self, cfg, account):
+    def _tiktok_account_status_raw(self, cfg, account, port: int | None = None):
         profile = self._tiktok_profile_dir(cfg, account)
         try:
+            ok, detail = self._tiktok_account_status_debug(port)
+            if ok:
+                return ok, detail
             names = self._tiktok_cookie_names(profile)
             # Wichtig: TikTok setzt Tracking-/Besucher-Cookies wie ttwid schon auf der Loginseite.
-            # Die dürfen NICHT als verbunden zählen, sonst wird der Status grün, obwohl der QR-/Account-Login
-            # abgebrochen wurde. Verbunden ist der Account erst bei echten Session-/User-Cookies.
-            strong = {"sessionid", "sessionid_ss", "sid_tt", "uid_tt", "uid_tt_ss", "sid_guard", "passport_csrf_token"}
+            # Auch passport_csrf_token ist zu früh da und darf NICHT als Login zählen.
+            # Verbunden ist der Account erst bei echten Session-/User-Cookies.
+            strong = {"sessionid", "sessionid_ss", "sid_tt", "uid_tt", "uid_tt_ss", "sid_guard"}
             if names.intersection(strong):
                 return True, "Login-Cookies gespeichert"
             return False, "noch kein echter TikTok-Login im Profil gefunden"
@@ -1471,6 +1599,14 @@ class AppState:
             port = int(cfg.get(port_key) or (9230 if account == "bot" else 9229))
         except Exception:
             port = 9230 if account == "bot" else 9229
+        existing_ok, existing_detail = self._tiktok_account_status_raw(cfg, account)
+        if existing_ok:
+            self._accept_tiktok_login(s, account, existing_detail)
+            cfg["main_profile_dir"] = str(self._tiktok_profile_dir(cfg, "main"))
+            cfg["bot_profile_dir"] = str(self._tiktok_profile_dir(cfg, "bot"))
+            s["platforms"]["tiktok"] = cfg
+            self.save_settings(s)
+            return {"ok": True, "account": account, "already_logged_in": True, "profile_dir": str(profile_dir), "debug_port": port, "browser": "profile"}
         url = "https://www.tiktok.com/login"
         browser = self._find_browser_exe(cfg)
         if browser:
@@ -4295,6 +4431,10 @@ class Handler(BaseHTTPRequestHandler):
             account = "main"
         q = urllib.parse.parse_qs(query)
         if "error" in q:
+            try:
+                st.log(platform or "oauth", "oauth error", account, str((q.get("error") or [""])[0]))
+            except Exception:
+                pass
             return self._send(400, "OAuth Fehler: " + str((q.get("error") or [""])[0]), "text/plain; charset=utf-8")
         code = (q.get("code") or [""])[0]
         got_state = (q.get("state") or [""])[0]
@@ -4347,9 +4487,15 @@ class Handler(BaseHTTPRequestHandler):
                 title = ch.get("title") or ch.get("id") or ("YouTube" if not account else account)
                 scopes = str(token.get("scope") or cfg.get("main_scopes" if account == "main" else "scopes") or DEFAULT_SCOPES["youtube"][account]).strip()
                 if account == "main":
-                    updates.update({"main_access_token": access, "main_refresh_token": refresh or cfg.get("main_refresh_token", ""), "main_scopes": scopes, "main_saved_at": int(time.time()), "main_channel_id": ch.get("id", ""), "main_channel_title": ch.get("title", ""), "main_channel_custom_url": ch.get("customUrl", ""), "broadcaster_channel_id": ch.get("id", ""), "main_connection_status": f"Main verbunden als {title}"})
+                    channel_name = self._clean_login(ch.get("customUrl") or ch.get("title") or ch.get("id") or cfg.get("main_account") or cfg.get("main") or cfg.get("channel"))
+                    updates.update({"enabled": True, "main_access_token": access, "main_refresh_token": refresh or cfg.get("main_refresh_token", ""), "main_scopes": scopes, "main_saved_at": int(time.time()), "main_channel_id": ch.get("id", ""), "main_channel_title": ch.get("title", ""), "main_channel_custom_url": ch.get("customUrl", ""), "broadcaster_channel_id": ch.get("id", ""), "main_connection_status": f"Main verbunden als {title}"})
+                    if channel_name and not self._clean_login(cfg.get("main_account") or cfg.get("main") or cfg.get("channel")):
+                        updates.update({"main": channel_name, "main_account": channel_name, "channel": channel_name})
                 else:
-                    updates.update({"access_token": access, "refresh_token": refresh or cfg.get("refresh_token", ""), "scopes": scopes, "saved_at": int(time.time()), "bot_channel_id": ch.get("id", ""), "bot_channel_title": ch.get("title", ""), "bot_channel_custom_url": ch.get("customUrl", ""), "connection_status": f"Bot verbunden als {title}"})
+                    bot_name = self._clean_login(ch.get("customUrl") or ch.get("title") or ch.get("id") or cfg.get("bot_account") or cfg.get("bot"))
+                    updates.update({"enabled": True, "access_token": access, "refresh_token": refresh or cfg.get("refresh_token", ""), "scopes": scopes, "saved_at": int(time.time()), "bot_channel_id": ch.get("id", ""), "bot_channel_title": ch.get("title", ""), "bot_channel_custom_url": ch.get("customUrl", ""), "connection_status": f"Bot verbunden als {title}"})
+                    if bot_name and not self._clean_login(cfg.get("bot_account") or cfg.get("bot")):
+                        updates.update({"bot": bot_name, "bot_account": bot_name, "bot_username": bot_name})
             elif platform == "kick":
                 user = self._kick_get_user(access)
                 channel = self._kick_get_channel(access)
@@ -4367,6 +4513,13 @@ class Handler(BaseHTTPRequestHandler):
             elif platform == "spotify":
                 updates.update({"access_token": access, "refresh_token": refresh or cfg.get("refresh_token", ""), "scopes": str(token.get("scope") or cfg.get("scopes") or DEFAULT_SCOPES["spotify"]["main"]), "saved_at": int(time.time()), "connection_status": "Verbunden"})
             self._save_platform_updates(platform, updates)
+            if platform == "youtube":
+                try:
+                    st._youtube_status_cache = {"ts": 0.0, "ok": False, "detail": "OAuth gespeichert", "locked": False, "key": None}
+                    st.log("youtube", "oauth", f"{account} OAuth gespeichert", f"title={title}", f"channel_id={ch.get('id', '')}", f"scope={scopes}")
+                    st.plugin_manager.restart_plugin_async("youtube_chat", "YouTube OAuth gespeichert; Neustart laeuft")
+                except Exception as exc:
+                    st.log("youtube", "oauth post-save failed", exc)
             if platform == "kick" and account == "main":
                 self._kick_resolve_chatroom_after_main_auth(updates.get("channel_slug") or updates.get("main_username") or cfg.get("channel") or cfg.get("main_account"))
             if platform == "spotify":
@@ -4400,8 +4553,16 @@ class Handler(BaseHTTPRequestHandler):
         except urllib.error.HTTPError as e:
             try: detail = e.read().decode("utf-8", errors="replace")
             except Exception: detail = str(e)
+            try:
+                st.log(platform or "oauth", "oauth token exchange failed", account, f"HTTP {e.code}", detail[:500])
+            except Exception:
+                pass
             return self._send(500, f"Token-Austausch fehlgeschlagen: HTTP {e.code} {detail[:800]}", "text/plain; charset=utf-8")
         except Exception as e:
+            try:
+                st.log(platform or "oauth", "oauth token exchange failed", account, e)
+            except Exception:
+                pass
             return self._send(500, "Token-Austausch fehlgeschlagen: " + str(e), "text/plain; charset=utf-8")
 
 
