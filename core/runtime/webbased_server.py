@@ -169,8 +169,32 @@ class WebbasedPluginHost:
                     cfg.setdefault("bot_username", "")
                     cfg.setdefault("username", "")
 
+            def account_disconnected(account_name: str) -> bool:
+                key = "main_disconnected_at" if account_name == "main" else "bot_disconnected_at"
+                return bool(cfg.get(key))
+
+            def strip_runtime_auth(account_name: str) -> None:
+                if account_name == "main":
+                    for key in (
+                        "main_access_token", "main_refresh_token", "main_expires_in", "main_expires_at",
+                        "main_scope", "main_scopes", "main_token_type", "main_saved_at",
+                    ):
+                        cfg.pop(key, None)
+                    if platform == "spotify":
+                        for key in ("access_token", "refresh_token", "expires_in", "expires_at", "scope", "scopes", "token_type", "saved_at"):
+                            cfg.pop(key, None)
+                else:
+                    for key in (
+                        "access_token", "refresh_token", "bot_access_token", "bot_refresh_token",
+                        "expires_in", "expires_at", "scope", "scopes", "token_type", "saved_at",
+                    ):
+                        cfg.pop(key, None)
+
             accounts = ("main",) if platform == "spotify" else ("main", "bot")
             for account in accounts:
+                if account_disconnected(account):
+                    strip_runtime_auth(account)
+                    continue
                 token = _json_load(self.state.auth_dir / f"{platform}_{account}.json", {})
                 if not isinstance(token, dict):
                     continue
@@ -211,6 +235,9 @@ class WebbasedPluginHost:
             if platform in ("twitch", "youtube", "kick"):
                 try:
                     cfg = self.state.refresh_platform_oauth(platform, cfg)
+                    for account in ("main", "bot"):
+                        if account_disconnected(account):
+                            strip_runtime_auth(account)
                 except Exception as exc:
                     try:
                         self.state.log(platform, "oauth refresh from platform settings failed", exc)
@@ -1407,6 +1434,8 @@ class AppState:
 
     def tiktok_account_status(self, cfg, account):
         account = "bot" if str(account or "").lower().strip() == "bot" else "main"
+        if bool((cfg or {}).get("bot_disconnected_at" if account == "bot" else "main_disconnected_at")):
+            return False, "getrennt"
         # Wenn ein Login einmal sauber erkannt wurde, bleibt der Status erhalten,
         # solange der Nutzer nicht explizit trennt. Dadurch muss die gesperrte
         # Chromium-Cookie-DB nicht dauerhaft im UI-Polling gelesen werden.
@@ -1611,41 +1640,32 @@ class AppState:
         now = int(time.time())
 
         if platform == "openai":
-            for key in ("api_key", "organization", "project", "status", "detail", "connection_status"):
-                cfg[key] = ""
             cfg["main_disconnected_at"] = now
+            cfg["status"] = "nicht verbunden"
+            cfg["detail"] = "getrennt"
+            cfg["connection_status"] = "getrennt"
             return
 
         if platform == "tiktok":
             cfg["bot_login_ok" if account == "bot" else "main_login_ok"] = False
             cfg["bot_disconnected_at" if account == "bot" else "main_disconnected_at"] = now
-            cfg["last_login_account"] = ""
+            cfg["status"] = "nicht verbunden"
+            cfg["detail"] = f"{'Bot' if account == 'bot' else 'Main'} getrennt"
             return
 
         if platform == "spotify":
-            for key in ("access_token", "refresh_token", "saved_at", "expires_at", "expires_in", "scope", "scopes", "token_type", "connection_status", "status", "detail"):
-                cfg[key] = ""
             cfg["main_disconnected_at"] = now
+            cfg["status"] = "nicht verbunden"
+            cfg["detail"] = "getrennt"
+            cfg["connection_status"] = "getrennt"
             return
 
         if account == "main":
-            for key in (
-                "main_access_token", "main_refresh_token", "main_saved_at", "main_expires_at", "main_expires_in",
-                "main_token_type", "main_oauth_login", "main_oauth_user_id", "main_connection_status",
-                "main_channel_id", "main_channel_title", "main_channel_custom_url", "main_user_id", "main_username",
-                "broadcaster_user_id", "broadcaster_id", "broadcaster_channel_id", "channel_id",
-            ):
-                cfg[key] = ""
             cfg["main_disconnected_at"] = now
+            cfg["main_connection_status"] = "getrennt"
         else:
-            for key in (
-                "access_token", "refresh_token", "bot_access_token", "bot_refresh_token", "saved_at", "expires_at",
-                "expires_in", "token_type", "oauth_login", "oauth_user_id", "connection_status",
-                "bot_user_id", "bot_username", "username", "bot_channel_id", "bot_channel_title",
-                "bot_channel_custom_url",
-            ):
-                cfg[key] = ""
             cfg["bot_disconnected_at"] = now
+            cfg["connection_status"] = "getrennt"
         cfg["status"] = "nicht verbunden"
         cfg["detail"] = "getrennt"
 
@@ -1722,11 +1742,13 @@ class AppState:
         try:
             platform = str(platform or "").lower().strip()
             account = "main" if str(account or "").lower().strip() == "main" else "bot"
+            s = self.settings()
+            cfg = s.get("platforms", {}).get(platform, {}) if isinstance(s.get("platforms", {}), dict) else {}
+            if isinstance(cfg, dict) and bool(cfg.get("main_disconnected_at" if account == "main" else "bot_disconnected_at")):
+                return False
             token = _json_load(self.auth_dir / f"{platform}_{account}.json", {})
             if isinstance(token, dict) and bool(str(token.get("access_token") or token.get("refresh_token") or "").strip()):
                 return True
-            s = self.settings()
-            cfg = s.get("platforms", {}).get(platform, {}) if isinstance(s.get("platforms", {}), dict) else {}
             restored = self._settings_token_snapshot(platform, account, cfg)
             if restored:
                 _json_save(self.auth_dir / f"{platform}_{account}.json", restored)
@@ -1886,6 +1908,9 @@ class AppState:
     def spotify_status(self, cfg: dict) -> tuple[bool, str]:
         try:
             cfg = cfg if isinstance(cfg, dict) else {}
+            if bool(cfg.get("main_disconnected_at")):
+                self._spotify_status_cache = {"ts": time.time(), "ok": False, "detail": "getrennt", "key": None}
+                return False, "getrennt"
             token = _json_load(self.auth_dir / "spotify_main.json", {})
             if not isinstance(token, dict):
                 token = {}
@@ -2032,8 +2057,8 @@ class AppState:
                 cfg["status"] = "verbunden" if (main_ok or bot_ok) else "nicht verbunden"
                 cfg["detail"] = "Main OK · Bot OK" if (main_ok and bot_ok) else "Main OK · Bot fehlt" if main_ok else "Bot OK · Main fehlt" if bot_ok else "Main fehlt · Bot fehlt"
             elif p == "youtube":
-                main_saved = self._auth_token_ok("youtube", "main") or bool(str(cfg.get("main_access_token") or cfg.get("main_refresh_token") or "").strip())
-                bot_saved = self._auth_token_ok("youtube", "bot") or bool(str(cfg.get("access_token") or cfg.get("refresh_token") or "").strip())
+                main_saved = self._auth_token_ok("youtube", "main") or ((not bool(cfg.get("main_disconnected_at"))) and bool(str(cfg.get("main_access_token") or cfg.get("main_refresh_token") or "").strip()))
+                bot_saved = self._auth_token_ok("youtube", "bot") or ((not bool(cfg.get("bot_disconnected_at"))) and bool(str(cfg.get("access_token") or cfg.get("refresh_token") or "").strip()))
                 if main_saved or bot_saved:
                     ok = True
                     active = "Bot" if bot_saved else "Main"
@@ -2087,6 +2112,11 @@ class AppState:
         """
         try:
             cfg = cfg if isinstance(cfg, dict) else {}
+            main_disconnected = bool(cfg.get("main_disconnected_at"))
+            bot_disconnected = bool(cfg.get("bot_disconnected_at"))
+            if main_disconnected and bot_disconnected:
+                self._youtube_status_cache = {"ts": time.time(), "ok": False, "detail": "getrennt", "locked": False, "key": None}
+                return False, "getrennt"
             if not bool(cfg.get("enabled", True)):
                 self._youtube_status_cache = {"ts": time.time(), "ok": False, "detail": "deaktiviert", "locked": False, "key": None}
                 return False, "deaktiviert"
@@ -2120,8 +2150,8 @@ class AppState:
                 return False, detail
 
             changed = False
-            main_ok, main_detail, main_updates = _youtube_check_account(cfg, main=True)
-            bot_ok, bot_detail, bot_updates = _youtube_check_account(cfg, main=False)
+            main_ok, main_detail, main_updates = (False, "getrennt", {}) if main_disconnected else _youtube_check_account(cfg, main=True)
+            bot_ok, bot_detail, bot_updates = (False, "getrennt", {}) if bot_disconnected else _youtube_check_account(cfg, main=False)
             if main_updates:
                 cfg.update(main_updates)
                 changed = True
@@ -2144,8 +2174,8 @@ class AppState:
                 detail = f"Bot OK · Main fehlt/ungültig: {main_detail}"
             else:
                 detail = f"Main: {main_detail} · Bot: {bot_detail}"
-            main_saved = bool(str(cfg.get("main_access_token") or cfg.get("main_refresh_token") or "").strip())
-            bot_saved = bool(str(cfg.get("access_token") or cfg.get("refresh_token") or "").strip())
+            main_saved = (not main_disconnected) and bool(str(cfg.get("main_access_token") or cfg.get("main_refresh_token") or "").strip())
+            bot_saved = (not bot_disconnected) and bool(str(cfg.get("access_token") or cfg.get("refresh_token") or "").strip())
             if not main_ok and main_saved:
                 main_ok = True
             if not bot_ok and bot_saved:
@@ -2168,6 +2198,9 @@ class AppState:
 
     def openai_status(self, cfg: dict, force=False) -> tuple[bool, str]:
         cfg = cfg if isinstance(cfg, dict) else {}
+        if bool(cfg.get("main_disconnected_at")):
+            self._openai_status_cache = {"ts": time.time(), "ok": False, "detail": "getrennt", "locked": False, "key": None, "models": []}
+            return False, "getrennt"
         if not bool(cfg.get("enabled", False)):
             self._openai_status_cache = {"ts": time.time(), "ok": False, "detail": "deaktiviert", "locked": False, "key": None, "models": []}
             return False, "deaktiviert"
@@ -2207,10 +2240,14 @@ class AppState:
                 pdata = platforms.get(platform_for_plugin, {}) if isinstance(platforms.get(platform_for_plugin, {}), dict) else {}
                 # Core platform switch is the source of truth for chat plugins.
                 # Old plugin-local enabled=false values must not block autoconnect.
+                if bool(pdata.get("main_disconnected_at")) and bool(pdata.get("bot_disconnected_at")):
+                    return False
                 return bool(pdata.get("enabled", False)) and bool(pdata.get("autoconnect", True))
             if plugin_id == "spotis3mptify":
                 spotify = platforms.get("spotify", {}) if isinstance(platforms.get("spotify", {}), dict) else {}
                 # Same rule: Spotify page controls Spotis3mptify autostart.
+                if bool(spotify.get("main_disconnected_at")):
+                    return False
                 return bool(spotify.get("enabled", False)) and bool(spotify.get("autoconnect", True))
             pcfg = s.setdefault("plugins", {}).setdefault(plugin_id, {})
             if plugin_id == "bridg3alot" and "enabled" not in pcfg:
@@ -3270,7 +3307,10 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"ok": ok, "status": "verbunden" if ok else "nicht verbunden", "detail": detail})
             return
         if path == "/api/test-platform/openai":
-            cfg = st.settings().get("platforms", {}).get("openai", {})
+            s = st.settings()
+            cfg = s.setdefault("platforms", {}).setdefault("openai", {})
+            cfg["main_disconnected_at"] = 0
+            st.save_settings(s)
             ok, detail = st.openai_status(cfg, force=True)
             self._json({"ok": ok, "status": "verbunden" if ok else "nicht verbunden", "detail": detail})
             return
@@ -3551,22 +3591,12 @@ class Handler(BaseHTTPRequestHandler):
             if len(parts) >= 4:
                 p, acc = parts[2], parts[3]
                 plugin_id = CHAT_PLATFORM_PLUGINS.get(p)
-                try:
-                    (st.auth_dir / f"{p}_{acc}.json").unlink(missing_ok=True)
-                except Exception:
-                    pass
                 if p == "spotify":
-                    try:
-                        (st.auth_dir / "spotify_main.json").unlink(missing_ok=True)
-                    except Exception:
-                        pass
                     plugin_id = "spotis3mptify"
                 if p == "tiktok":
                     try:
                         s = st.settings()
                         tt = s.setdefault("platforms", {}).setdefault("tiktok", {})
-                        profile = st._tiktok_profile_dir(tt, acc)
-                        shutil.rmtree(profile, ignore_errors=True)
                         st._disconnect_account_settings(s, p, acc)
                         st.save_settings(s)
                     except Exception as exc:
@@ -3578,12 +3608,6 @@ class Handler(BaseHTTPRequestHandler):
                         st.save_settings(s)
                     except Exception as exc:
                         st.log(p or "platform", "disconnect settings cleanup failed", exc)
-                try:
-                    (st.auth_dir / f"{p}_{acc}.json").unlink(missing_ok=True)
-                    if p == "spotify":
-                        (st.auth_dir / "spotify_main.json").unlink(missing_ok=True)
-                except Exception:
-                    pass
                 if p == "youtube":
                     st._youtube_status_cache = {"ts": 0.0, "ok": False, "detail": "getrennt", "locked": False, "key": None}
                 if p == "openai":
