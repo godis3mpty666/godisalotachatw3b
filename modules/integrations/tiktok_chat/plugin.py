@@ -657,6 +657,42 @@ class TikTokLivePlugin(ThreadedPlugin):
         self._live_window_last_url = ''
         self.ui_language = 'de'
 
+    def _close_browser_profile_windows(self, profile_dir: str = '', port: int = 0) -> None:
+        if os.name != 'nt':
+            return
+        hints: list[str] = []
+        if str(profile_dir or '').strip():
+            hints.append(str(profile_dir))
+        if port:
+            hints.append(f'remote-debugging-port={int(port)}')
+        if not hints:
+            return
+        try:
+            cond = ' -or '.join(["$_.CommandLine -like " + repr('*' + h + '*') for h in hints if h])
+            cmd = [
+                'powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command',
+                f"Get-CimInstance Win32_Process | Where-Object {{ {cond} }} | ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}"
+            ]
+            kwargs = {'stdout': subprocess.DEVNULL, 'stderr': subprocess.DEVNULL, 'timeout': 3}
+            kwargs['creationflags'] = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+            subprocess.run(cmd, **kwargs)
+        except Exception:
+            pass
+
+    def stop(self, *args, **kwargs) -> None:
+        settings = self._settings if isinstance(self._settings, dict) else {}
+        for account in ('main', 'bot'):
+            try:
+                profile = self._account_profile_dir(settings, account)
+                port = self._debug_port(settings, account)
+                self._close_browser_profile_windows(profile, port)
+            except Exception:
+                pass
+        try:
+            super().stop(*args, **kwargs)
+        except TypeError:
+            super().stop()
+
     def set_ui_language(self, language: str) -> None:
         self.ui_language = _norm_lang(language)
 

@@ -607,6 +607,7 @@ class AppState:
         self._meld_status_cache = {"ts": 0.0, "host": "", "port": 0, "ok": False, "detail": "nicht verbunden", "locked": False}
         self._obs_status_cache = {"ts": 0.0, "host": "", "port": 0, "ok": False, "detail": "nicht verbunden", "locked": False}
         self._youtube_status_cache = {"ts": 0.0, "ok": False, "detail": "nicht verbunden", "locked": False, "key": None}
+        self._spotify_status_cache = {"ts": 0.0, "ok": False, "detail": "nicht verbunden", "key": None}
         self._openai_status_cache = {"ts": 0.0, "ok": False, "detail": "nicht verbunden", "locked": False, "key": None, "models": []}
         # OBS must be a real/persistent connection like in the original tool.
         # A short test socket makes the dashboard green, but OBS shows no active session afterwards.
@@ -738,11 +739,27 @@ class AppState:
                 return
             self.auth_dir.mkdir(parents=True, exist_ok=True)
             imported = []
+            def disconnected_auth_file(name: str) -> bool:
+                try:
+                    stem = Path(name).stem.lower()
+                    if "_" not in stem:
+                        return False
+                    platform, account = stem.rsplit("_", 1)
+                    account = "main" if account == "main" else "bot"
+                    dst_settings = _json_load(self.settings_path, {})
+                    cfg = (dst_settings.get("platforms", {}) if isinstance(dst_settings, dict) else {}).get(platform, {})
+                    if not isinstance(cfg, dict):
+                        return False
+                    return bool(cfg.get("main_disconnected_at" if account == "main" else "bot_disconnected_at"))
+                except Exception:
+                    return False
             for src_data in sources:
                 src_auth = src_data / "auth"
                 if src_auth.exists():
                     for src_file in src_auth.glob("*.json"):
                         dst_file = self.auth_dir / src_file.name
+                        if disconnected_auth_file(src_file.name):
+                            continue
                         if self._json_has_runtime_token(dst_file):
                             continue
                         if self._json_has_runtime_token(src_file):
@@ -1243,8 +1260,33 @@ class AppState:
                     pass
                 return True
             EnumWindows(enum_proc, 0)
+            time.sleep(0.12)
+            for target_pid in sorted(target_pids):
+                try:
+                    kwargs = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL, "timeout": 2}
+                    if os.name == "nt":
+                        kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+                    subprocess.run(["taskkill", "/PID", str(int(target_pid)), "/T", "/F"], **kwargs)
+                except Exception:
+                    pass
         except Exception as exc:
             try: self.log("tiktok", "close login window failed", exc)
+            except Exception: pass
+
+    def _close_tiktok_browser_windows(self) -> None:
+        try:
+            s = self.settings()
+            tt = s.setdefault("platforms", {}).setdefault("tiktok", {})
+            for account in ("main", "bot"):
+                profile = self._tiktok_profile_dir(tt, account)
+                port_key = "bot_remote_debug_port" if account == "bot" else "remote_debug_port"
+                try:
+                    port = int(tt.get(port_key) or (9230 if account == "bot" else 9229))
+                except Exception:
+                    port = 9230 if account == "bot" else 9229
+                self._close_tiktok_login_windows(profile_dir=profile, port=port)
+        except Exception as exc:
+            try: self.log("tiktok", "close browser windows failed", exc)
             except Exception: pass
 
     def _mark_tiktok_login_ok(self, account: str, ok: bool = True):
@@ -1253,6 +1295,8 @@ class AppState:
             s = self.settings()
             tt = s.setdefault("platforms", {}).setdefault("tiktok", {})
             tt["bot_login_ok" if account == "bot" else "main_login_ok"] = bool(ok)
+            if ok:
+                tt["bot_disconnected_at" if account == "bot" else "main_disconnected_at"] = 0
             self.save_settings(s)
         except Exception as exc:
             try: self.log("tiktok", "mark login failed", account, exc)
@@ -1489,6 +1533,8 @@ class AppState:
         cfg = cfg if isinstance(cfg, dict) else {}
         platform = str(platform or "").lower().strip()
         account = "main" if str(account or "").lower().strip() == "main" else "bot"
+        if bool(cfg.get("main_disconnected_at" if account == "main" else "bot_disconnected_at")):
+            return {}
         prefix = "" if (platform == "spotify" or account == "bot") else "main_"
         access = str(cfg.get(prefix + "access_token") or "").strip()
         refresh = str(cfg.get(prefix + "refresh_token") or "").strip()
@@ -1572,6 +1618,14 @@ class AppState:
             state = str(ps.get("state") or "").strip().lower()
             msg = str(ps.get("message") or "").strip()
             if state in {"connected", "running"}:
+                plugin = self.plugin_instances.get(plugin_id)
+                checker = getattr(plugin, "is_connected", None) if plugin is not None else None
+                if callable(checker):
+                    try:
+                        if not bool(checker()):
+                            return False, msg or "Plugin meldet nicht verbunden"
+                    except Exception:
+                        return False, msg or "Pluginstatus nicht pruefbar"
                 return True, msg or "Plugin verbunden"
             return False, msg
         except Exception:
@@ -1609,7 +1663,7 @@ class AppState:
             return ""
         return ""
 
-    def spotify_status(self, cfg: dict) -> tuple[bool, str]:
+    def _spotify_status_legacy_token_only(self, cfg: dict) -> tuple[bool, str]:
         try:
             cfg = cfg if isinstance(cfg, dict) else {}
             token = _json_load(self.auth_dir / "spotify_main.json", {})
@@ -1639,6 +1693,88 @@ class AppState:
                     pass
                 return True, detail
             return False, "kein Spotify OAuth gespeichert"
+        except Exception as exc:
+            return False, "Spotify Statusfehler: " + str(exc)
+
+    def spotify_status(self, cfg: dict) -> tuple[bool, str]:
+        try:
+            cfg = cfg if isinstance(cfg, dict) else {}
+            token = _json_load(self.auth_dir / "spotify_main.json", {})
+            if not isinstance(token, dict):
+                token = {}
+            access = str(token.get("access_token") or cfg.get("access_token") or "").strip()
+            refresh = str(token.get("refresh_token") or cfg.get("refresh_token") or "").strip()
+            client_id = str(cfg.get("client_id") or "").strip()
+            client_secret = str(cfg.get("client_secret") or "").strip()
+            key = (
+                hashlib.sha256(access.encode("utf-8")).hexdigest()[:12] if access else "",
+                hashlib.sha256(refresh.encode("utf-8")).hexdigest()[:12] if refresh else "",
+                client_id,
+            )
+            cache = self._spotify_status_cache
+            now = time.time()
+            if cache.get("key") == key and now - float(cache.get("ts") or 0.0) < 10.0:
+                return bool(cache.get("ok")), str(cache.get("detail") or "nicht verbunden")
+            if not access and not refresh:
+                detail = "kein Spotify OAuth gespeichert"
+                self._spotify_status_cache = {"ts": now, "ok": False, "detail": detail, "key": key}
+                return False, detail
+            if not access and refresh and client_id and client_secret:
+                try:
+                    basic = base64.b64encode(f"{client_id}:{client_secret}".encode("utf-8")).decode("ascii")
+                    body = urllib.parse.urlencode({"grant_type": "refresh_token", "refresh_token": refresh}).encode("utf-8")
+                    req = urllib.request.Request(TOKEN_URLS["spotify"], data=body, method="POST")
+                    req.add_header("Authorization", "Basic " + basic)
+                    req.add_header("Content-Type", "application/x-www-form-urlencoded")
+                    with urllib.request.urlopen(req, timeout=10) as resp:
+                        data = json.loads(resp.read().decode("utf-8", errors="replace") or "{}")
+                    access = str(data.get("access_token") or "").strip()
+                    if access:
+                        token.update({
+                            "access_token": access,
+                            "refresh_token": str(data.get("refresh_token") or refresh),
+                            "expires_in": data.get("expires_in"),
+                            "expires_at": time.time() + float(data.get("expires_in") or 3600),
+                            "scope": data.get("scope") or token.get("scope") or cfg.get("scopes") or cfg.get("scope") or "",
+                            "saved_at": time.time(),
+                        })
+                        _json_save(self.auth_dir / "spotify_main.json", token)
+                        s = self.settings()
+                        sp = s.setdefault("platforms", {}).setdefault("spotify", {})
+                        sp.update({
+                            "access_token": access,
+                            "refresh_token": token.get("refresh_token") or refresh,
+                            "expires_at": token.get("expires_at"),
+                            "expires_in": token.get("expires_in"),
+                            "scope": token.get("scope") or "",
+                            "scopes": token.get("scope") or "",
+                            "saved_at": token.get("saved_at"),
+                        })
+                        self.save_settings(s)
+                except Exception as exc:
+                    detail = "Spotify Refresh fehlgeschlagen: " + str(exc)
+                    self._spotify_status_cache = {"ts": now, "ok": False, "detail": detail, "key": key}
+                    return False, detail
+            if not access:
+                detail = "Spotify OAuth gespeichert, aber kein nutzbarer Access-Token"
+                self._spotify_status_cache = {"ts": now, "ok": False, "detail": detail, "key": key}
+                return False, detail
+            try:
+                req = urllib.request.Request("https://api.spotify.com/v1/me", headers={"Authorization": "Bearer " + access, "Accept": "application/json"})
+                with urllib.request.urlopen(req, timeout=8) as resp:
+                    data = json.loads(resp.read().decode("utf-8", errors="replace") or "{}")
+                user = str(data.get("display_name") or data.get("id") or "Spotify").strip()
+                detail = "Spotify API verbunden" + (f" als {user}" if user else "")
+                self._spotify_status_cache = {"ts": now, "ok": True, "detail": detail, "key": key}
+                return True, detail
+            except urllib.error.HTTPError as exc:
+                detail = f"Spotify API nicht verbunden: HTTP {int(getattr(exc, 'code', 0) or 0)}"
+                self._spotify_status_cache = {"ts": now, "ok": False, "detail": detail, "key": key}
+                return False, detail
+            except Exception as exc:
+                detail = "Spotify API nicht erreichbar: " + str(exc)
+                self._spotify_status_cache = {"ts": now, "ok": False, "detail": detail, "key": key}
+                return False, detail
         except Exception as exc:
             return False, "Spotify Statusfehler: " + str(exc)
 
@@ -1713,7 +1849,7 @@ class AppState:
                 main_saved = self._auth_token_ok("youtube", "main") or bool(str(cfg.get("main_access_token") or cfg.get("main_refresh_token") or "").strip())
                 bot_saved = self._auth_token_ok("youtube", "bot") or bool(str(cfg.get("access_token") or cfg.get("refresh_token") or "").strip())
                 if main_saved or bot_saved:
-                    ok = True
+                    ok = False
                     detail = "Main/Bot OAuth gespeichert" if main_saved and bot_saved else "Main OAuth gespeichert" if main_saved else "Bot OAuth gespeichert"
                 else:
                     ok, detail = self.youtube_status(cfg)
@@ -1726,18 +1862,18 @@ class AppState:
                 cfg["status"] = "verbunden" if ok else "nicht verbunden"
                 cfg["detail"] = detail
             elif p == "openai":
-                api_key = str(cfg.get("api_key") or "").strip()
-                cfg["status"] = "verbunden" if api_key else "nicht verbunden"
-                cfg["detail"] = "API-Key gespeichert" if api_key else "OpenAI API-Key fehlt"
+                ok, detail = self.openai_status(cfg, force=False)
+                cfg["status"] = "verbunden" if ok else "nicht verbunden"
+                cfg["detail"] = detail
                 cfg.pop("model", None)
                 cfg.pop("api_key", None)
             else:
                 main = self.platform_status(p, "main")
                 bot = self.platform_status(p, "bot")
-                cfg["status"] = "verbunden" if (main == "verbunden" or bot == "verbunden") else "nicht verbunden"
+                cfg["status"] = "nicht verbunden"
                 cfg["main_status"] = main
                 cfg["bot_status"] = bot
-                cfg["detail"] = "Main/Bot OAuth gespeichert" if cfg["status"] == "verbunden" else "kein OAuth gespeichert"
+                cfg["detail"] = "Main/Bot OAuth gespeichert" if (main == "verbunden" or bot == "verbunden") else "kein OAuth gespeichert"
             out[p] = cfg
         return out
 
@@ -3156,19 +3292,28 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"ok": True, "version": VERSION, "reload": reload_requested, "reload_nonce": reload_nonce})
 
         if path == "/api/shutdown":
-            # UI button means exactly one thing: close the EXE process.
-            # Do not run plugin-specific shutdown routines here; Windows will tear down
-            # the child threads/process state with this process. Browser/tab close stays separate.
             st.shutting_down = True
             try:
                 st.log("shutdown", "exe close requested by ui")
             except Exception:
                 pass
             try:
+                st._close_tiktok_browser_windows()
+            except Exception:
+                pass
+            try:
+                st.plugin_manager.stop_all()
+            except Exception:
+                pass
+            try:
+                st._close_obs_connection()
+            except Exception:
+                pass
+            try:
                 st.mark_clean_shutdown("exe close requested by ui")
             except Exception:
                 pass
-            _schedule_hard_exit(0.15)
+            _schedule_hard_exit(0.6)
             return self._json({"ok": True, "shutdown": True, "mode": "exe_exit"})
 
         if path == "/api/spotis3mptify/overlay-state":
@@ -3984,7 +4129,7 @@ class Handler(BaseHTTPRequestHandler):
             token["platform"] = platform; token["account"] = account; token["saved_at"] = time.time()
             _json_save(st.auth_dir / f"{platform}_{account}.json", token)
 
-            updates = {"redirect_uri": redirect}
+            updates = {"redirect_uri": redirect, "main_disconnected_at" if account == "main" else "bot_disconnected_at": 0}
             if platform != "spotify":
                 updates["redirect_url"] = redirect
             if platform == "twitch":

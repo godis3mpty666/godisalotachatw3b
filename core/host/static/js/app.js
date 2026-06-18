@@ -62,8 +62,9 @@ function platformMark(p){return ({twitch:"Twitch",tiktok:"TikTok",youtube:"YouTu
 function platformBadge(p){return `<span class="chatPlatform ${esc(p)}"><img src="/platform-icon/${esc(p)}" alt="">${esc(platformMark(p))}</span>`;}
 function platformLabel(p){return ({twitch:"Twitch",tiktok:"TikTok",youtube:"YouTube",kick:"Kick",spotify:"Spotify",openai:"ChatGPT / OpenAI",meld:"Meld",obs:"OBS"}[p]||p);}
 function platformAccountDetails(cfg){
-  const mainConnected = cfg.main_status === "verbunden" || cfg.status === "verbunden" && !cfg.main_status && !cfg.bot_status;
-  const botConnected = cfg.bot_status === "verbunden";
+  const platformConnected = cfg.status === "verbunden";
+  const mainConnected = platformConnected && (cfg.main_status === "verbunden" || (!cfg.main_status && !cfg.bot_status));
+  const botConnected = platformConnected && cfg.bot_status === "verbunden";
   const main = mainConnected ? (cfg.main || cfg.main_account || cfg.channel || cfg.unique_id || cfg.main_username || cfg.main_channel_title || "-") : "-";
   const bot = botConnected ? (cfg.bot || cfg.bot_account || cfg.bot_username || cfg.username || cfg.bot_channel_title || "-") : "-";
   return `Main: ${esc(main)}<br>Bot: ${esc(bot)}`;
