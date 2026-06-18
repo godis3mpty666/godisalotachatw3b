@@ -67,7 +67,10 @@ function platformAccountDetails(cfg){
   const botConnected = platformConnected && cfg.bot_status === "verbunden";
   const main = mainConnected ? (cfg.main || cfg.main_account || cfg.channel || cfg.unique_id || cfg.main_username || cfg.main_channel_title || "-") : "-";
   const bot = botConnected ? (cfg.bot || cfg.bot_account || cfg.bot_username || cfg.username || cfg.bot_channel_title || "-") : "-";
-  return `Main: ${esc(main)}<br>Bot: ${esc(bot)}`;
+  const rows = [];
+  if(mainConnected) rows.push(`Main: ${esc(main)}`);
+  if(botConnected) rows.push(`Bot: ${esc(bot)}`);
+  return rows.length ? rows.join("<br>") : "Keine Accounts verbunden";
 }
 function card(p,cfg){
   const st = cfg.status || "nicht verbunden";

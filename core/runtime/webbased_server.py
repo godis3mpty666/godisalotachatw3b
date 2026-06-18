@@ -1827,6 +1827,11 @@ class AppState:
                     if p in {"twitch", "kick", "youtube"}:
                         cfg["main_status"] = self.platform_status(p, "main")
                         cfg["bot_status"] = self.platform_status(p, "bot")
+                    elif p == "tiktok":
+                        main_ok, _ = self.tiktok_account_status(cfg, "main")
+                        bot_ok, _ = self.tiktok_account_status(cfg, "bot")
+                        cfg["main_status"] = "verbunden" if main_ok else "nicht verbunden"
+                        cfg["bot_status"] = "verbunden" if bot_ok else "nicht verbunden"
                     out[p] = cfg
                     continue
 
