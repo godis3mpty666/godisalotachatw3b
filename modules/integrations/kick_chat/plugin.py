@@ -1372,11 +1372,11 @@ class KickChatPlugin(ThreadedPlugin):
 
         if chatroom_id:
             self._write_ready = self._has_write_credentials(effective)
-            _token, self._active_account = self._token_for_send(effective)
+            self._active_account = 'main'
             return True, f'Kick ready: room {chatroom_id} | {live_txt} | {viewer_txt} | {followers_txt} | source={source}'
         if self._has_write_credentials(effective):
             self._write_ready = True
-            _token, self._active_account = self._token_for_send(effective)
+            self._active_account = 'main'
             return True, f'Kick write ready; realtime chatroom is not available yet | {live_txt} | {viewer_txt} | {followers_txt} | source={source}'
         # No manual chatroom setting anymore. OAuth belongs to the maintool and
         # the plugin keeps resolving/retrying from Kick itself.
@@ -1401,7 +1401,7 @@ class KickChatPlugin(ThreadedPlugin):
         self._is_live = None
         self._connected = False
         self._write_ready = self._has_write_credentials(effective)
-        _token, self._active_account = self._token_for_send(effective)
+        self._active_account = 'main'
 
         channel, broadcaster_user_id, channel_id, chatroom_id, is_live, viewer_count, followers_count, source = self._effective_ids(effective)
 
@@ -1425,7 +1425,7 @@ class KickChatPlugin(ThreadedPlugin):
                 effective = self._effective_settings(settings, host)
                 channel, broadcaster_user_id, channel_id, chatroom_id, is_live, viewer_count, followers_count, source = self._effective_ids(effective)
                 self._write_ready = self._has_write_credentials(effective)
-                _token, self._active_account = self._token_for_send(effective)
+                self._active_account = 'main'
                 if not chatroom_id:
                     # Do not crash into an obsolete manual-chatroom-id message. Kick
                     # sometimes hides the realtime room id for a few seconds after
