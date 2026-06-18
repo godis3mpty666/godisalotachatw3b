@@ -157,6 +157,9 @@ def _extract_service_command(text: str) -> str:
     for cmd in ('!sr+', '!sr', '!yt'):
         if low == cmd or low.startswith(cmd + ' '):
             return raw.strip()
+    mention_match = re.search(r'(?i)(?:^|\s)@\S+\s+(!(?:sr\+?|yt)(?:\s+.+)?$)', raw.strip())
+    if mention_match:
+        return mention_match.group(1).strip()
     # Accept old bridge text like "Name from TT: !sr song" but only keep the
     # actual command, never the bridge label.
     match = re.search(r'(?i)(?:^|:\s)(!(?:sr\+?|yt)(?:\s+.+)?$)', raw.strip())
@@ -754,6 +757,7 @@ class Spotis3mptifyPlugin(ProviderPlugin):
             query = text[len(cmd):].strip()
         else:
             return
+        self._log(f'Chat command erkannt: {action} von {username}@{platform} · query="{query}"')
         self._refresh_runtime_core_settings()
         key = f'{platform}|{username.lower()}|{text}'
         now = time.time()

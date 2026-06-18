@@ -65,20 +65,28 @@ function userColor(platform,user){let h=2166136261;for(const c of `${platform}:$
 function platformMark(p){return ({twitch:"Twitch",tiktok:"TikTok",youtube:"YouTube",kick:"Kick"}[p]||p);}
 function platformBadge(p){return `<span class="chatPlatform ${esc(p)}"><img src="/platform-icon/${esc(p)}" alt="">${esc(platformMark(p))}</span>`;}
 function platformLabel(p){return ({twitch:"Twitch",tiktok:"TikTok",youtube:"YouTube",kick:"Kick",spotify:"Spotify",openai:"ChatGPT / OpenAI",meld:"Meld",obs:"OBS"}[p]||p);}
+function statusLabel(cfg){
+  const raw = String(cfg.status || (cfg.enabled ? "bereit" : "inaktiv")).toLowerCase();
+  if(raw === "verbunden") return "Verbunden";
+  if(raw === "inaktiv") return "Inaktiv";
+  if(raw === "bereit") return "Bereit";
+  return "Nicht verbunden";
+}
 function platformAccountDetails(cfg){
   const platformConnected = cfg.status === "verbunden";
   const mainConnected = platformConnected && (cfg.main_status === "verbunden" || (!cfg.main_status && !cfg.bot_status));
   const botConnected = platformConnected && cfg.bot_status === "verbunden";
-  const main = mainConnected ? (cfg.main || cfg.main_account || cfg.channel || cfg.unique_id || cfg.main_username || cfg.main_channel_title || "-") : "-";
-  const bot = botConnected ? (cfg.bot || cfg.bot_account || cfg.bot_username || cfg.username || cfg.bot_channel_title || "-") : "-";
+  const mainName = cfg.main || cfg.main_account || cfg.channel || cfg.unique_id || cfg.main_username || cfg.main_channel_title || "";
+  const botName = cfg.bot || cfg.bot_account || cfg.bot_username || cfg.username || cfg.bot_channel_title || "";
   const rows = [];
-  if(mainConnected) rows.push(`Main: ${esc(main)}`);
-  if(botConnected) rows.push(`Bot: ${esc(bot)}`);
-  return rows.length ? rows.join("<br>") : "Keine Accounts verbunden";
+  if(mainName) rows.push(`Main: ${esc(mainName)}${mainConnected ? "" : " · nicht verbunden"}`);
+  if(botName) rows.push(`Bot: ${esc(botName)}${botConnected ? "" : " · nicht verbunden"}`);
+  return rows.length ? rows.join("<br>") : "Keine Accounts eingetragen";
 }
 function card(p,cfg){
   const st = cfg.status || "nicht verbunden";
   const ok = st==="verbunden";
+  const label = statusLabel(cfg);
   let details = "";
   if(p==="tiktok"||p==="twitch"||p==="youtube"||p==="kick") details = platformAccountDetails(cfg);
   else if(p==="spotify") details = ``;
@@ -86,7 +94,7 @@ function card(p,cfg){
   else if(p==="meld") details = cfg.detail ? esc(cfg.detail) : ``;
   else if(p==="obs") details = cfg.detail ? esc(cfg.detail) : ``;
   else details = `Host: ${esc(cfg.host||"-")}:${esc(cfg.port||"-")}`;
-  return `<div class="card" data-platform-card="${esc(p)}"><div class="label">${platformLabel(p)}</div><div class="status"><span class="dot ${ok?'ok':''}"></span><span class="statusText">${ok?'Verbunden':'Bereit'}</span></div><div class="small cardDetails">${details}</div></div>`;
+  return `<div class="card" data-platform-card="${esc(p)}"><div class="label">${platformLabel(p)}</div><div class="status"><span class="dot ${ok?'ok':''}"></span><span class="statusText">${label}</span></div><div class="small cardDetails">${details}</div></div>`;
 }
 function updatePlatformCard(p,cfg){
   const el=document.querySelector(`[data-platform-card="${p}"]`);
@@ -97,7 +105,7 @@ function updatePlatformCard(p,cfg){
   const txt = el.querySelector(".statusText");
   const details = el.querySelector(".cardDetails");
   if(dot) dot.classList.toggle("ok", ok);
-  if(txt) txt.textContent = ok ? "Verbunden" : (cfg.enabled ? "Nicht verbunden" : "Inaktiv");
+  if(txt) txt.textContent = statusLabel(cfg);
   if(details && (p === "tiktok" || p === "twitch" || p === "youtube" || p === "kick")) details.innerHTML = platformAccountDetails(cfg);
   else if(details && (p === "meld" || p === "obs" || p === "openai")) details.textContent = cfg.detail || "";
 }

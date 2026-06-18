@@ -1784,7 +1784,14 @@ class AppState:
             plugin = self.plugin_instances.get(plugin_id)
             if plugin is None:
                 return ""
-            value = str(getattr(plugin, "_active_account", "") or "").strip().lower()
+            checker = getattr(plugin, "active_account", None)
+            if callable(checker):
+                try:
+                    value = str(checker() or "").strip().lower()
+                except Exception:
+                    value = ""
+            else:
+                value = str(getattr(plugin, "_active_account", "") or "").strip().lower()
             if value in {"main", "bot"}:
                 return value
             return ""
@@ -1826,8 +1833,8 @@ class AppState:
             active = "main"
         elif bot_ok:
             active = "bot"
-        cfg["main_status"] = "verbunden" if active == "main" else "nicht verbunden"
-        cfg["bot_status"] = "verbunden" if active == "bot" else "nicht verbunden"
+        cfg["main_status"] = "verbunden" if main_ok else "nicht verbunden"
+        cfg["bot_status"] = "verbunden" if bot_ok else "nicht verbunden"
         return active
 
     def _set_visible_active_account(self, cfg: dict, plugin_id: str, platform: str) -> None:
@@ -1837,8 +1844,10 @@ class AppState:
         if not active:
             self._set_visible_saved_account(cfg, platform)
             return
-        cfg["main_status"] = "verbunden" if active == "main" else "nicht verbunden"
-        cfg["bot_status"] = "verbunden" if active == "bot" else "nicht verbunden"
+        main_ok = self.platform_status(platform, "main") == "verbunden"
+        bot_ok = self.platform_status(platform, "bot") == "verbunden"
+        cfg["main_status"] = "verbunden" if (main_ok or active == "main") else "nicht verbunden"
+        cfg["bot_status"] = "verbunden" if (bot_ok or active == "bot") else "nicht verbunden"
 
     def _log_line_ts(self, line: str) -> float:
         try:
@@ -1990,6 +1999,34 @@ class AppState:
         except Exception as exc:
             return False, "Spotify Statusfehler: " + str(exc)
 
+    def _platform_has_required_config(self, platform: str, cfg: dict) -> bool:
+        cfg = cfg if isinstance(cfg, dict) else {}
+        platform = str(platform or "").lower().strip()
+
+        def filled(*keys: str) -> bool:
+            return any(str(cfg.get(key) or "").strip() for key in keys)
+
+        if platform in {"twitch", "youtube", "kick"}:
+            return filled("main", "main_account", "channel", "main_username", "main_channel_title") and filled("client_id")
+        if platform == "tiktok":
+            return filled("main", "main_account", "unique_id", "channel")
+        if platform == "spotify":
+            return filled("client_id")
+        if platform == "openai":
+            return filled("api_key")
+        if platform == "meld":
+            return filled("host") and filled("port")
+        if platform == "obs":
+            return filled("host") and filled("port")
+        return True
+
+    def _disconnected_status(self, platform: str, cfg: dict, detail: str = "") -> tuple[str, str]:
+        if not bool((cfg or {}).get("enabled", False)):
+            return "inaktiv", detail or "inaktiv"
+        if self._platform_has_required_config(platform, cfg):
+            return "nicht verbunden", detail or "nicht verbunden"
+        return "bereit", detail or "Konfiguration fehlt"
+
     def live_platform_statuses(self) -> dict:
         s = self.settings()
         source = s.get("platforms", {}) if isinstance(s.get("platforms", {}), dict) else {}
@@ -2000,25 +2037,13 @@ class AppState:
             enabled = bool(cfg.get("enabled", False))
             cfg["enabled"] = enabled
             if not enabled:
-                if p == "tiktok":
-                    main_ok, _ = self.tiktok_account_status(cfg, "main")
-                    bot_ok, _ = self.tiktok_account_status(cfg, "bot")
-                    cfg["main_status"] = "verbunden" if main_ok else "nicht verbunden"
-                    cfg["bot_status"] = "verbunden" if bot_ok else "nicht verbunden"
-                    if main_ok or bot_ok:
-                        cfg["status"] = "verbunden"
-                        cfg["detail"] = "Main OK · Bot OK" if (main_ok and bot_ok) else "Main OK · Bot fehlt" if main_ok else "Bot OK · Main fehlt"
-                        out[p] = cfg
-                        continue
-                cfg["status"] = "nicht verbunden"
-                cfg.setdefault("detail", "inaktiv")
+                cfg["status"], cfg["detail"] = self._disconnected_status(p, cfg, "inaktiv")
                 out[p] = cfg
                 continue
 
             autoconnect = bool(cfg.get("autoconnect", True))
             if not autoconnect and p in {"twitch", "tiktok", "youtube", "kick", "spotify", "meld", "obs"}:
-                cfg["status"] = "nicht verbunden"
-                cfg["detail"] = "Autoconnect aus"
+                cfg["status"], cfg["detail"] = self._disconnected_status(p, cfg, "Autoconnect aus")
                 if p in {"twitch", "youtube", "kick"}:
                     cfg["main_status"] = self.platform_status(p, "main")
                     cfg["bot_status"] = self.platform_status(p, "bot")
@@ -2043,19 +2068,28 @@ class AppState:
 
             if p == "meld":
                 ok, detail = self.meld_status(cfg)
-                cfg["status"] = "verbunden" if ok else "nicht verbunden"
-                cfg["detail"] = detail
+                if ok:
+                    cfg["status"] = "verbunden"
+                    cfg["detail"] = detail
+                else:
+                    cfg["status"], cfg["detail"] = self._disconnected_status(p, cfg, detail)
             elif p == "obs":
                 ok, detail = self.obs_status(cfg)
-                cfg["status"] = "verbunden" if ok else "nicht verbunden"
-                cfg["detail"] = detail
+                if ok:
+                    cfg["status"] = "verbunden"
+                    cfg["detail"] = detail
+                else:
+                    cfg["status"], cfg["detail"] = self._disconnected_status(p, cfg, detail)
             elif p == "tiktok":
                 main_ok, _ = self.tiktok_account_status(cfg, "main")
                 bot_ok, _ = self.tiktok_account_status(cfg, "bot")
                 cfg["main_status"] = "verbunden" if main_ok else "nicht verbunden"
                 cfg["bot_status"] = "verbunden" if bot_ok else "nicht verbunden"
-                cfg["status"] = "verbunden" if (main_ok or bot_ok) else "nicht verbunden"
-                cfg["detail"] = "Main OK · Bot OK" if (main_ok and bot_ok) else "Main OK · Bot fehlt" if main_ok else "Bot OK · Main fehlt" if bot_ok else "Main fehlt · Bot fehlt"
+                if main_ok or bot_ok:
+                    cfg["status"] = "verbunden"
+                    cfg["detail"] = "Main OK · Bot OK" if (main_ok and bot_ok) else "Main OK · Bot fehlt" if main_ok else "Bot OK · Main fehlt"
+                else:
+                    cfg["status"], cfg["detail"] = self._disconnected_status(p, cfg, "Main nicht verbunden")
             elif p == "youtube":
                 main_saved = self._auth_token_ok("youtube", "main") or ((not bool(cfg.get("main_disconnected_at"))) and bool(str(cfg.get("main_access_token") or cfg.get("main_refresh_token") or "").strip()))
                 bot_saved = self._auth_token_ok("youtube", "bot") or ((not bool(cfg.get("bot_disconnected_at"))) and bool(str(cfg.get("access_token") or cfg.get("refresh_token") or "").strip()))
@@ -2065,23 +2099,35 @@ class AppState:
                     detail = f"{active} OAuth gespeichert"
                 else:
                     ok, detail = self.youtube_status(cfg)
-                cfg["status"] = "verbunden" if ok else "nicht verbunden"
-                cfg["detail"] = detail
                 self._set_visible_saved_account(cfg, p)
+                if ok:
+                    cfg["status"] = "verbunden"
+                    cfg["detail"] = detail
+                else:
+                    cfg["status"], cfg["detail"] = self._disconnected_status(p, cfg, detail)
             elif p == "spotify":
                 ok, detail = self.spotify_status(cfg)
-                cfg["status"] = "verbunden" if ok else "nicht verbunden"
-                cfg["detail"] = detail
+                if ok:
+                    cfg["status"] = "verbunden"
+                    cfg["detail"] = detail
+                else:
+                    cfg["status"], cfg["detail"] = self._disconnected_status(p, cfg, detail)
             elif p == "openai":
                 ok, detail = self.openai_status(cfg, force=False)
-                cfg["status"] = "verbunden" if ok else "nicht verbunden"
-                cfg["detail"] = detail
+                if ok:
+                    cfg["status"] = "verbunden"
+                    cfg["detail"] = detail
+                else:
+                    cfg["status"], cfg["detail"] = self._disconnected_status(p, cfg, detail)
                 cfg.pop("model", None)
                 cfg.pop("api_key", None)
             else:
                 active = self._set_visible_saved_account(cfg, p)
-                cfg["status"] = "verbunden" if active else "nicht verbunden"
-                cfg["detail"] = ("Bot OAuth gespeichert" if active == "bot" else "Main OAuth gespeichert") if active else "kein OAuth gespeichert"
+                if active:
+                    cfg["status"] = "verbunden"
+                    cfg["detail"] = "Bot OAuth gespeichert" if active == "bot" else "Main OAuth gespeichert"
+                else:
+                    cfg["status"], cfg["detail"] = self._disconnected_status(p, cfg, "kein OAuth gespeichert")
             out[p] = cfg
         return out
 

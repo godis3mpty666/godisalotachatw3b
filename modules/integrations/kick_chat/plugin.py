@@ -557,15 +557,17 @@ class KickChatPlugin(ThreadedPlugin):
                 shutil.rmtree(profile, ignore_errors=True)
 
     def _has_write_credentials(self, settings: dict[str, Any]) -> bool:
-        token, _account = self._token_for_send(settings)
+        token, account = self._token_for_send(settings)
         broadcaster_id = self._parse_int(settings.get('broadcaster_user_id') or settings.get('channel_id') or settings.get('main_user_id'))
+        if token and account:
+            self._active_account = account
         return bool(token and broadcaster_id)
 
     def is_connected(self) -> bool:
         return bool(self._connected or self._write_ready)
 
     def active_account(self) -> str:
-        return self._active_account or 'main'
+        return self._active_account or ''
 
     def _safe_json(self, resp: requests.Response):
         try:
@@ -1360,11 +1362,9 @@ class KickChatPlugin(ThreadedPlugin):
 
         if chatroom_id:
             self._write_ready = self._has_write_credentials(effective)
-            self._active_account = 'main'
             return True, f'Kick ready: room {chatroom_id} | {live_txt} | {viewer_txt} | {followers_txt} | source={source}'
         if self._has_write_credentials(effective):
             self._write_ready = True
-            self._active_account = 'main'
             return True, f'Kick write ready; realtime chatroom is not available yet | {live_txt} | {viewer_txt} | {followers_txt} | source={source}'
         # No manual chatroom setting anymore. OAuth belongs to the maintool and
         # the plugin keeps resolving/retrying from Kick itself.
@@ -1389,7 +1389,6 @@ class KickChatPlugin(ThreadedPlugin):
         self._is_live = None
         self._connected = False
         self._write_ready = self._has_write_credentials(effective)
-        self._active_account = 'main'
 
         channel, broadcaster_user_id, channel_id, chatroom_id, is_live, viewer_count, followers_count, source = self._effective_ids(effective)
 
@@ -1413,7 +1412,6 @@ class KickChatPlugin(ThreadedPlugin):
                 effective = self._effective_settings(settings, host)
                 channel, broadcaster_user_id, channel_id, chatroom_id, is_live, viewer_count, followers_count, source = self._effective_ids(effective)
                 self._write_ready = self._has_write_credentials(effective)
-                self._active_account = 'main'
                 if not chatroom_id:
                     # Do not crash into an obsolete manual-chatroom-id message. Kick
                     # sometimes hides the realtime room id for a few seconds after
