@@ -715,6 +715,17 @@ class AppState:
                 # Preserve explicit user switches, but fill missing account/auth fields.
                 if key in {"enabled", "autoconnect"} and key in dst_cfg:
                     continue
+                main_blocked = bool(dst_cfg.get("main_disconnected_at")) and key.startswith("main_")
+                bot_blocked = bool(dst_cfg.get("bot_disconnected_at")) and (not key.startswith("main_")) and key in {
+                    "access_token", "refresh_token", "bot_access_token", "bot_refresh_token",
+                    "oauth_login", "oauth_user_id", "username", "bot_username", "bot_user_id",
+                    "bot_channel_id", "bot_channel_title",
+                }
+                spotify_blocked = platform == "spotify" and bool(dst_cfg.get("main_disconnected_at")) and key in {
+                    "access_token", "refresh_token", "saved_at", "expires_at", "expires_in", "token_type",
+                }
+                if main_blocked or bot_blocked or spotify_blocked:
+                    continue
                 if current in (None, ""):
                     dst_cfg[key] = value
                     changed = True
@@ -1419,6 +1430,54 @@ class AppState:
     def save_settings(self, s):
         s["version"] = VERSION
         _json_save(self.settings_path, s)
+
+    def _disconnect_account_settings(self, settings: dict, platform: str, account: str) -> None:
+        platform = str(platform or "").lower().strip()
+        account = "bot" if str(account or "").lower().strip() == "bot" else "main"
+        cfg = settings.setdefault("platforms", {}).setdefault(platform, {})
+        if not isinstance(cfg, dict):
+            settings["platforms"][platform] = {}
+            cfg = settings["platforms"][platform]
+        now = int(time.time())
+
+        if platform == "openai":
+            for key in ("api_key", "organization", "project", "status", "detail", "connection_status"):
+                cfg[key] = ""
+            cfg["main_disconnected_at"] = now
+            return
+
+        if platform == "tiktok":
+            cfg["bot_login_ok" if account == "bot" else "main_login_ok"] = False
+            cfg["bot_disconnected_at" if account == "bot" else "main_disconnected_at"] = now
+            cfg["last_login_account"] = ""
+            return
+
+        if platform == "spotify":
+            for key in ("access_token", "refresh_token", "saved_at", "expires_at", "expires_in", "scope", "scopes", "token_type", "connection_status", "status", "detail"):
+                cfg[key] = ""
+            cfg["main_disconnected_at"] = now
+            return
+
+        if account == "main":
+            for key in (
+                "main_access_token", "main_refresh_token", "main_saved_at", "main_expires_at", "main_expires_in",
+                "main_token_type", "main_oauth_login", "main_oauth_user_id", "main_connection_status",
+                "main_channel_id", "main_channel_title", "main_channel_custom_url", "main_user_id", "main_username",
+                "broadcaster_user_id", "broadcaster_id", "broadcaster_channel_id", "channel_id", "channel_slug",
+            ):
+                cfg[key] = ""
+            cfg["main_disconnected_at"] = now
+        else:
+            for key in (
+                "access_token", "refresh_token", "bot_access_token", "bot_refresh_token", "saved_at", "expires_at",
+                "expires_in", "token_type", "oauth_login", "oauth_user_id", "connection_status",
+                "bot_user_id", "bot_username", "username", "bot_channel_id", "bot_channel_title",
+                "bot_channel_custom_url",
+            ):
+                cfg[key] = ""
+            cfg["bot_disconnected_at"] = now
+        cfg["status"] = "nicht verbunden"
+        cfg["detail"] = "getrennt"
 
     def _settings_token_snapshot(self, platform: str, account: str, cfg: dict | None = None) -> dict:
         """Build a canonical auth-file-shaped token from platform settings.
@@ -3163,46 +3222,52 @@ class Handler(BaseHTTPRequestHandler):
             parts = path.strip("/").split("/")
             if len(parts) >= 4:
                 p, acc = parts[2], parts[3]
+                plugin_id = CHAT_PLATFORM_PLUGINS.get(p)
                 try:
                     (st.auth_dir / f"{p}_{acc}.json").unlink(missing_ok=True)
                 except Exception:
                     pass
-                if p == "youtube":
+                if p == "spotify":
                     try:
-                        s = st.settings()
-                        yt = s.setdefault("platforms", {}).setdefault("youtube", {})
-                        if acc == "main":
-                            for k in ("main_access_token", "main_refresh_token", "main_saved_at", "main_channel_id", "main_channel_title", "main_channel_custom_url", "broadcaster_channel_id"):
-                                yt[k] = ""
-                            yt["main_connection_status"] = "Nicht verbunden"
-                        else:
-                            for k in ("access_token", "refresh_token", "saved_at", "bot_channel_id", "bot_channel_title", "bot_channel_custom_url"):
-                                yt[k] = ""
-                            yt["connection_status"] = "Nicht verbunden"
-                        st._youtube_status_cache = {"ts": 0.0, "ok": False, "detail": "getrennt", "locked": False, "key": None}
-                        st.save_settings(s)
-                    except Exception as exc:
-                        st.log("youtube", "disconnect settings cleanup failed", exc)
+                        (st.auth_dir / "spotify_main.json").unlink(missing_ok=True)
+                    except Exception:
+                        pass
+                    plugin_id = "spotis3mptify"
                 if p == "tiktok":
                     try:
                         s = st.settings()
                         tt = s.setdefault("platforms", {}).setdefault("tiktok", {})
                         profile = st._tiktok_profile_dir(tt, acc)
                         shutil.rmtree(profile, ignore_errors=True)
-                        tt["bot_login_ok" if acc == "bot" else "main_login_ok"] = False
+                        st._disconnect_account_settings(s, p, acc)
                         st.save_settings(s)
                     except Exception as exc:
                         st.log("tiktok", "disconnect cleanup failed", exc)
-                if p == "openai":
+                else:
                     try:
                         s = st.settings()
-                        ai = s.setdefault("platforms", {}).setdefault("openai", {})
-                        ai["api_key"] = ""
-                        ai["status"] = "nicht verbunden"
-                        st._openai_status_cache = {"ts": 0.0, "ok": False, "detail": "getrennt", "locked": False, "key": None, "models": []}
+                        st._disconnect_account_settings(s, p, acc)
                         st.save_settings(s)
                     except Exception as exc:
-                        st.log("openai", "disconnect cleanup failed", exc)
+                        st.log(p or "platform", "disconnect settings cleanup failed", exc)
+                try:
+                    (st.auth_dir / f"{p}_{acc}.json").unlink(missing_ok=True)
+                    if p == "spotify":
+                        (st.auth_dir / "spotify_main.json").unlink(missing_ok=True)
+                except Exception:
+                    pass
+                if p == "youtube":
+                    st._youtube_status_cache = {"ts": 0.0, "ok": False, "detail": "getrennt", "locked": False, "key": None}
+                if p == "openai":
+                    try:
+                        st._openai_status_cache = {"ts": 0.0, "ok": False, "detail": "getrennt", "locked": False, "key": None, "models": []}
+                    except Exception as exc:
+                        st.log("openai", "disconnect cache cleanup failed", exc)
+                if plugin_id:
+                    try:
+                        st.plugin_manager.restart_plugin_async(plugin_id, f"{p} {acc} getrennt; Neustart laeuft")
+                    except Exception as exc:
+                        st.log(plugin_id, "restart after disconnect failed", exc)
                 return self._json({"ok": True})
         return self._json({"ok": False, "error": "unknown"}, 404)
 
