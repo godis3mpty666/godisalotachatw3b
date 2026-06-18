@@ -715,13 +715,11 @@ class AppState:
                 # Preserve explicit user switches, but fill missing account/auth fields.
                 if key in {"enabled", "autoconnect"} and key in dst_cfg:
                     continue
-                main_blocked = bool(dst_cfg.get("main_disconnected_at")) and (
-                    key.startswith("main_") or key in {"main", "main_account", "channel", "channel_slug", "unique_id", "live_url", "resolved_live_url"}
-                )
+                main_blocked = bool(dst_cfg.get("main_disconnected_at")) and key.startswith("main_")
                 bot_blocked = bool(dst_cfg.get("bot_disconnected_at")) and (not key.startswith("main_")) and key in {
                     "access_token", "refresh_token", "bot_access_token", "bot_refresh_token",
                     "oauth_login", "oauth_user_id", "username", "bot_username", "bot_user_id",
-                    "bot_channel_id", "bot_channel_title", "bot", "bot_account",
+                    "bot_channel_id", "bot_channel_title",
                 }
                 spotify_blocked = platform == "spotify" and bool(dst_cfg.get("main_disconnected_at")) and key in {
                     "access_token", "refresh_token", "saved_at", "expires_at", "expires_in", "token_type",
@@ -1450,12 +1448,6 @@ class AppState:
 
         if platform == "tiktok":
             cfg["bot_login_ok" if account == "bot" else "main_login_ok"] = False
-            if account == "main":
-                for key in ("main", "main_account", "unique_id", "creator_unique_id", "live_url", "resolved_live_url"):
-                    cfg[key] = ""
-            else:
-                for key in ("bot", "bot_account", "bot_username", "username"):
-                    cfg[key] = ""
             cfg["bot_disconnected_at" if account == "bot" else "main_disconnected_at"] = now
             cfg["last_login_account"] = ""
             return
@@ -1468,17 +1460,15 @@ class AppState:
 
         if account == "main":
             for key in (
-                "main", "main_account", "channel",
                 "main_access_token", "main_refresh_token", "main_saved_at", "main_expires_at", "main_expires_in",
                 "main_token_type", "main_oauth_login", "main_oauth_user_id", "main_connection_status",
                 "main_channel_id", "main_channel_title", "main_channel_custom_url", "main_user_id", "main_username",
-                "broadcaster_user_id", "broadcaster_id", "broadcaster_channel_id", "channel_id", "channel_slug",
+                "broadcaster_user_id", "broadcaster_id", "broadcaster_channel_id", "channel_id",
             ):
                 cfg[key] = ""
             cfg["main_disconnected_at"] = now
         else:
             for key in (
-                "bot", "bot_account",
                 "access_token", "refresh_token", "bot_access_token", "bot_refresh_token", "saved_at", "expires_at",
                 "expires_in", "token_type", "oauth_login", "oauth_user_id", "connection_status",
                 "bot_user_id", "bot_username", "username", "bot_channel_id", "bot_channel_title",
