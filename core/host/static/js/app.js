@@ -61,12 +61,16 @@ function userColor(platform,user){let h=2166136261;for(const c of `${platform}:$
 function platformMark(p){return ({twitch:"Twitch",tiktok:"TikTok",youtube:"YouTube",kick:"Kick"}[p]||p);}
 function platformBadge(p){return `<span class="chatPlatform ${esc(p)}"><img src="/platform-icon/${esc(p)}" alt="">${esc(platformMark(p))}</span>`;}
 function platformLabel(p){return ({twitch:"Twitch",tiktok:"TikTok",youtube:"YouTube",kick:"Kick",spotify:"Spotify",openai:"ChatGPT / OpenAI",meld:"Meld",obs:"OBS"}[p]||p);}
+function platformAccountDetails(cfg){
+  const main = cfg.main || cfg.main_account || cfg.channel || cfg.unique_id || cfg.main_username || cfg.main_channel_title || "-";
+  const bot = cfg.bot || cfg.bot_account || cfg.bot_username || cfg.username || cfg.bot_channel_title || "-";
+  return `Main: ${esc(main)}<br>Bot: ${esc(bot)}`;
+}
 function card(p,cfg){
   const st = cfg.status || "nicht verbunden";
   const ok = st==="verbunden";
   let details = "";
-  if(p==="tiktok") details = cfg.detail ? esc(cfg.detail) : `Main: ${esc(cfg.main||"-")}<br>Bot: ${esc(cfg.bot||"-")}`;
-  else if(p==="twitch"||p==="youtube"||p==="kick") details = `Main: ${esc(cfg.main||"-")}<br>Bot: ${esc(cfg.bot||"-")}`;
+  if(p==="tiktok"||p==="twitch"||p==="youtube"||p==="kick") details = platformAccountDetails(cfg);
   else if(p==="spotify") details = ``;
   else if(p==="openai") details = cfg.detail ? esc(cfg.detail) : (cfg.status==="verbunden" ? "API-Key gespeichert" : "OpenAI API-Key fehlt");
   else if(p==="meld") details = cfg.detail ? esc(cfg.detail) : ``;
@@ -84,7 +88,8 @@ function updatePlatformCard(p,cfg){
   const details = el.querySelector(".cardDetails");
   if(dot) dot.classList.toggle("ok", ok);
   if(txt) txt.textContent = ok ? "Verbunden" : (cfg.enabled ? "Nicht verbunden" : "Inaktiv");
-  if(details && (p === "meld" || p === "obs" || p === "tiktok" || p === "openai")) details.textContent = cfg.detail || "";
+  if(details && (p === "tiktok" || p === "twitch" || p === "youtube" || p === "kick")) details.innerHTML = platformAccountDetails(cfg);
+  else if(details && (p === "meld" || p === "obs" || p === "openai")) details.textContent = cfg.detail || "";
 }
 let meldDashboardPoll = null;
 let obsDashboardPoll = null;
