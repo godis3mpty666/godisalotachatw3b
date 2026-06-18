@@ -24,7 +24,11 @@ async function shutdownApp(){
   try{
     await api("/api/shutdown",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}",timeoutMs:2500});
   }catch(_){ }
-  document.body.innerHTML = `<div class="shutdownScreen"><div><h1>godisalotachat wird geschlossen</h1><p>Die EXE wird beendet. Falls der Tab offen bleibt, kannst du ihn schließen.</p></div></div>`;
+  document.body.innerHTML = `<div class="shutdownScreen"><div><h1>godisalotachat wird geschlossen</h1><p>Dieses Fenster schließt sich gleich automatisch.</p></div></div>`;
+  setTimeout(()=>{ try{ window.open("","_self"); window.close(); }catch(_){} },3000);
+  setTimeout(()=>{
+    document.body.innerHTML = `<div class="shutdownScreen"><div><h1>godisalotachat ist geschlossen</h1><p>Falls der Tab offen bleibt, kannst du ihn schließen.</p></div></div>`;
+  },3600);
 }
 function wireShutdownButton(){
   const btn = $("#shutdownApp");

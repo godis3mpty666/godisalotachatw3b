@@ -1769,10 +1769,41 @@ class AppState:
         except Exception:
             return ""
 
+    def _account_auth_stamp(self, platform: str, account: str, cfg: dict | None = None) -> float:
+        try:
+            platform = str(platform or "").lower().strip()
+            account = "main" if str(account or "").lower().strip() == "main" else "bot"
+            cfg = cfg if isinstance(cfg, dict) else {}
+            token = _json_load(self.auth_dir / f"{platform}_{account}.json", {})
+            values = []
+            if isinstance(token, dict):
+                values.extend([token.get("saved_at"), token.get("updated_at"), token.get("created_at")])
+            prefix = "main_" if account == "main" else ""
+            values.extend([cfg.get(prefix + "saved_at"), cfg.get(prefix + "updated_at"), cfg.get(prefix + "created_at")])
+            for value in values:
+                try:
+                    stamp = float(value or 0.0)
+                    if stamp > 0:
+                        return stamp
+                except Exception:
+                    pass
+            path = self.auth_dir / f"{platform}_{account}.json"
+            return float(path.stat().st_mtime) if path.exists() else 0.0
+        except Exception:
+            return 0.0
+
     def _set_visible_saved_account(self, cfg: dict, platform: str) -> str:
         main_ok = self.platform_status(platform, "main") == "verbunden"
         bot_ok = self.platform_status(platform, "bot") == "verbunden"
-        active = "bot" if bot_ok else "main" if main_ok else ""
+        active = ""
+        if main_ok and bot_ok:
+            main_stamp = self._account_auth_stamp(platform, "main", cfg)
+            bot_stamp = self._account_auth_stamp(platform, "bot", cfg)
+            active = "bot" if bot_stamp > main_stamp else "main"
+        elif main_ok:
+            active = "main"
+        elif bot_ok:
+            active = "bot"
         cfg["main_status"] = "verbunden" if active == "main" else "nicht verbunden"
         cfg["bot_status"] = "verbunden" if active == "bot" else "nicht verbunden"
         return active
@@ -3465,7 +3496,7 @@ class Handler(BaseHTTPRequestHandler):
                 st.mark_clean_shutdown("exe close requested by ui")
             except Exception:
                 pass
-            _schedule_hard_exit(0.6)
+            _schedule_hard_exit(3.4)
             return self._json({"ok": True, "shutdown": True, "mode": "exe_exit"})
 
         if path == "/api/spotis3mptify/overlay-state":
