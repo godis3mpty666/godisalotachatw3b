@@ -36,7 +36,7 @@ if exist "dist\webbased\data" (
     if errorlevel 8 goto :fail
 )
 if exist "temp\root_auth_backup" (
-    powershell -NoProfile -ExecutionPolicy Bypass -Command "$backup='temp\root_auth_backup'; $auth='data\auth'; New-Item -ItemType Directory -Force -Path $auth | Out-Null; Get-ChildItem $backup -Filter *.json -ErrorAction SilentlyContinue | ForEach-Object { $dst=Join-Path $auth $_.Name; $has=$false; if(Test-Path $dst){ try{ $j=Get-Content $dst -Raw | ConvertFrom-Json; if($j.access_token -or $j.refresh_token){ $has=$true } } catch{} }; if(-not $has){ Copy-Item $_.FullName $dst -Force } }"
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "$backup='temp\root_auth_backup'; $auth='data\auth'; $settings='data\settings.json'; $cfg=$null; if(Test-Path $settings){ try{ $cfg=Get-Content $settings -Raw | ConvertFrom-Json } catch{} }; New-Item -ItemType Directory -Force -Path $auth | Out-Null; Get-ChildItem $backup -Filter *.json -ErrorAction SilentlyContinue | ForEach-Object { $stem=$_.BaseName.ToLower(); $parts=$stem -split '_'; $skip=$false; if($parts.Count -ge 2 -and $cfg -and $cfg.platforms){ $platform=($parts[0]); $account=($parts[-1]); $pcfg=$cfg.platforms.$platform; if($pcfg){ if($account -eq 'main' -and $pcfg.main_disconnected_at){ $skip=$true }; if($account -eq 'bot' -and $pcfg.bot_disconnected_at){ $skip=$true } } }; if($skip){ return }; $dst=Join-Path $auth $_.Name; $has=$false; if(Test-Path $dst){ try{ $j=Get-Content $dst -Raw | ConvertFrom-Json; if($j.access_token -or $j.refresh_token){ $has=$true } } catch{} }; if(-not $has){ Copy-Item $_.FullName $dst -Force } }"
 )
 
 if exist dist rmdir /s /q dist

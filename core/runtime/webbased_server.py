@@ -208,6 +208,14 @@ class WebbasedPluginHost:
                     cfg["bot_access_token"] = cfg.get("access_token")
                 if cfg.get("refresh_token") and not cfg.get("bot_refresh_token"):
                     cfg["bot_refresh_token"] = cfg.get("refresh_token")
+            if platform in ("twitch", "youtube", "kick"):
+                try:
+                    cfg = self.state.refresh_platform_oauth(platform, cfg)
+                except Exception as exc:
+                    try:
+                        self.state.log(platform, "oauth refresh from platform settings failed", exc)
+                    except Exception:
+                        pass
             return cfg
         except Exception:
             return {}
@@ -1474,6 +1482,124 @@ class AppState:
     def save_settings(self, s):
         s["version"] = VERSION
         _json_save(self.settings_path, s)
+
+    def _oauth_access_needs_refresh(self, cfg: dict, account: str) -> bool:
+        account = "main" if str(account or "").lower().strip() == "main" else "bot"
+        prefix = "main_" if account == "main" else ""
+        access = str(cfg.get(prefix + "access_token") or "").strip()
+        refresh = str(cfg.get(prefix + "refresh_token") or "").strip()
+        if not refresh:
+            return False
+        if not access:
+            return True
+        try:
+            expires_at = float(cfg.get(prefix + "expires_at") or 0)
+            if expires_at and time.time() >= expires_at - 90:
+                return True
+        except Exception:
+            pass
+        try:
+            saved_at = float(cfg.get(prefix + "saved_at") or 0)
+            if not cfg.get(prefix + "expires_at") and (not saved_at or time.time() - saved_at > 3300):
+                return True
+        except Exception:
+            if not cfg.get(prefix + "expires_at"):
+                return True
+        return False
+
+    def _oauth_refresh_payload(self, platform: str, cfg: dict, account: str) -> dict:
+        account = "main" if str(account or "").lower().strip() == "main" else "bot"
+        prefix = "main_" if account == "main" else ""
+        refresh = str(cfg.get(prefix + "refresh_token") or "").strip()
+        client_id = str(cfg.get("client_id") or "").strip()
+        client_secret = str(cfg.get("client_secret") or "").strip()
+        payload = {"grant_type": "refresh_token", "refresh_token": refresh}
+        if client_id:
+            payload["client_id"] = client_id
+        if client_secret:
+            payload["client_secret"] = client_secret
+        return payload
+
+    def _save_refreshed_oauth(self, platform: str, account: str, cfg: dict, token: dict) -> dict:
+        account = "main" if str(account or "").lower().strip() == "main" else "bot"
+        prefix = "main_" if account == "main" else ""
+        access = self._clean_token(token.get("access_token"))
+        if not access:
+            return cfg
+        refresh = str(token.get("refresh_token") or cfg.get(prefix + "refresh_token") or "").strip()
+        try:
+            expires_in = float(token.get("expires_in") or cfg.get(prefix + "expires_in") or 0)
+        except Exception:
+            expires_in = 0.0
+        expires_at = time.time() + expires_in if expires_in > 0 else cfg.get(prefix + "expires_at")
+        scope = str(token.get("scope") or cfg.get("main_scopes" if account == "main" else "scopes") or cfg.get(prefix + "scope") or "").strip()
+        saved_at = time.time()
+
+        auth_token = dict(token or {})
+        auth_token.update({
+            "platform": platform,
+            "account": account,
+            "access_token": access,
+            "refresh_token": refresh,
+            "saved_at": saved_at,
+        })
+        if expires_in:
+            auth_token["expires_in"] = expires_in
+        if expires_at:
+            auth_token["expires_at"] = expires_at
+        if scope:
+            auth_token["scope"] = scope
+        _json_save(self.auth_dir / f"{platform}_{account}.json", auth_token)
+
+        cfg[prefix + "access_token"] = access
+        cfg[prefix + "refresh_token"] = refresh
+        cfg[prefix + "saved_at"] = saved_at
+        if expires_in:
+            cfg[prefix + "expires_in"] = expires_in
+        if expires_at:
+            cfg[prefix + "expires_at"] = expires_at
+        if account == "main":
+            if scope:
+                cfg["main_scopes"] = scope
+            cfg["main_disconnected_at"] = 0
+        else:
+            if scope:
+                cfg["scopes"] = scope
+            cfg["bot_access_token"] = access
+            cfg["bot_refresh_token"] = refresh
+            cfg["bot_disconnected_at"] = 0
+
+        s = self.settings()
+        live_cfg = s.setdefault("platforms", {}).setdefault(platform, {})
+        live_cfg.update({k: v for k, v in cfg.items() if k in {
+            "access_token", "refresh_token", "saved_at", "expires_at", "expires_in",
+            "main_access_token", "main_refresh_token", "main_saved_at", "main_expires_at", "main_expires_in",
+            "bot_access_token", "bot_refresh_token", "scopes", "main_scopes",
+            "main_disconnected_at", "bot_disconnected_at",
+        }})
+        self.save_settings(s)
+        return cfg
+
+    def refresh_platform_oauth(self, platform: str, cfg: dict) -> dict:
+        platform = str(platform or "").lower().strip()
+        cfg = dict(cfg or {})
+        if platform not in {"twitch", "youtube", "kick"}:
+            return cfg
+        for account in ("main", "bot"):
+            if bool(cfg.get("main_disconnected_at" if account == "main" else "bot_disconnected_at")):
+                continue
+            if not self._oauth_access_needs_refresh(cfg, account):
+                continue
+            payload = self._oauth_refresh_payload(platform, cfg, account)
+            if not payload.get("refresh_token"):
+                continue
+            try:
+                token = self._http_json(TOKEN_URLS[platform], data=payload, method="POST", timeout=20)
+                cfg = self._save_refreshed_oauth(platform, account, cfg, token)
+                self.log(platform, f"{account} OAuth refreshed for autoconnect")
+            except Exception as exc:
+                self.log(platform, f"{account} OAuth refresh failed", exc)
+        return cfg
 
     def _disconnect_account_settings(self, settings: dict, platform: str, account: str) -> None:
         platform = str(platform or "").lower().strip()
