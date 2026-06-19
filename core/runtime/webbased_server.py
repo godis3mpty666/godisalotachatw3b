@@ -199,6 +199,16 @@ class WebbasedPluginHost:
                 if not isinstance(token, dict):
                     continue
                 prefix = "" if (platform == "spotify" or account == "bot") else "main_"
+                try:
+                    token_saved_at = float(token.get("saved_at") or 0.0)
+                except Exception:
+                    token_saved_at = 0.0
+                try:
+                    cfg_saved_at = float(cfg.get(prefix + "saved_at") or 0.0)
+                except Exception:
+                    cfg_saved_at = 0.0
+                if cfg_saved_at > token_saved_at + 1.0 and str(cfg.get(prefix + "access_token") or cfg.get(prefix + "refresh_token") or "").strip():
+                    continue
                 for key in ("access_token", "refresh_token", "expires_in", "expires_at", "scope", "token_type", "saved_at"):
                     value = token.get(key)
                     if value not in (None, ""):
@@ -235,6 +245,8 @@ class WebbasedPluginHost:
             if platform in ("twitch", "youtube", "kick"):
                 try:
                     cfg = self.state.refresh_platform_oauth(platform, cfg)
+                    if platform == "twitch":
+                        cfg = self.state.refresh_invalid_twitch_oauth(cfg)
                     for account in ("main", "bot"):
                         if account_disconnected(account):
                             strip_runtime_auth(account)
@@ -1456,12 +1468,28 @@ class AppState:
                     pids.update(self._windows_process_children(pid))
                 pids.update(self._windows_pids_by_command_hint(profile_dir=profile))
                 if not pids:
-                    self.request_shutdown("main browser process closed")
+                    try:
+                        self.log("ui", "main browser process closed; backend kept running")
+                    except Exception:
+                        pass
                     return
                 time.sleep(2.5)
         except Exception as exc:
             try: self.log("ui", "main browser monitor failed", exc)
             except Exception: pass
+
+    def open_external_url(self, url: str) -> bool:
+        """Open login and developer pages in the user's normal browser."""
+        url = str(url or "").strip()
+        if not (url.startswith("http://") or url.startswith("https://")):
+            return False
+        try:
+            webbrowser.open(url, new=2, autoraise=True)
+            return True
+        except Exception as exc:
+            try: self.log("ui", "external browser open failed", exc)
+            except Exception: pass
+            return False
 
     def close_main_browser(self) -> None:
         try:
@@ -1804,8 +1832,8 @@ class AppState:
         url = "https://www.tiktok.com/login"
         browser = self._find_browser_exe(cfg)
         if browser:
-            # Like the other platform logins: open a clean, fixed-size login window instead of a random full browser tab.
-            # --app keeps the stored TikTok profile/cookies but makes the QR login window much cleaner.
+            # Keep the stored TikTok profile/cookies, but use a normal browser
+            # window for login. Only the TikTok live chat window stays app-like.
             args = [
                 browser,
                 f"--user-data-dir={profile_dir}",
@@ -1815,7 +1843,7 @@ class AppState:
                 "--window-size=1000,800",
                 "--window-position=140,80",
                 "--new-window",
-                f"--app={url}",
+                url,
             ]
             popen_kwargs = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL, "close_fds": True}
             if os.name == "nt":
@@ -1851,6 +1879,14 @@ class AppState:
         req = urllib.request.Request(url, data=body, headers=h, method=method)
         raw = urllib.request.urlopen(req, timeout=timeout).read().decode("utf-8", errors="replace")
         return json.loads(raw or "{}") if raw.strip() else {}
+
+    def _clean_token(self, value):
+        token = str(value or "").strip()
+        if token.lower().startswith("oauth:"):
+            token = token[6:]
+        if token.lower().startswith("bearer "):
+            token = token[7:]
+        return token.strip()
 
     def _oauth_access_needs_refresh(self, cfg: dict, account: str) -> bool:
         account = "main" if str(account or "").lower().strip() == "main" else "bot"
@@ -1949,15 +1985,16 @@ class AppState:
         self.save_settings(s)
         return cfg
 
-    def refresh_platform_oauth(self, platform: str, cfg: dict) -> dict:
+    def refresh_platform_oauth(self, platform: str, cfg: dict, *, force_accounts: set[str] | None = None) -> dict:
         platform = str(platform or "").lower().strip()
         cfg = dict(cfg or {})
         if platform not in {"twitch", "youtube", "kick"}:
             return cfg
+        force_accounts = {("main" if str(item).lower().strip() == "main" else "bot") for item in (force_accounts or set())}
         for account in ("main", "bot"):
             if bool(cfg.get("main_disconnected_at" if account == "main" else "bot_disconnected_at")):
                 continue
-            if not self._oauth_access_needs_refresh(cfg, account):
+            if account not in force_accounts and not self._oauth_access_needs_refresh(cfg, account):
                 continue
             payload = self._oauth_refresh_payload(platform, cfg, account)
             if not payload.get("refresh_token"):
@@ -1968,6 +2005,47 @@ class AppState:
                 self.log(platform, f"{account} OAuth refreshed for autoconnect")
             except Exception as exc:
                 self.log(platform, f"{account} OAuth refresh failed", exc)
+        return cfg
+
+    def _twitch_access_valid(self, token: str) -> tuple[bool, str]:
+        token = self._clean_token(token)
+        if not token:
+            return False, "missing"
+        try:
+            data = self._http_json("https://id.twitch.tv/oauth2/validate", headers={"Authorization": "OAuth " + token}, timeout=8)
+            login = str((data or {}).get("login") or "").strip()
+            return True, login or "valid"
+        except urllib.error.HTTPError as exc:
+            return False, f"HTTP {int(getattr(exc, 'code', 0) or 0)}"
+        except Exception as exc:
+            return False, str(exc)
+
+    def refresh_invalid_twitch_oauth(self, cfg: dict) -> dict:
+        """Refresh Twitch tokens that look present but fail validation.
+
+        Rebuilds can restore stale auth JSON with insufficient expiry metadata.
+        In that case timestamp-based refresh is not enough, so validate once
+        before twitch_chat consumes the token and force-refresh invalid accounts.
+        """
+        cfg = dict(cfg or {})
+        force_accounts = set()
+        for account in ("main", "bot"):
+            if bool(cfg.get("main_disconnected_at" if account == "main" else "bot_disconnected_at")):
+                continue
+            prefix = "main_" if account == "main" else ""
+            access = str(cfg.get(prefix + "access_token") or "").strip()
+            refresh = str(cfg.get(prefix + "refresh_token") or "").strip()
+            if not access or not refresh:
+                continue
+            ok, detail = self._twitch_access_valid(access)
+            if not ok:
+                force_accounts.add(account)
+                try:
+                    self.log("twitch", f"{account} OAuth invalid before autoconnect; refresh queued", detail)
+                except Exception:
+                    pass
+        if force_accounts:
+            cfg = self.refresh_platform_oauth("twitch", cfg, force_accounts=force_accounts)
         return cfg
 
     def _disconnect_account_settings(self, settings: dict, platform: str, account: str) -> None:
@@ -3710,6 +3788,13 @@ class Handler(BaseHTTPRequestHandler):
                 st.log("tiktok", "open failed", exc)
                 self._json({"ok": False, "error": str(exc)}, 500)
             return
+        if path == "/api/open-external":
+            query = urllib.parse.parse_qs(parsed.query)
+            url = str((query.get("url") or [""])[0]).strip()
+            if not (url.startswith("http://") or url.startswith("https://")):
+                return self._json({"ok": False, "error": "Ungueltige URL"}, 400)
+            ok = st.open_external_url(url)
+            return self._json({"ok": ok})
 
         if path == "/api/test-platform/tiktok":
             cfg = st.settings().get("platforms", {}).get("tiktok", {})
@@ -3780,6 +3865,14 @@ class Handler(BaseHTTPRequestHandler):
             parts = path.strip("/").split("/")
             if len(parts) >= 4:
                 return self._oauth_start(parts[2], parts[3])
+        if path.startswith("/api/oauth/open/"):
+            parts = path.strip("/").split("/")
+            if len(parts) >= 5:
+                platform = parts[3]
+                account = parts[4]
+                url = f"http://127.0.0.1:{st.port}/oauth/start/{urllib.parse.quote(platform)}/{urllib.parse.quote(account)}"
+                ok = st.open_external_url(url)
+                return self._json({"ok": ok})
         if path.startswith("/oauth/callback/"):
             parts = path.strip("/").split("/")
             if len(parts) >= 4:
@@ -3949,8 +4042,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"ok": True, "shutdown": True, "mode": "exe_exit"})
 
         if path == "/api/window-closed":
-            st.request_shutdown("main window closed")
-            return self._json({"ok": True, "shutdown": True, "mode": "exe_exit"})
+            try:
+                st.log("ui", "main window closed signal ignored; backend kept running")
+            except Exception:
+                pass
+            return self._json({"ok": True, "shutdown": False, "mode": "keep_running"})
 
         if path == "/api/spotis3mptify/overlay-state":
             try:

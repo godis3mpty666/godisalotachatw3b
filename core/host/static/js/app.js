@@ -47,9 +47,7 @@ document.addEventListener("click", ev=>{
 }, true);
 window.addEventListener("pagehide", ()=>{
   if(shutdownInProgress || internalNavigation) return;
-  try{
-    navigator.sendBeacon("/api/window-closed", new Blob(["{}"], {type:"application/json"}));
-  }catch(_){}
+  // Closing or suspending the UI must never stop the backend, plugins, or overlays.
 });
 async function api(url, opts){
   const r=await fetch(url,{cache:"no-store",...(opts||{})});
@@ -76,6 +74,11 @@ api = async function(url, opts){
     clearTimeout(timer);
   }
 };
+async function openExternal(url){
+  const res = await api(`/api/open-external?url=${encodeURIComponent(url)}`, {timeoutMs:2500});
+  if(!res.ok) window.open(url, "_blank", "noopener,noreferrer");
+  return res;
+}
 async function loadAll(){ settingsCache=await api("/api/settings"); statusCache=await api("/api/status"); return {settings:settingsCache,status:statusCache};}
 function esc(s){return String(s??"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[m]));}
 function userColor(platform,user){let h=2166136261;for(const c of `${platform}:${user}`){h^=c.charCodeAt(0);h=Math.imul(h,16777619)}return `hsl(${Math.abs(h)%360} 78% 68%)`;}
@@ -278,11 +281,11 @@ function redirectFieldOnly(label,val){
 }
 function devButton(platform){
   const href = DEV_LINKS[platform] || "#";
-  return `<a class="btn devBtn" href="${href}" target="_blank" rel="noopener noreferrer" title="Öffne die Developer-Konsole">Dev-Seite</a>`;
+  return `<button type="button" class="btn devBtn" data-url="${esc(href)}" title="Oeffne die Developer-Konsole">Dev-Seite</button>`;
 }
 function redirectField(platform,val){
   const href = DEV_LINKS[platform] || "#";
-  return `<label class="redirectWithDev"><div>Redirect URI</div><div class="inlineField"><input name="redirect_uri" type="text" value="${esc(val||"")}" autocomplete="on" autocapitalize="off" spellcheck="false"><a class="btn devBtn" href="${href}" target="_blank" rel="noopener noreferrer">Dev-Seite</a></div></label>`;
+  return `<label class="redirectWithDev"><div>Redirect URI</div><div class="inlineField"><input name="redirect_uri" type="text" value="${esc(val||"")}" autocomplete="on" autocapitalize="off" spellcheck="false"><button type="button" class="btn devBtn" data-url="${esc(href)}">Dev-Seite</button></div></label>`;
 }
 function normalizeObsFields(form){
   const urlEl=form.querySelector('[name="url"]');
@@ -383,19 +386,25 @@ async function renderPlatforms(){
     setTimeout(()=>{ b.textContent = oldText; }, 3000);
     if(!res.ok) alert(res.error || "TikTok konnte nicht geöffnet werden");
   });
+  $$(".devBtn").forEach(b=>b.onclick=async()=>{
+    const url = b.dataset.url || b.getAttribute("href") || "";
+    const oldText = b.textContent;
+    b.textContent = "Geoeffnet";
+    const res = await openExternal(url);
+    setTimeout(()=>{ b.textContent = oldText; }, 1800);
+    if(!res.ok) alert(res.error || "Dev-Seite konnte nicht geoeffnet werden");
+  });
   $$(".login").forEach(a=>a.onclick=async(e)=>{
     e.preventDefault();
     const form=a.closest("form");
     const pf=form.dataset.platform;
-    const oauthUrl=`/oauth/start/${a.dataset.platform}/${a.dataset.account}`;
-    const oauthWindow=window.open("about:blank",`oauth_${a.dataset.platform}_${a.dataset.account}`,"width=1000,height=800");
     settingsCache = settingsCache || await api("/api/settings");
     settingsCache.platforms[pf] = settingsCache.platforms[pf] || {};
     applyFormValues(settingsCache.platforms[pf], form, {boolKeys:["enabled"]});
     if(pf === "spotify"){ delete settingsCache.platforms[pf].main; delete settingsCache.platforms[pf].bot; }
     await api("/api/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(settingsCache)});
-    if(oauthWindow) oauthWindow.location.href=oauthUrl;
-    else window.open(oauthUrl,`oauth_${a.dataset.platform}_${a.dataset.account}`,"width=1000,height=800");
+    const res = await api(`/api/oauth/open/${a.dataset.platform}/${a.dataset.account}`, {timeoutMs:2500});
+    if(!res.ok) alert(res.error || "OAuth-Anmeldung konnte nicht geoeffnet werden");
   });
   $$(".disconnect").forEach(b=>b.onclick=async()=>{await api(`/api/disconnect/${b.dataset.platform}/${b.dataset.account}`,{method:"POST"}); location.reload();});
 }

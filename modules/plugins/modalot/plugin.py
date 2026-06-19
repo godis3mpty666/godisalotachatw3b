@@ -503,6 +503,26 @@ class ModalotPlugin(ProviderPlugin):
             })
             self._session_actions = self._session_actions[-250:]
             self._sync_session_setting()
+        if ok and str(action or "").strip().lower() == "ban":
+            self._emit_ban_chat_notice(platform, user)
+
+    def _emit_ban_chat_notice(self, platform: str, user: str) -> None:
+        host = self._host
+        clean_user = _clean_text(user) or "unknown"
+        if host is None:
+            return
+        try:
+            host.emit_message(self.plugin_id, {
+                "platform": str(platform or "modalot").strip().lower() or "modalot",
+                "user": "modalot",
+                "username": "modalot",
+                "text": f"modalot banned user {clean_user}",
+                "message_type": "chat",
+                "source_plugin_id": self.plugin_id,
+                "dispatch_to_plugins": False,
+            })
+        except Exception as exc:
+            self._log(f"Ban-Chatmeldung konnte nicht angezeigt werden: {exc}")
 
     def _recent_hit(self, key: str) -> bool:
         now = time.time()
