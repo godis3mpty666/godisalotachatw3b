@@ -13,7 +13,7 @@ from typing import Any
 from shared.models import PluginStatus
 from shared.plugin_base import PluginHost, ProviderPlugin
 
-PLUGIN_VERSION = "0.10"
+PLUGIN_VERSION = "0.12"
 PLUGIN_NAME = f"modalot ver. {PLUGIN_VERSION}"
 PLUGIN_ID = "modalot"
 
@@ -189,7 +189,7 @@ class ModalotPlugin(ProviderPlugin):
         defaults: dict[str, Any] = {
             "enabled": True,
             "status": "bereit",
-            "auto_moderation_enabled": False,
+            "auto_moderation_enabled": True,
             "blocked_words": "",
             "excluded_users": "streamelements\nnightbot\nstreamlabs",
             "default_action": "delete",
@@ -294,14 +294,14 @@ class ModalotPlugin(ProviderPlugin):
         if not self._enabled:
             return
         settings = self._current_settings()
-        if not _as_bool(settings.get("auto_moderation_enabled"), False):
-            return
         if self._message_type(msg) not in {"chat", "message", "comment"}:
             return
         platform = self._message_platform(msg)
         if platform not in {"twitch", "kick", "youtube"}:
             return
         if not self._platform_enabled(settings, platform):
+            return
+        if not _as_bool(settings.get("auto_moderation_enabled"), False) and not self._platform_rules(settings, platform):
             return
         username = self._message_username(msg)
         clean_user = _clean_login(username)
@@ -360,6 +360,9 @@ class ModalotPlugin(ProviderPlugin):
                 self._host.send_platform_message(platform, notice, sender=self.plugin_id)
             except Exception as exc:
                 self._log(f"Moderationsmeldung konnte nicht gesendet werden: {exc}")
+
+    on_chat_message = on_message
+    handle_message = on_message
 
     def _manual_action(self, settings: dict[str, Any], key: str) -> bool:
         platform = str(settings.get("manual_platform") or "").strip().lower()

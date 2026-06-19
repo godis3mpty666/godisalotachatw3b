@@ -2044,8 +2044,6 @@ class TikTokChatPlugin(ThreadedPlugin):
 
     def _emit_viewer_count(self, host: PluginHost, channel: str, viewer_count: int, *, force: bool = False) -> None:
         viewer_count = max(0, int(viewer_count))
-        if not force and self._last_viewer_count == viewer_count:
-            return
         self._last_viewer_count = viewer_count
         if viewer_count > 0:
             self._last_valid_live_viewers = viewer_count

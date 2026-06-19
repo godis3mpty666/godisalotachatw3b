@@ -4,6 +4,8 @@ const $$ = (s, el=document) => Array.from(el.querySelectorAll(s));
 const page = $("#app")?.dataset.page || "dashboard";
 let settingsCache = null;
 let statusCache = null;
+let internalNavigation = false;
+let shutdownInProgress = false;
 
 function nav(active){
   const items = [
@@ -21,6 +23,7 @@ async function shutdownApp(){
   if(btn && btn.disabled) return;
   if(!confirm("EXE wirklich schließen?")) return;
   if(btn){ btn.disabled = true; btn.textContent = "Schließt…"; }
+  shutdownInProgress = true;
   try{
     await api("/api/shutdown",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}",timeoutMs:2500});
   }catch(_){ }
@@ -34,6 +37,20 @@ function wireShutdownButton(){
   const btn = $("#shutdownApp");
   if(btn) btn.onclick = shutdownApp;
 }
+document.addEventListener("click", ev=>{
+  const a = ev.target && ev.target.closest ? ev.target.closest("a[href]") : null;
+  if(!a) return;
+  try{
+    const u = new URL(a.getAttribute("href"), location.href);
+    if(u.origin === location.origin && !a.target) internalNavigation = true;
+  }catch(_){}
+}, true);
+window.addEventListener("pagehide", ()=>{
+  if(shutdownInProgress || internalNavigation) return;
+  try{
+    navigator.sendBeacon("/api/window-closed", new Blob(["{}"], {type:"application/json"}));
+  }catch(_){}
+});
 async function api(url, opts){
   const r=await fetch(url,{cache:"no-store",...(opts||{})});
   let data=null;

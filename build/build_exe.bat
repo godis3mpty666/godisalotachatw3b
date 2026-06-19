@@ -19,6 +19,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "$root=(Resolve-Path '.')
 rem Browserfenster mit alten TikTok-Profilen beenden, sonst bleiben Cookie-Daten gelockt.
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$root=(Resolve-Path '.').Path; $distData=(Join-Path $root 'dist\webbased\data'); if(Test-Path $distData){ Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -and $_.CommandLine.Contains($distData) } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue } }" >nul 2>nul
 
+rem Browser-/Rendererprozesse beenden, die DLLs aus dist\webbased geladen haben.
+rem Das passiert z.B. bei Meld/OBS/Chrome-Browserquellen auf lokale Overlay-URLs.
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$root=(Resolve-Path '.').Path; $dist=(Join-Path $root 'dist\webbased'); if(Test-Path $dist){ $locked=@(); Get-Process | ForEach-Object { $p=$_; try { foreach($m in $p.Modules){ if($m.FileName -like ($dist + '*')){ $locked += $p; break } } } catch{} }; $locked | Sort-Object Id -Unique | ForEach-Object { try { Stop-Process -Id $_.Id -Force -ErrorAction Stop } catch {} } }" >nul 2>nul
+
 rem Einen Moment warten, damit Browser/SQLite-Cookie-Daten sauber freigegeben werden.
 powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Sleep -Milliseconds 2500" >nul 2>nul
 
@@ -40,6 +44,13 @@ if exist "temp\root_auth_backup" (
 )
 
 if exist dist rmdir /s /q dist
+if exist dist (
+    echo.
+    echo Dist konnte nicht geloescht werden. Vermutlich haelt noch eine Browserquelle Dateien offen.
+    echo Bitte Meld/OBS-Browserquellen auf 127.0.0.1:17890 deaktivieren oder Chrome/Meld schliessen.
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "$root=(Resolve-Path '.').Path; $dist=(Join-Path $root 'dist\webbased'); if(Test-Path $dist){ Get-Process | ForEach-Object { $p=$_; try { foreach($m in $p.Modules){ if($m.FileName -like ($dist + '*')){ Write-Host ('PID ' + $p.Id + ' ' + $p.ProcessName + ' -> ' + $m.FileName); break } } } catch{} } }"
+    goto :fail
+)
 
 rem Virtuelle Umgebung neben dist dauerhaft verwenden.
 rem .venv wird nur angelegt, wenn sie fehlt, und bleibt bei neuen Builds erhalten.

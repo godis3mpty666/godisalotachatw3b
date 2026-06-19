@@ -937,8 +937,6 @@ class YouTubeChatPlugin(ThreadedPlugin):
 
     def _emit_viewer_count(self, host: PluginHost, channel: str, viewer_count: int) -> None:
         viewer_count = int(viewer_count or 0)
-        if self._last_viewer_count == viewer_count:
-            return
         self._last_viewer_count = viewer_count
         payload = {
             'platform': 'youtube',

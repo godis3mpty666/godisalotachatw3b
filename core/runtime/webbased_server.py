@@ -400,7 +400,12 @@ class WebbasedPluginHost:
             for target_id, plugin in list(getattr(self.state, "plugin_instances", {}).items()):
                 if target_id == source_plugin_id or target_id in CHAT_INPUT_PLUGIN_IDS:
                     continue
-                handler = getattr(plugin, "on_message", None)
+                handler = None
+                for handler_name in ("on_message", "on_chat_message", "handle_message"):
+                    candidate = getattr(plugin, handler_name, None)
+                    if callable(candidate):
+                        handler = candidate
+                        break
                 if callable(handler):
                     targets.append((target_id, handler))
             if not targets:
@@ -425,7 +430,19 @@ class WebbasedPluginHost:
             payload = dict(payload or {})
             platform = str(payload.get("platform") or "")
             if platform:
-                self.state.metrics[platform] = {**payload, "ts": time.time(), "plugin_id": plugin_id}
+                now = time.time()
+                previous = dict(self.state.metrics.get(platform, {}) or {})
+                merged = {**previous, **payload, "ts": now, "plugin_id": plugin_id}
+                if payload.get("viewer_count") is not None:
+                    merged["viewer_count_ts"] = now
+                    if not payload.get("viewer_count_error") and not payload.get("metric_error"):
+                        merged["viewer_count_error"] = False
+                        merged["metric_error"] = False
+                if payload.get("followers_count") is not None:
+                    merged["followers_count_ts"] = now
+                if payload.get("is_live") is not None:
+                    merged["is_live_ts"] = now
+                self.state.metrics[platform] = merged
             sig = "|".join([
                 str(plugin_id),
                 platform,
@@ -477,18 +494,35 @@ class WebbasedPluginHost:
         platform = str(payload.get("platform") or "").strip().lower()
         key = self._outbound_echo_key(platform, text)
         recent = getattr(self.state, "_suppressed_outbound_echoes", None)
-        if not isinstance(recent, dict):
-            return False
         now = time.time()
+        if isinstance(recent, dict):
+            try:
+                for old_key, expires in list(recent.items()):
+                    if float(expires or 0.0) < now:
+                        recent.pop(old_key, None)
+            except Exception:
+                pass
+            if float(recent.get(key) or 0.0) >= now:
+                return True
+
+        # Fallback for platforms that echo bot messages back with slightly
+        # different timing or metadata. These should not re-enter the shared
+        # chat as fresh user messages.
+        username = str(payload.get("username") or payload.get("display_name") or payload.get("user") or "").strip().lower()
+        cfg = {}
         try:
-            for old_key, expires in list(recent.items()):
-                if float(expires or 0.0) < now:
-                    recent.pop(old_key, None)
+            cfg = self.state.settings().get("platforms", {}).get(platform, {}) or {}
         except Exception:
-            pass
-        if float(recent.get(key) or 0.0) < now:
-            return False
-        return True
+            cfg = {}
+        bot_names = {
+            str(cfg.get(k) or "").strip().lower()
+            for k in ("bot", "bot_account", "bot_username", "username", "bot_channel_title", "bot_channel_custom_url")
+            if str(cfg.get(k) or "").strip()
+        }
+        low_text = " ".join(str(text or "").split()).lower()
+        bridge_echo = re.match(r"^.+\s+from\s+(twitch|tt|tiktok|yt|youtube|kick):\s+.+", low_text) is not None
+        generated_echo = re.match(r"^(twitch|tt|tiktok|yt|youtube|kick)[-_ ]ai answer to\s+.+:\s+.+", low_text) is not None
+        return bool(username and username in bot_names and (bridge_echo or generated_echo))
 
     def send_platform_message(self, platform: str, message: str, **kwargs) -> bool:
         try:
@@ -675,6 +709,8 @@ class AppState:
         self.ui_reload_requested = False
         self.ui_reload_nonce = 0
         self.last_ui_reload_request = 0.0
+        self.ui_browser_pid = 0
+        self.desktop_chat_pids = set()
         self.main_url = ""
         self.shutting_down = False
         self._tiktok_cookie_backoff = {}
@@ -1364,6 +1400,124 @@ class AppState:
             try: self.log("tiktok", "close browser windows failed", exc)
             except Exception: pass
 
+    def _ui_browser_profile_dir(self) -> Path:
+        return self.data / "ui_browser_profile"
+
+    def open_main_browser(self, url: str) -> bool:
+        """Open the dashboard in an isolated browser profile.
+
+        Launching the default browser through webbrowser.open can make Chrome inherit
+        the PyInstaller _internal directory as its working directory. On Windows this
+        can make Chrome load the bundled VCRUNTIME DLL and block the next build.
+        """
+        browser = self._find_browser_exe({})
+        profile = self._ui_browser_profile_dir()
+        try:
+            profile.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+        if browser:
+            args = [
+                browser,
+                f"--app={url}",
+                f"--user-data-dir={profile}",
+                "--no-first-run",
+                "--no-default-browser-check",
+                "--disable-session-crashed-bubble",
+            ]
+            try:
+                proc = subprocess.Popen(
+                    args,
+                    cwd=str(Path(tempfile.gettempdir())),
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    creationflags=_win_hidden_flags(),
+                )
+                self.ui_browser_pid = int(getattr(proc, "pid", 0) or 0)
+                threading.Thread(target=self._monitor_main_browser_closed, daemon=True, name="ui-browser-monitor").start()
+                return True
+            except Exception as exc:
+                try: self.log("ui", "isolated browser launch failed", exc)
+                except Exception: pass
+        try:
+            webbrowser.open(url)
+            return False
+        except Exception:
+            return False
+
+    def _monitor_main_browser_closed(self) -> None:
+        try:
+            time.sleep(4.0)
+            profile = self._ui_browser_profile_dir()
+            while not self.shutting_down:
+                pid = int(getattr(self, "ui_browser_pid", 0) or 0)
+                pids = set()
+                if pid:
+                    pids.update(self._windows_process_children(pid))
+                pids.update(self._windows_pids_by_command_hint(profile_dir=profile))
+                if not pids:
+                    self.request_shutdown("main browser process closed")
+                    return
+                time.sleep(2.5)
+        except Exception as exc:
+            try: self.log("ui", "main browser monitor failed", exc)
+            except Exception: pass
+
+    def close_main_browser(self) -> None:
+        try:
+            profile = self._ui_browser_profile_dir()
+            pid = int(getattr(self, "ui_browser_pid", 0) or 0)
+            self._close_tiktok_login_windows(pid=pid, profile_dir=profile)
+        except Exception as exc:
+            try: self.log("ui", "close main browser failed", exc)
+            except Exception: pass
+
+    def close_child_windows(self) -> None:
+        try:
+            self.close_main_browser()
+        except Exception:
+            pass
+        try:
+            self._close_tiktok_browser_windows()
+        except Exception:
+            pass
+        for pid in list(getattr(self, "desktop_chat_pids", set()) or set()):
+            try:
+                _taskkill_pid(int(pid))
+            except Exception:
+                pass
+        try:
+            self.desktop_chat_pids.clear()
+        except Exception:
+            self.desktop_chat_pids = set()
+
+    def request_shutdown(self, reason: str = "shutdown requested") -> bool:
+        if self.shutting_down:
+            return False
+        self.shutting_down = True
+        try:
+            self.log("shutdown", reason)
+        except Exception:
+            pass
+        try:
+            self.close_child_windows()
+        except Exception:
+            pass
+        try:
+            self.plugin_manager.stop_all()
+        except Exception:
+            pass
+        try:
+            self._close_obs_connection()
+        except Exception:
+            pass
+        try:
+            self.mark_clean_shutdown(reason)
+        except Exception:
+            pass
+        _schedule_hard_exit(3.4)
+        return True
+
     def _mark_tiktok_login_ok(self, account: str, ok: bool = True):
         account = "bot" if str(account or "").lower().strip() == "bot" else "main"
         try:
@@ -1687,6 +1841,16 @@ class AppState:
     def save_settings(self, s):
         s["version"] = VERSION
         _json_save(self.settings_path, s)
+
+    def _http_json(self, url, *, data=None, headers=None, method="GET", timeout=12):
+        body = urllib.parse.urlencode(data).encode("utf-8") if data is not None else None
+        h = dict(headers or {})
+        if body is not None:
+            h.setdefault("Content-Type", "application/x-www-form-urlencoded")
+        h.setdefault("Accept", "application/json")
+        req = urllib.request.Request(url, data=body, headers=h, method=method)
+        raw = urllib.request.urlopen(req, timeout=timeout).read().decode("utf-8", errors="replace")
+        return json.loads(raw or "{}") if raw.strip() else {}
 
     def _oauth_access_needs_refresh(self, cfg: dict, account: str) -> bool:
         account = "main" if str(account or "").lower().strip() == "main" else "bot"
@@ -3247,17 +3411,34 @@ def _chat_platform_state(st, settings):
             continue
         metric = dict(st.metrics.get(platform, {}) or {})
         plugin_status = dict(st.plugin_status.get(plugin_id, {}) or {})
+        plugin_state = str(plugin_status.get("state") or "").strip().lower()
         viewer = metric.get("viewer_count")
+        viewer_ts = float(metric.get("viewer_count_ts") or metric.get("ts") or 0.0)
+        live_ts = float(metric.get("is_live_ts") or 0.0)
         metric_fresh = bool(metric) and now - float(metric.get("ts") or 0.0) < 120.0
-        connected = str(plugin_status.get("state") or "").lower() in {"connected", "running"}
+        viewer_fresh = viewer_ts > 0 and now - viewer_ts < 180.0
+        live_fresh = live_ts > 0 and now - live_ts < 180.0
+        connected = plugin_state in {"connected", "running", "ready"}
         viewer_error = bool(metric.get("viewer_count_error") or metric.get("metric_error"))
+        has_viewer = viewer_fresh and not viewer_error and str(viewer).isdigit()
+        is_live = metric.get("is_live") if live_fresh else None
+        plugin_error = plugin_state in {"error", "failed", "disconnected", "stopped"}
+        stale_detail = "Noch keine frischen Zuschauerdaten"
+        if metric and not viewer_fresh:
+            stale_detail = "Zuschauerdaten veraltet"
         out.append({
             "platform": platform,
             "plugin_id": plugin_id,
-            "connected": connected,
-            "viewer_count": int(viewer) if metric_fresh and not viewer_error and str(viewer).isdigit() else None,
-            "blocked": not connected or viewer_error,
-            "detail": str(plugin_status.get("message") or "Noch keine aktuellen Zuschauerdaten"),
+            "connected": connected or has_viewer,
+            "viewer_count": int(viewer) if has_viewer else None,
+            "is_live": bool(is_live) if is_live is not None else None,
+            "blocked": viewer_error or plugin_error,
+            "detail": str(plugin_status.get("message") or ("Zuschauerdaten aktuell" if has_viewer else stale_detail)),
+            "metric_fresh": metric_fresh,
+            "viewer_fresh": viewer_fresh,
+            "live_fresh": live_fresh,
+            "metric_plugin_id": str(metric.get("plugin_id") or ""),
+            "plugin_state": plugin_state,
         })
     return out
 
@@ -3764,28 +3945,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"ok": True, "version": VERSION, "reload": reload_requested, "reload_nonce": reload_nonce})
 
         if path == "/api/shutdown":
-            st.shutting_down = True
-            try:
-                st.log("shutdown", "exe close requested by ui")
-            except Exception:
-                pass
-            try:
-                st._close_tiktok_browser_windows()
-            except Exception:
-                pass
-            try:
-                st.plugin_manager.stop_all()
-            except Exception:
-                pass
-            try:
-                st._close_obs_connection()
-            except Exception:
-                pass
-            try:
-                st.mark_clean_shutdown("exe close requested by ui")
-            except Exception:
-                pass
-            _schedule_hard_exit(3.4)
+            st.request_shutdown("exe close requested by ui")
+            return self._json({"ok": True, "shutdown": True, "mode": "exe_exit"})
+
+        if path == "/api/window-closed":
+            st.request_shutdown("main window closed")
             return self._json({"ok": True, "shutdown": True, "mode": "exe_exit"})
 
         if path == "/api/spotis3mptify/overlay-state":
@@ -3825,7 +3989,11 @@ class Handler(BaseHTTPRequestHandler):
                     cmd = [sys.executable, "--desktop-chat", url]
                 else:
                     cmd = [sys.executable, str(st.base / "run_webbased.py"), "--desktop-chat", url]
-                subprocess.Popen(cmd, cwd=str(st.base), creationflags=_win_hidden_flags())
+                proc = subprocess.Popen(cmd, cwd=str(st.base), creationflags=_win_hidden_flags())
+                try:
+                    st.desktop_chat_pids.add(int(getattr(proc, "pid", 0) or 0))
+                except Exception:
+                    pass
                 return self._json({"ok": True})
             except Exception as exc:
                 return self._json({"ok": False, "error": str(exc)}, 500)
@@ -4841,7 +5009,7 @@ def run(base_dir: str, open_browser: bool = True):
     if port != preferred_port:
         STATE.log("port_warning", f"{preferred_port} belegt, nutze {port}", "hauptseite nutzt ersatzport; callback bleibt 5173 falls frei")
     if open_browser:
-        threading.Timer(0.7, lambda: webbrowser.open(url)).start()
+        threading.Timer(0.7, lambda: STATE.open_main_browser(url)).start()
     try:
         STATE.log("listen", url)
     except Exception:
@@ -4864,6 +5032,10 @@ def run(base_dir: str, open_browser: bool = True):
             pass
         raise
     finally:
+        try:
+            STATE.close_main_browser()
+        except Exception:
+            pass
         try:
             STATE.plugin_manager.stop_all()
         except Exception:

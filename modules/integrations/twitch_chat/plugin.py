@@ -97,6 +97,7 @@ class TwitchChatPlugin(ThreadedPlugin):
         self._processed_usernotice_ids: set[str] = set()
         self._processed_join_names: set[str] = set()
         self._processed_join_seen_at: dict[str, float] = {}
+        self._run_started_at: float = time.time()
         self._host: PluginHost | None = None
         self._send_lock = threading.RLock()
         self._current_channel: str = ''
@@ -573,8 +574,6 @@ class TwitchChatPlugin(ThreadedPlugin):
         }
     def _emit_viewer_count(self, host: PluginHost, channel: str, viewer_count: int) -> None:
         viewer_count = int(viewer_count)
-        if self._last_viewer_count == viewer_count:
-            return
         self._last_viewer_count = viewer_count
         host.emit_message(self.plugin_id, {
             'platform': 'twitch',
@@ -759,7 +758,18 @@ class TwitchChatPlugin(ThreadedPlugin):
         new_rows = []
         for row in rows:
             fid = str(row.get('user_id') or row.get('from_id') or row.get('user_login') or '').strip()
-            if fid and fid not in self._known_follower_ids:
+            if not fid or fid in self._known_follower_ids:
+                continue
+            followed_at = str(row.get('followed_at') or '').strip()
+            if followed_at:
+                try:
+                    import datetime
+                    followed_ts = datetime.datetime.fromisoformat(followed_at.replace('Z', '+00:00')).timestamp()
+                    if followed_ts < self._run_started_at - 30.0:
+                        self._known_follower_ids.add(fid)
+                        continue
+                except Exception:
+                    pass
                 new_rows.append(row)
 
         for row in reversed(new_rows):
@@ -1402,6 +1412,7 @@ class TwitchChatPlugin(ThreadedPlugin):
         self._last_valid_live_viewers = None
         self._known_follower_ids = set()
         self._followers_initialized = False
+        self._run_started_at = time.time()
         self._processed_usernotice_ids = set()
         self._processed_join_names = set()
         self._processed_join_seen_at = {}
