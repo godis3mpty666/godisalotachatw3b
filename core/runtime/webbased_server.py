@@ -4339,9 +4339,15 @@ class Handler(BaseHTTPRequestHandler):
             data = json.loads(raw)
             item = data.get("item") or {}
             title = item.get("name") or ""
-            artists = ", ".join(a.get("name", "") for a in item.get("artists", []) if a.get("name"))
-            album = (item.get("album") or {}).get("name") or ""
-            images = (item.get("album") or {}).get("images") or []
+            if str(item.get("type") or "").lower() == "episode":
+                show = item.get("show") or {}
+                artists = ", ".join(a.get("name", "") for a in item.get("artists", []) if a.get("name")) or str(show.get("publisher") or show.get("name") or "")
+                album = str(show.get("name") or "")
+                images = item.get("images") or show.get("images") or []
+            else:
+                artists = ", ".join(a.get("name", "") for a in item.get("artists", []) if a.get("name"))
+                album = (item.get("album") or {}).get("name") or ""
+                images = (item.get("album") or {}).get("images") or []
             cover = images[0].get("url") if images else ""
             out = {"title": title, "artist": artists, "album": album, "cover": cover, "active": bool(title), "source": "Spotify"}
             try:

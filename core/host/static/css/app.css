@@ -613,6 +613,13 @@ button.secondary{
 .pluginSettingsCard{margin-bottom:18px;border-color:rgba(134,92,255,.45)}
 .pluginSettingsHead{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;margin-bottom:14px}
 .pluginSettingsGroup{border:1px solid rgba(255,255,255,.08);border-radius:14px;background:rgba(255,255,255,.03);padding:14px;margin:12px 0}
+.infoPlatform{border:1px solid rgba(255,255,255,.12);border-radius:14px;background:rgba(255,255,255,.03);padding:14px;margin:12px 0}
+.infoPlatformHead{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:12px;text-transform:capitalize}
+.infoPlatformHead h3{margin:0}
+.infoPresetButtons{flex-wrap:wrap}
+.infoPresetList{display:grid;gap:10px;margin-top:14px}
+.infoPresetRow{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:12px 14px;border:1px solid rgba(255,255,255,.12);border-radius:12px;background:rgba(255,255,255,.03)}
+@media(max-width:640px){.infoPresetRow{align-items:flex-start;flex-direction:column}}
 .pluginSettingsFields{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;align-items:end}
 .pluginSettingsFields .wide{grid-column:1/-1}
 .pluginSettingsFields .hint{margin-top:-4px;grid-column:1/-1}

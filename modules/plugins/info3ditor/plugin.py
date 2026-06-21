@@ -170,6 +170,7 @@ class Info3ditorPlugin(ThreadedPlugin):
         self._tiktok_last_producer_port = 0
         self._tiktok_last_browser_process = None
         self._host: PluginHost | None = None
+        self._settings: dict[str, Any] = {}
 
     def set_ui_language(self, language: str) -> None:
         lang = _clean_text(language).lower()
@@ -181,20 +182,47 @@ class Info3ditorPlugin(ThreadedPlugin):
         return [
             {'key': '__info3ditor_embedded__', 'type': 'hidden', 'default': True},
             {'key': 'autoconnect', 'type': 'hidden', 'default': True},
+            {
+                'key': 'presets_json',
+                'type': 'textarea',
+                'tab': 'Presets',
+                'label': 'Info3ditor-Presets',
+                'help': 'Hier werden alle Presets mit den Einstellungen für Twitch, YouTube, Kick und TikTok angezeigt. Änderungen im JSON-Format werden beim Speichern übernommen.',
+                'placeholder': '{"presets": []}',
+            },
         ]
 
     def default_settings(self) -> dict[str, Any]:
-        return {'autoconnect': True}
+        return {'autoconnect': True, 'presets_json': self._presets_json()}
+
+    def _presets_json(self) -> str:
+        return json.dumps({'presets': self.store.load()}, ensure_ascii=False, indent=2)
+
+    def _import_presets_json(self, value: Any) -> bool:
+        raw = _clean_text(value)
+        if not raw:
+            return False
+        try:
+            parsed = json.loads(raw)
+            presets = parsed.get('presets') if isinstance(parsed, dict) else parsed
+            if not isinstance(presets, list):
+                return False
+            self.store.save(presets)
+            return True
+        except Exception:
+            return False
 
     def test_connection(self, settings: dict[str, Any]) -> tuple[bool, str]:
         return True, 'info3ditor ist lokal bereit. Gesendet wird über die zentralen Plattform-Verbindungen vom Haupttool.'
 
     def run(self, settings: dict[str, Any], host: PluginHost) -> None:
         self._host = host
+        self._settings = dict(settings or {})
+        if settings.get('presets_json') and not self._import_presets_json(settings.get('presets_json')):
+            host.log(self.plugin_id, 'Info3ditor-Presets konnten nicht aus den Settings gelesen werden; vorhandene Presets bleiben erhalten.')
         host.set_status(self.plugin_id, PluginStatus('connected', 'Bereit'))
         while not self._stop.wait(2.0):
             self._host = host
-            host.set_status(self.plugin_id, PluginStatus('connected', 'Bereit'))
 
     def _replace_settings_dialog_with_panel(self, dialog: Any) -> None:
         if QtWidgets is None:
@@ -250,6 +278,16 @@ class Info3ditorPlugin(ThreadedPlugin):
             pass
 
     def on_settings_button(self, key: str, host: PluginHost | None = None, parent=None) -> bool:
+        if key == 'send_web_preset':
+            self._import_presets_json(self._settings.get('presets_json'))
+            wanted = _clean_text(self._settings.get('selected_preset_id'))
+            preset = next((item for item in self.store.load() if _clean_text(item.get('id')) == wanted), None)
+            if preset is None:
+                if host is not None:
+                    host.log(self.plugin_id, 'Ausgewähltes Info3ditor-Preset wurde nicht gefunden.')
+                return False
+            self.send_preset_async(preset, host or self._host)
+            return True
         if key != 'open_editor':
             return False
         if QtWidgets is None:
@@ -294,16 +332,20 @@ class Info3ditorPlugin(ThreadedPlugin):
                 if not _as_bool(pdata.get('enabled'), False):
                     continue
                 did_any = True
-                if platform == 'twitch':
-                    ok, msg = self._send_twitch(pdata, host)
-                elif platform == 'youtube':
-                    ok, msg = self._send_youtube(pdata, host)
-                elif platform == 'tiktok':
-                    ok, msg = self._send_tiktok(pdata, host)
-                elif platform == 'kick':
-                    ok, msg = self._send_kick(pdata, host)
-                else:
-                    ok, msg = False, 'Unbekannte Plattform.'
+                host.log(self.plugin_id, f'Sende an {platform} …')
+                try:
+                    if platform == 'twitch':
+                        ok, msg = self._send_twitch(pdata, host)
+                    elif platform == 'youtube':
+                        ok, msg = self._send_youtube(pdata, host)
+                    elif platform == 'tiktok':
+                        ok, msg = self._send_tiktok(pdata, host)
+                    elif platform == 'kick':
+                        ok, msg = self._send_kick(pdata, host)
+                    else:
+                        ok, msg = False, 'Unbekannte Plattform.'
+                except Exception as exc:
+                    ok, msg = False, f'Unerwarteter Fehler: {exc}'
                 host.log(self.plugin_id, ('✅ ' if ok else '❌ ') + f'{platform}: {msg}')
             if not did_any:
                 host.log(self.plugin_id, 'Keine Plattform im Preset aktiviert.')
@@ -317,7 +359,36 @@ class Info3ditorPlugin(ThreadedPlugin):
         tags = _split_tags(pdata.get('tags'))
         if not game_id and category:
             game_id = self._resolve_twitch_category_id(category, host)
-        ok = bool(host.update_twitch_channel(title=title, game_id=game_id, tags=tags if tags else None))
+        settings = host.platform_settings('twitch') if host is not None else {}
+        token = _clean_text(settings.get('main_access_token') or settings.get('access_token'))
+        client_id = _clean_text(settings.get('client_id'))
+        broadcaster_id = _clean_text(settings.get('broadcaster_user_id') or settings.get('broadcaster_id') or settings.get('main_oauth_user_id') or settings.get('main_user_id') or settings.get('channel_id'))
+        if not token or not client_id or not broadcaster_id:
+            return False, 'Twitch Main-OAuth oder Broadcaster-ID fehlt. Bitte Twitch Main im Haupttool neu anmelden.'
+        headers = {'Client-Id': client_id, 'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'}
+        try:
+            payload = {}
+            if title:
+                payload['title'] = title
+            if game_id:
+                payload['game_id'] = game_id
+            if payload:
+                req = urllib.request.Request('https://api.twitch.tv/helix/channels?' + urllib.parse.urlencode({'broadcaster_id': broadcaster_id}), data=json.dumps(payload).encode('utf-8'), headers=headers, method='PATCH')
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    resp.read()
+            if tags:
+                req = urllib.request.Request('https://api.twitch.tv/helix/streams/tags?' + urllib.parse.urlencode({'broadcaster_id': broadcaster_id}), data=json.dumps({'tags': tags[:10]}).encode('utf-8'), headers=headers, method='PUT')
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    resp.read()
+            ok = bool(payload or tags)
+        except urllib.error.HTTPError as exc:
+            try:
+                detail = exc.read().decode('utf-8', errors='replace')[:300]
+            except Exception:
+                detail = ''
+            return False, f'Twitch HTTP {exc.code}: {detail}'
+        except Exception as exc:
+            return False, f'Twitch-Update fehlgeschlagen: {exc}'
         detail_parts = []
         if title:
             detail_parts.append('Titel')

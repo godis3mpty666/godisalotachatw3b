@@ -547,7 +547,6 @@ class Gam3Pick3rPlugin(ThreadedPlugin):
         schema.extend([
             {'key': 'browser_overlay_enabled', 'tab': 'Overlay', 'label': 'Browser-Overlay aktiv', 'label_en': 'Browser overlay enabled', 'type': 'bool'},
             {'key': 'open_browser_on_action', 'tab': 'Overlay', 'label': 'Browser bei Vote/Picker öffnen', 'label_en': 'Open browser on vote/picker', 'type': 'bool'},
-            {'key': 'open_window_on_action', 'tab': 'Overlay', 'label': 'Plugin-Fenster bei Vote/Picker öffnen', 'label_en': 'Open plugin window on vote/picker', 'type': 'bool'},
             {'key': 'button_open_overlay', 'tab': 'Overlay', 'type': 'button', 'label': 'Overlay', 'button_text': 'Browser-Overlay öffnen', 'button_text_en': 'Open browser overlay'},
             {'key': 'browser_overlay_port', 'tab': 'Overlay', 'label': 'Browser-Overlay Port', 'label_en': 'Browser overlay port', 'type': 'number', 'min': 1024, 'max': 65535},
             {'key': 'overlay_title', 'tab': 'Overlay', 'label': 'Overlay-Titel', 'label_en': 'Overlay title', 'placeholder': 'gam3pick3r'},
@@ -590,7 +589,6 @@ class Gam3Pick3rPlugin(ThreadedPlugin):
             'kick_update_tags': False,
             'browser_overlay_enabled': True,
             'open_browser_on_action': True,
-            'open_window_on_action': True,
             'browser_overlay_port': 17623,
             'overlay_title': 'gam3pick3r',
             'greenscreen_hex': '#00FF00',
@@ -1083,8 +1081,11 @@ class Gam3Pick3rPlugin(ThreadedPlugin):
     def _show_action_outputs(self, reason: str = '') -> None:
         if _as_bool(self._settings.get('open_browser_on_action'), True):
             self._open_overlay_browser()
-        if _as_bool(self._settings.get('open_window_on_action'), True):
-            self._open_popup_window()
+        # Der Browser zeigt Vote und Picker bereits vollständig mit Cover an.
+        # Das zusätzliche Tk-Pluginfenster würde dieselben Informationen doppelt anzeigen.
+        if self._popup is not None:
+            self._popup.stop()
+            self._popup = None
 
     def _connect_host_message_signal(self, host: PluginHost | None) -> None:
         if self._host_signal_connected or host is None:
