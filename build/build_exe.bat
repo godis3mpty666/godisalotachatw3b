@@ -74,6 +74,10 @@ if exist "dist\webbased\modules" rmdir /s /q "dist\webbased\modules"
 robocopy "modules" "dist\webbased\modules" /E /XD __pycache__ /NFL /NDL /NJH /NJS /NP >nul
 if errorlevel 8 goto :fail
 
+rem Gemeinsame UI-Bilder neben die EXE legen, damit Desktopfenster und WebUI dieselben Symbole nutzen.
+robocopy "assets" "dist\webbased\assets" /E /R:2 /W:1 /NFL /NDL /NJH /NJS /NP >nul
+if errorlevel 8 goto :fail
+
 rem Alle portablen Einstellungen, Tokens und Plugin-Daten neben die neue EXE kopieren.
 if not exist "dist\webbased\data" mkdir "dist\webbased\data"
 robocopy "data" "dist\webbased\data" /E /R:5 /W:1 /XD %DATA_EXCLUDE_DIRS% /XF %DATA_EXCLUDE_FILES% /NFL /NDL /NJH /NJS /NP >nul

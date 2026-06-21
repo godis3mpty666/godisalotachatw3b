@@ -10,6 +10,7 @@ import threading
 import time
 import urllib.parse
 import urllib.request
+from pathlib import Path
 from dataclasses import dataclass
 from typing import Any
 
@@ -294,6 +295,7 @@ class DesktopTkOverlay:
         self._last_window_size: tuple[int, int] | None = None
         self._z_order_done = False
         self._last_bg_alpha: float | None = None
+        self._platform_images: dict[str, Any] = {}
 
         self.canvas.bind("<ButtonPress-1>", self._pointer_down)
         self.canvas.bind("<B1-Motion>", self._pointer_move)
@@ -323,6 +325,7 @@ class DesktopTkOverlay:
         except Exception as exc:
             _log(f"hwnd init fehlgeschlagen: {exc}")
         self._load_layout()
+        self._restore_window_geometry()
         self._sync_background_window()
         self._ensure_z_order()
         self.render()
@@ -390,6 +393,26 @@ class DesktopTkOverlay:
                 "textColor": "#ffffff",
             },
         )
+        self.layout.setdefault("window", {"x": 80, "y": 80, "w": DEFAULT_SIZE[0], "h": DEFAULT_SIZE[1]})
+
+    def _restore_window_geometry(self) -> None:
+        window = self.layout.get("window") or {}
+        try:
+            x = max(-4000, min(4000, int(window.get("x", 80))))
+            y = max(-4000, min(4000, int(window.get("y", 80))))
+            w = max(MIN_SIZE[0], min(4000, int(window.get("w", DEFAULT_SIZE[0]))))
+            h = max(MIN_SIZE[1], min(4000, int(window.get("h", DEFAULT_SIZE[1]))))
+            self.root.geometry(f"{w}x{h}+{x}+{y}")
+        except Exception as exc:
+            _log(f"Fensterposition konnte nicht geladen werden: {exc}")
+
+    def _capture_window_geometry(self) -> None:
+        self.layout["window"] = {
+            "x": int(self.root.winfo_x()),
+            "y": int(self.root.winfo_y()),
+            "w": int(self.root.winfo_width()),
+            "h": int(self.root.winfo_height()),
+        }
 
     def _stable_json_key(self, value: Any) -> str:
         try:
@@ -567,7 +590,9 @@ class DesktopTkOverlay:
             self.render()
 
     def _pointer_up(self, _event) -> None:
-        if self.drag.mode in ("box-move", "box-resize"):
+        if self.drag.mode in ("box-move", "box-resize", "window-move", "window-resize"):
+            if self.drag.mode in ("window-move", "window-resize"):
+                self._capture_window_geometry()
             self._schedule_layout_save()
         self.drag = DragState()
 
@@ -620,16 +645,30 @@ class DesktopTkOverlay:
         ]
         c.create_polygon(points, smooth=True, splinesteps=12, **kwargs)
 
-    def _draw_platform_badge(self, x: int, y: int, platform: str, text: str | None = None) -> int:
-        base_label = text or PLATFORM_LABELS.get(platform, platform or "?")
+    def _platform_image(self, platform: str, blocked: bool = False, size: int = 16):
+        asset_key = "no_entry" if blocked else platform
+        key = f"{asset_key}:{size}"
+        if key in self._platform_images:
+            return self._platform_images[key]
+        try:
+            root = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parents[2]
+            image = self.tk.PhotoImage(file=str(root / "assets" / "pics" / f"{asset_key}.png"))
+            scale = max(1, (max(image.width(), image.height()) + size - 1) // size)
+            image = image.subsample(scale, scale)
+            self._platform_images[key] = image
+            return image
+        except Exception:
+            self._platform_images[key] = None
+            return None
+
+    def _draw_platform_badge(self, x: int, y: int, platform: str, text: str | None = None, blocked: bool = False, size: int = 21) -> int:
         icon = PLATFORM_ICONS.get(platform, "•")
-        label = f"{icon} {base_label}"
-        bg = PLATFORM_COLORS.get(platform, "#30364c")
-        fg = "#071006" if platform == "kick" else "#ffffff"
-        width = max(58, 18 + len(label) * 7)
-        self._rounded_rect(x, y, width, 24, 7, fill=bg, outline="")
-        self.canvas.create_text(x + width / 2, y + 12, text=label, fill=fg, font=("Segoe UI", 8, "bold"))
-        return width
+        image = self._platform_image(platform, blocked, size=size)
+        if image:
+            self.canvas.create_image(x + int((size + 1) / 2), y + 12, image=image, anchor="center")
+        else:
+            self.canvas.create_text(x + int((size + 1) / 2), y + 12, text=icon, fill="#ffffff", font=("Segoe UI", 12, "bold"))
+        return size + 1
 
     def _wrap_text(self, text: str, max_chars: int) -> list[str]:
         text = text.replace("\r", "").strip()
@@ -717,11 +756,16 @@ class DesktopTkOverlay:
             platform = str(item.get("platform") or "")
             blocked = bool(item.get("blocked"))
             raw_count = item.get("viewer_count", "-")
-            if raw_count is None or str(raw_count).strip().lower() in ("", "none", "null"):
-                raw_count = "-"
-            count = "⛔" if blocked else str(raw_count)
-            bw = self._draw_platform_badge(px, py, platform)
-            self.canvas.create_text(px + bw + 12, py + 12, text=count, fill=text_color, font=(font_family, 10, "bold"), anchor="w")
+            unavailable = blocked or raw_count is None or str(raw_count).strip().lower() in ("", "none", "null", "-")
+            bw = self._draw_platform_badge(px, py, platform, size=27)
+            if unavailable:
+                status_icon = self._platform_image("no_entry", True, size=27)
+                if status_icon:
+                    self.canvas.create_image(px + bw + 20, py + 12, image=status_icon, anchor="center")
+                else:
+                    self.canvas.create_text(px + bw + 12, py + 12, text="⛔", fill="#ff4b60", font=(font_family, 10, "bold"), anchor="w")
+            else:
+                self.canvas.create_text(px + bw + 12, py + 12, text=str(raw_count), fill=text_color, font=(font_family, 10, "bold"), anchor="w")
             px += bw + 44
         if self.editing:
             self.canvas.create_rectangle(x, y, x + w, y + h, outline="#936cff", dash=(4, 3))
@@ -732,14 +776,20 @@ class DesktopTkOverlay:
         x, y, w, h = [int(box.get(k, 0)) for k in ("x", "y", "w", "h")]
         self._rounded_rect(x, y, w, h, radius, fill=bg, outline="", stipple=bg_stipple, canvas=self.bg_canvas)
         messages = [m for m in (self.last_chat_state.get("messages", []) or []) if m.get("message_type") == "chat"][-40:]
-        line_h = max(20, int(font_size * 1.35))
+        # Die Badge ist 24px hoch. Mit mindestens 34px pro Zeile bleibt sichtbar
+        # Luft zwischen den farbigen Bereichen, auch bei kleiner Schrift.
+        line_h = max(34, int(font_size * 1.8))
         rows: list[tuple[str, str, str, str]] = []
-        max_chars = max(18, int((w - 120) / max(7, font_size * 0.55)))
+        text_font = self.tkfont.Font(family=font_family, size=font_size)
+        name_font = self.tkfont.Font(family=font_family, size=font_size, weight="bold")
         for msg in messages:
             platform = str(msg.get("platform") or "")
             user = str(msg.get("user") or "?")
             text = _strip_html(msg.get("html")) or str(msg.get("text") or "")
-            wrapped = self._wrap_text(text, max_chars)
+            badge_w = 22
+            first_line_width = max(80, w - 24 - badge_w - 8 - name_font.measure(user) - 10)
+            char_width = max(7, int(font_size * 0.55))
+            wrapped = self._wrap_text(text, max(8, int(first_line_width / char_width)))
             for i, line in enumerate(wrapped):
                 rows.append((platform if i == 0 else "", user if i == 0 else "", line, platform))
         max_rows = max(1, int((h - 24) / line_h))
@@ -748,13 +798,16 @@ class DesktopTkOverlay:
         for platform, user, line, color_platform in rows:
             px = x + 12
             if platform:
-                bw = self._draw_platform_badge(px, cy + 1, platform)
+                badge_y = cy + int((line_h - 24) / 2)
+                bw = self._draw_platform_badge(px, badge_y, platform)
                 px += bw + 8
-                self.canvas.create_text(px, cy + line_h / 2, text=user, fill=_user_color(platform, user), font=(font_family, font_size, "bold"), anchor="w")
-                px += min(150, max(50, len(user) * int(font_size * 0.62)))
+                self.canvas.create_text(px, cy + line_h / 2, text=user, fill=_user_color(platform, user), font=name_font, anchor="w")
+                # Tk misst die echte Glyphenbreite (statt einer Schaetzung nach
+                # Zeichenanzahl). Dadurch beginnt die Nachricht stets hinter dem Namen.
+                px += name_font.measure(user) + 10
             else:
                 px = x + 92
-            self.canvas.create_text(px, cy + line_h / 2, text=line, fill=text_color, font=(font_family, font_size), anchor="w")
+            self.canvas.create_text(px, cy + line_h / 2, text=line, fill=text_color, font=text_font, anchor="w")
             cy += line_h
         if self.editing:
             self.canvas.create_rectangle(x, y, x + w, y + h, outline="#936cff", dash=(4, 3))

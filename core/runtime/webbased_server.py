@@ -703,6 +703,8 @@ class AppState:
         self.templates = self.resource_base / "templates"
         module_candidates = [p / "modules" for p in resource_candidates]
         self.modules = next((p for p in module_candidates if p.exists()), module_candidates[0])
+        asset_candidates = [p / "assets" / "pics" for p in resource_candidates]
+        self.asset_pics = next((p for p in asset_candidates if p.exists()), asset_candidates[0])
         self.module_roots = [self.modules / "integrations", self.modules / "plugins"]
         self.settings_path = self.data / "settings.json"
         self.auth_dir = self.data / "auth"
@@ -3474,10 +3476,11 @@ CHAT_PLATFORM_PLUGINS = {
     "kick": "kick_chat",
 }
 CHAT_PLATFORM_ICON_PATHS = {
-    "twitch": ("integrations", "twitch_chat", "assets", "twitch.png"),
-    "tiktok": ("integrations", "tiktok_chat", "assets", "TikTok.png"),
-    "youtube": ("integrations", "youtube_chat", "assets", "youtube.png"),
-    "kick": ("integrations", "kick_chat", "assets", "Kick.png"),
+    "twitch": "twitch.png",
+    "tiktok": "tiktok.png",
+    "youtube": "youtube.png",
+    "kick": "kick.png",
+    "no_entry": "no_entry.png",
 }
 
 def _chat_platform_state(st, settings):
@@ -3577,9 +3580,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path.startswith("/platform-icon/"):
             platform = path.rsplit("/", 1)[-1].lower()
-            parts = CHAT_PLATFORM_ICON_PATHS.get(platform)
-            if parts:
-                icon = st.modules.joinpath(*parts)
+            filename = CHAT_PLATFORM_ICON_PATHS.get(platform)
+            if filename:
+                icon = st.asset_pics / filename
                 if icon.is_file():
                     return self._send(200, icon.read_bytes(), _content_type(icon))
             return self._send(404, "Icon missing", "text/plain")
@@ -3754,9 +3757,12 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"messages": st.messages[-100:], "platforms": _chat_platform_state(st, st.settings())})
             return
         if path == "/api/desktop-chat/layout":
-            default = {"viewerBar": {"x": 16, "y": 16, "w": 720, "h": 64}, "chatPanel": {"x": 16, "y": 92, "w": 720, "h": 620}, "style": {"background": "#0d101d", "opacity": 82, "radius": 16, "fontFamily": "Segoe UI", "fontSize": 16, "textColor": "#ffffff"}}
+            default = {"viewerBar": {"x": 16, "y": 16, "w": 720, "h": 64}, "chatPanel": {"x": 16, "y": 92, "w": 720, "h": 620}, "style": {"background": "#0d101d", "opacity": 82, "radius": 16, "fontFamily": "Segoe UI", "fontSize": 16, "textColor": "#ffffff"}, "window": {"x": 80, "y": 80, "w": 780, "h": 820}, "autoStart": False}
             stored = _json_load(st.data / "plugins" / "chat_desktop" / "layout.json", {})
-            merged = {key: {**value, **(stored.get(key, {}) if isinstance(stored.get(key), dict) else {})} for key, value in default.items()}
+            merged = {
+                key: ({**value, **(stored.get(key, {}) if isinstance(stored.get(key), dict) else {})} if isinstance(value, dict) else stored.get(key, value))
+                for key, value in default.items()
+            }
             self._json(merged)
             return
         if path == "/api/desktop-chat/state":
@@ -4061,6 +4067,15 @@ class Handler(BaseHTTPRequestHandler):
                 for key in ("viewerBar", "chatPanel"):
                     raw = data.get(key) if isinstance(data, dict) else {}
                     clean[key] = {name: max(0, min(4000, int(raw.get(name, fallback)))) for name, fallback in (("x", 16), ("y", 16), ("w", 720), ("h", 100))}
+                raw_window = data.get("window") if isinstance(data, dict) else {}
+                raw_window = raw_window if isinstance(raw_window, dict) else {}
+                clean["window"] = {
+                    "x": max(-4000, min(4000, int(raw_window.get("x", 80)))),
+                    "y": max(-4000, min(4000, int(raw_window.get("y", 80)))),
+                    "w": max(320, min(4000, int(raw_window.get("w", 780)))),
+                    "h": max(240, min(4000, int(raw_window.get("h", 820)))),
+                }
+                clean["autoStart"] = bool(data.get("autoStart", False)) if isinstance(data, dict) else False
                 raw_style = data.get("style") if isinstance(data, dict) else {}
                 clean["style"] = {
                     "background": str(raw_style.get("background") or "#0d101d")[:20],
@@ -4079,17 +4094,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"ok": True, "editing": st.desktop_chat_editing})
         if path == "/api/desktop-chat/open":
             try:
-                st.desktop_chat_editing = False
-                url = f"http://127.0.0.1:{st.port}/desktop-chat"
-                if getattr(sys, "frozen", False):
-                    cmd = [sys.executable, "--desktop-chat", url]
-                else:
-                    cmd = [sys.executable, str(st.base / "run_webbased.py"), "--desktop-chat", url]
-                proc = subprocess.Popen(cmd, cwd=str(st.base), creationflags=_win_hidden_flags())
-                try:
-                    st.desktop_chat_pids.add(int(getattr(proc, "pid", 0) or 0))
-                except Exception:
-                    pass
+                _open_desktop_chat(st)
                 return self._json({"ok": True})
             except Exception as exc:
                 return self._json({"ok": False, "error": str(exc)}, 500)
@@ -5085,6 +5090,20 @@ def _start_extra_callback_servers(main_port: int):
                 except Exception: pass
     return servers
 
+def _open_desktop_chat(state):
+    state.desktop_chat_editing = False
+    url = f"http://127.0.0.1:{state.port}/desktop-chat"
+    if getattr(sys, "frozen", False):
+        cmd = [sys.executable, "--desktop-chat", url]
+    else:
+        cmd = [sys.executable, str(state.base / "run_webbased.py"), "--desktop-chat", url]
+    proc = subprocess.Popen(cmd, cwd=str(state.base), creationflags=_win_hidden_flags())
+    try:
+        state.desktop_chat_pids.add(int(getattr(proc, "pid", 0) or 0))
+    except Exception:
+        pass
+    return proc
+
 def run(base_dir: str, open_browser: bool = True):
     global STATE
     _free_callback_ports_before_start()
@@ -5106,6 +5125,15 @@ def run(base_dir: str, open_browser: bool = True):
         STATE.log("port_warning", f"{preferred_port} belegt, nutze {port}", "hauptseite nutzt ersatzport; callback bleibt 5173 falls frei")
     if open_browser:
         threading.Timer(0.7, lambda: STATE.open_main_browser(url)).start()
+    try:
+        desktop_layout = _json_load(STATE.data / "plugins" / "chat_desktop" / "layout.json", {})
+        if isinstance(desktop_layout, dict) and bool(desktop_layout.get("autoStart", False)):
+            threading.Timer(1.2, lambda: _open_desktop_chat(STATE)).start()
+    except Exception as exc:
+        try:
+            STATE.log("desktop-chat", "Autostart fehlgeschlagen", exc)
+        except Exception:
+            pass
     try:
         STATE.log("listen", url)
     except Exception:

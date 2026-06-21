@@ -270,21 +270,18 @@ h2{
   background:rgba(8,10,22,.65);
   margin:clamp(4px,0.5vw,8px) 0;
   font-size:clamp(12px,1vw,14px);
+  overflow-wrap:anywhere;
+  word-break:break-word;
 }
 .msg b{
   color:#5fd7ff;
 }
 .chatPlatform{
   display:inline-flex;
-  border-radius:6px;
-  padding:2px 5px;
   margin-right:4px;
-  color:#fff;
-  font-size:10px;
-  font-weight:900;
+  vertical-align:middle;
 }
-.chatPlatform img{width:14px;height:14px;object-fit:contain;margin-right:4px}
-.chatPlatform.twitch{background:#9146ff}.chatPlatform.tiktok{background:#161616;border:1px solid #25f4ee}.chatPlatform.youtube{background:#f00}.chatPlatform.kick{background:#53fc18;color:#071006}
+.chatPlatform img{width:18px;height:18px;object-fit:contain;display:block}
 .sendRow{
   display:flex;
   gap:clamp(6px,1vw,10px);
