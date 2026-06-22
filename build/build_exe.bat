@@ -84,6 +84,11 @@ robocopy "data" "dist\webbased\data" /E /R:5 /W:1 /XD %DATA_EXCLUDE_DIRS% /XF %D
 if errorlevel 8 goto :fail
 if not exist "dist\webbased\data\plugins" mkdir "dist\webbased\data\plugins"
 
+rem Chromium legt in den portablen Browserprofilen grosse, jederzeit neu erzeugbare
+rem Cache-, Safe-Browsing- und Telemetriedaten ab. Cookies, Local State und Tokens
+rem bleiben bewusst erhalten; nur diese entbehrlichen Laufzeitdaten werden entfernt.
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$data=(Resolve-Path 'dist\webbased\data').Path; $names=@('Cache','Code Cache','GPUCache','GrShaderCache','ShaderCache','BrowserMetrics','optimization_guide_model_store','Crashpad','blob_storage','Safe Browsing','extensions_crx_cache','component_crx_cache'); Get-ChildItem -LiteralPath $data -Directory -Recurse -Force | Where-Object { $names -contains $_.Name } | Sort-Object FullName -Descending | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue; Get-ChildItem -LiteralPath $data -File -Recurse -Force -Filter '*.pma' | Remove-Item -Force -ErrorAction SilentlyContinue"
+
 if exist temp rmdir /s /q temp
 set ERRORLEVEL=0
 echo.

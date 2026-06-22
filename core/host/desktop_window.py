@@ -822,5 +822,12 @@ def run_desktop_chat(url: str) -> int:
         overlay = DesktopTkOverlay(url)
         return overlay.run()
     except Exception as exc:
+        try:
+            log_dir = Path(sys.executable).resolve().parent / "data" / "logs"
+            log_dir.mkdir(parents=True, exist_ok=True)
+            import traceback
+            (log_dir / "desktop_chat_error.log").write_text(traceback.format_exc(), encoding="utf-8")
+        except Exception:
+            pass
         _message_box(f"Desktopfenster konnte nicht gestartet werden:\n\n{exc}", WINDOW_TITLE)
         return 1

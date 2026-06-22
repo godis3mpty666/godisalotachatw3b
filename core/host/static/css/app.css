@@ -653,3 +653,5 @@ button.secondary{
 .templatePreview{margin-top:8px;background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.07);border-radius:10px;padding:8px 10px;font-size:12px;color:#cbd2f5}
 .templatePreview span{opacity:.75;margin-right:4px}
 .templatePreview b{color:#fff;font-weight:800}
+.dashboardModActions{display:inline-flex;vertical-align:middle;gap:3px;margin:0 5px 0 3px}.dashboardModAction{display:inline-grid;place-items:center;width:22px;height:22px;padding:2px;border:0;border-radius:5px;background:transparent;cursor:pointer;vertical-align:middle}.dashboardModAction:hover{background:rgba(255,255,255,.12)}.dashboardModAction:disabled{opacity:.45;cursor:wait}.dashboardModAction img{width:17px;height:17px;object-fit:contain;display:block}
+.dashboardChatText,.dashboardChatText>*{display:inline}

@@ -400,6 +400,32 @@ class ModalotPlugin(ProviderPlugin):
         self._log(f"Manuelle Moderation {platform}/{action}: {'ok' if ok else 'fehlgeschlagen'} - {detail}")
         return ok
 
+    def dashboard_moderate(self, *, platform: str, username: str, action: str, author_channel_id: str = "", live_chat_id: str = "") -> tuple[bool, str]:
+        """Run a deliberate dashboard Ban/Unban without deleting the chat row."""
+        platform = str(platform or "").strip().lower()
+        action = str(action or "").strip().lower()
+        username = _clean_text(username)
+        if platform not in {"twitch", "kick", "youtube"} or action not in {"ban", "unban"} or not username:
+            return False, "Ungültige Dashboard-Moderationsaktion"
+
+        settings = self._current_settings()
+        target = username
+        if platform == "youtube":
+            if live_chat_id:
+                self._settings["youtube_live_chat_id_runtime"] = _clean_text(live_chat_id)
+            target = _clean_text(author_channel_id) or username
+            if not _clean_text(author_channel_id):
+                return False, "YouTube-Kanal-ID des Chatters fehlt"
+
+        reason = "Dashboard-Moderation"
+        if action == "ban":
+            ok, detail = self._ban_user(settings, platform, target, reason)
+        else:
+            ok, detail = self._unban_user(settings, platform, target)
+        self._remember_action(platform, action, username, "dashboard", reason, ok, detail)
+        self._log(f"Dashboard-Moderation {platform}/{action}: {'ok' if ok else 'fehlgeschlagen'} - {detail}")
+        return ok, detail
+
     def _current_settings(self) -> dict[str, Any]:
         fresh = None
         host = self._host
@@ -753,6 +779,8 @@ class ModalotPlugin(ProviderPlugin):
             return False, {}, "Moderator-ID fehlt"
         if target_user and not target_id:
             return False, {}, f"User-ID fehlt fuer {target_user}"
+        if target_id and target_id in {broadcaster_id, moderator_id}:
+            return False, {}, "Der Broadcaster oder das verwendete Moderationskonto kann nicht über diese Moderationsaktion geändert werden"
         return True, {"broadcaster_id": broadcaster_id, "moderator_id": moderator_id, "target_id": target_id}, "ok"
 
     def _test_twitch(self, settings: dict[str, Any]) -> tuple[bool, str]:

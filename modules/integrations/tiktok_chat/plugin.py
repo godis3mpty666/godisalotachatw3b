@@ -1175,7 +1175,12 @@ class TikTokChatPlugin(ThreadedPlugin):
                     ws_url = str(tab.get('webSocketDebuggerUrl') or '').strip()
                     if ws_url:
                         if reason == 'live detected':
-                            self._cdp_call(ws_url, 'Page.reload', {'ignoreCache': True}, timeout=4.0)
+                            # A reload only works when the app window already
+                            # happens to be on this creator's live page. During
+                            # offline watching it can instead be on TikTok's
+                            # generic/live landing page, so explicitly point it
+                            # at the detected creator before refreshing content.
+                            self._cdp_call(ws_url, 'Page.navigate', {'url': url}, timeout=6.0)
                         else:
                             self._cdp_call(ws_url, 'Page.bringToFront', {}, timeout=3.0)
                         self._live_window_opened = True

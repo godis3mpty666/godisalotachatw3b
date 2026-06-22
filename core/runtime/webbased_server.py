@@ -725,6 +725,8 @@ class AppState:
         self.last_ui_reload_request = 0.0
         self.ui_browser_pid = 0
         self.desktop_chat_pids = set()
+        self.desktop_chat_process = None
+        self._desktop_chat_lock = threading.RLock()
         self.main_url = ""
         self.shutting_down = False
         self._tiktok_cookie_backoff = {}
@@ -3481,6 +3483,8 @@ CHAT_PLATFORM_ICON_PATHS = {
     "youtube": "youtube.png",
     "kick": "kick.png",
     "no_entry": "no_entry.png",
+    "banhammer": "banhammer.png",
+    "unban": "unban.png",
 }
 
 def _chat_platform_state(st, settings):
@@ -3498,10 +3502,13 @@ def _chat_platform_state(st, settings):
         live_ts = float(metric.get("is_live_ts") or 0.0)
         metric_fresh = bool(metric) and now - float(metric.get("ts") or 0.0) < 120.0
         viewer_fresh = viewer_ts > 0 and now - viewer_ts < 180.0
+        # Helix can briefly time out while IRC remains connected. Preserve the
+        # last known count during that connection instead of showing no-entry.
+        viewer_cached = viewer_ts > 0 and now - viewer_ts < 600.0
         live_fresh = live_ts > 0 and now - live_ts < 180.0
         connected = plugin_state in {"connected", "running", "ready"}
         viewer_error = bool(metric.get("viewer_count_error") or metric.get("metric_error"))
-        has_viewer = viewer_fresh and not viewer_error and str(viewer).isdigit()
+        has_viewer = (viewer_fresh or (connected and viewer_cached)) and str(viewer).isdigit()
         is_live = metric.get("is_live") if live_fresh else None
         plugin_error = plugin_state in {"error", "failed", "disconnected", "stopped"}
         stale_detail = "Noch keine frischen Zuschauerdaten"
@@ -3513,8 +3520,8 @@ def _chat_platform_state(st, settings):
             "connected": connected or has_viewer,
             "viewer_count": int(viewer) if has_viewer else None,
             "is_live": bool(is_live) if is_live is not None else None,
-            "blocked": viewer_error or plugin_error,
-            "detail": str(plugin_status.get("message") or ("Zuschauerdaten aktuell" if has_viewer else stale_detail)),
+            "blocked": plugin_error or (viewer_error and not connected and not has_viewer),
+            "detail": str(plugin_status.get("message") or ("Zuschauerdaten aktuell" if viewer_fresh else ("Zuschauerdaten werden aktualisiert" if has_viewer else stale_detail))),
             "metric_fresh": metric_fresh,
             "viewer_fresh": viewer_fresh,
             "live_fresh": live_fresh,
@@ -3766,7 +3773,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json(merged)
             return
         if path == "/api/desktop-chat/state":
-            self._json({"editing": bool(st.desktop_chat_editing)})
+            self._json({"editing": bool(st.desktop_chat_editing), "open": _desktop_chat_is_open(st)})
             return
         if path == "/api/nowplaying":
             self._json(self._nowplaying())
@@ -4094,8 +4101,20 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"ok": True, "editing": st.desktop_chat_editing})
         if path == "/api/desktop-chat/open":
             try:
-                _open_desktop_chat(st)
-                return self._json({"ok": True})
+                proc, opened = _open_desktop_chat(st)
+                return self._json({"ok": True, "opened": opened, "pid": int(getattr(proc, "pid", 0) or 0)})
+            except Exception as exc:
+                return self._json({"ok": False, "error": str(exc)}, 500)
+        if path == "/api/desktop-chat/close":
+            _close_desktop_chat(st)
+            return self._json({"ok": True})
+        if path == "/api/desktop-chat/reset":
+            try:
+                default = {"viewerBar": {"x": 16, "y": 16, "w": 720, "h": 64}, "chatPanel": {"x": 16, "y": 92, "w": 720, "h": 620}, "style": {"background": "#0d101d", "opacity": 82, "radius": 16, "fontFamily": "Segoe UI", "fontSize": 16, "textColor": "#ffffff"}, "window": {"x": 80, "y": 80, "w": 780, "h": 820}, "autoStart": False}
+                _json_save(st.data / "plugins" / "chat_desktop" / "layout.json", default)
+                _close_desktop_chat(st)
+                proc, _opened = _open_desktop_chat(st)
+                return self._json({"ok": True, "pid": int(getattr(proc, "pid", 0) or 0)})
             except Exception as exc:
                 return self._json({"ok": False, "error": str(exc)}, 500)
         if path == "/api/message":
@@ -4103,6 +4122,29 @@ class Handler(BaseHTTPRequestHandler):
             if text:
                 st.messages.append({"id": _now_ms(), "platform":"test", "user":"Test", "text":text, "message_type":"chat", "time":time.strftime("%H:%M:%S")})
             return self._json({"ok": True})
+
+        if path == "/api/dashboard/moderation":
+            platform = str(data.get("platform") or "").strip().lower() if isinstance(data, dict) else ""
+            user = str(data.get("user") or "").strip() if isinstance(data, dict) else ""
+            action = str(data.get("action") or "").strip().lower() if isinstance(data, dict) else ""
+            if platform not in {"twitch", "kick", "youtube"} or action not in {"ban", "unban"} or not user:
+                return self._json({"ok": False, "error": "Nur Twitch, Kick und YouTube mit Ban oder Unban sind erlaubt."}, 400)
+            try:
+                plugin = st.plugin_manager.load_plugin("modalot")
+                moderate = getattr(plugin, "dashboard_moderate", None)
+                if not callable(moderate):
+                    return self._json({"ok": False, "error": "modalot unterstützt die Dashboard-Moderation nicht."}, 400)
+                ok, detail = moderate(
+                    platform=platform,
+                    username=user,
+                    action=action,
+                    author_channel_id=str(data.get("author_channel_id") or ""),
+                    live_chat_id=str(data.get("live_chat_id") or ""),
+                )
+                return self._json({"ok": bool(ok), "platform": platform, "user": user, "action": action, "detail": str(detail)})
+            except Exception as exc:
+                st.log("modalot", "dashboard moderation failed", exc)
+                return self._json({"ok": False, "error": str(exc)}, 500)
 
         if path.startswith("/api/disconnect/"):
             parts = path.strip("/").split("/")
@@ -5096,19 +5138,43 @@ def _start_extra_callback_servers(main_port: int):
                 except Exception: pass
     return servers
 
+def _desktop_chat_is_open(state) -> bool:
+    with state._desktop_chat_lock:
+        proc = getattr(state, "desktop_chat_process", None)
+        if proc is not None:
+            try:
+                if proc.poll() is None:
+                    return True
+            except Exception:
+                pass
+        state.desktop_chat_process = None
+        state.desktop_chat_pids.clear()
+        return False
+
+
+def _close_desktop_chat(state) -> None:
+    with state._desktop_chat_lock:
+        for pid in list(state.desktop_chat_pids):
+            _taskkill_pid(int(pid))
+        state.desktop_chat_pids.clear()
+        state.desktop_chat_process = None
+    state.desktop_chat_editing = False
+
+
 def _open_desktop_chat(state):
     state.desktop_chat_editing = False
-    url = f"http://127.0.0.1:{state.port}/desktop-chat"
-    if getattr(sys, "frozen", False):
-        cmd = [sys.executable, "--desktop-chat", url]
-    else:
-        cmd = [sys.executable, str(state.base / "run_webbased.py"), "--desktop-chat", url]
-    proc = subprocess.Popen(cmd, cwd=str(state.base), creationflags=_win_hidden_flags())
-    try:
+    with state._desktop_chat_lock:
+        if _desktop_chat_is_open(state):
+            return None, False
+        url = f"http://127.0.0.1:{state.port}/desktop-chat"
+        if getattr(sys, "frozen", False):
+            cmd = [sys.executable, "--desktop-chat", url]
+        else:
+            cmd = [sys.executable, str(state.base / "run_webbased.py"), "--desktop-chat", url]
+        proc = subprocess.Popen(cmd, cwd=str(state.base), creationflags=_win_hidden_flags())
         state.desktop_chat_pids.add(int(getattr(proc, "pid", 0) or 0))
-    except Exception:
-        pass
-    return proc
+        state.desktop_chat_process = proc
+        return proc, True
 
 def run(base_dir: str, open_browser: bool = True):
     global STATE
