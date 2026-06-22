@@ -1,6 +1,7 @@
 let overlayState=null, fonts=[], selected='background', nowPlaying={};
 let nowPlayingLoading=false, nowPlayingLoaded=false, nowPlayingFailures=0;
 let overlaySaveTimer=null, overlaySaveQueue=Promise.resolve();
+let overlayStateSyncing=false;
 const $=s=>document.querySelector(s);
 const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[m]));
 const uid=()=> 'x'+Date.now().toString(36)+Math.random().toString(36).slice(2,6);
@@ -20,6 +21,29 @@ async function loadState(){
  }catch(e){
   console.error('LoadState Error:',e);
   showStatus('Fehler beim Laden: '+e.message, 'error');
+ }
+}
+
+// A browser source is a separate page from the editor. Meld can keep that
+// page alive for hours, so it must observe saved layout changes itself instead
+// of depending on a browser-source reload.
+async function syncOverlayState(){
+ if(overlayStateSyncing||!overlayState||document.body.classList.contains('editing'))return;
+ overlayStateSyncing=true;
+ try{
+  const r=await fetch('/api/spotis3mptify/overlay-state?_='+Date.now(),{cache:'no-store'});
+  if(!r.ok)return;
+  const next=await r.json();
+  // Reapply even when the serialized config looks identical. Some embedded
+  // Chromium views retain inline paint state after a source resize/reload.
+  // This makes the saved state authoritative for every running browser source.
+  overlayState=next;
+  renderExtras();
+  applyState();
+ }catch(_){
+  // Keep rendering the last valid state while the local server restarts.
+ }finally{
+  overlayStateSyncing=false;
  }
 }
 
@@ -444,7 +468,12 @@ loadState();
 loadNowPlaying();
 initEdit();
 setInterval(loadNowPlaying,2500);
+setInterval(syncOverlayState,1000);
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)syncOverlayState();});
 window.addEventListener('beforeunload',()=>{
- if(!overlayState)return;
+ // A passive Meld/OBS browser source must never write its possibly stale
+ // in-memory layout back during a reload. Only the active editor is allowed
+ // to flush a last pending change on close.
+ if(!overlayState||!document.body.classList.contains('editing'))return;
  navigator.sendBeacon('/api/spotis3mptify/overlay-state',new Blob([JSON.stringify(overlayState)],{type:'application/json'}));
 });

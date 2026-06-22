@@ -125,6 +125,10 @@ body.transparent{
 .textEl.marqueeLoopLtr .textTrack{
   animation:marqueeLoopLtr var(--marquee-duration,8s) linear infinite;
 }
+.textEl.marqueeActive{
+  -webkit-mask-image:linear-gradient(to right,transparent 0,#000 14px,#000 calc(100% - 14px),transparent 100%);
+  mask-image:linear-gradient(to right,transparent 0,#000 14px,#000 calc(100% - 14px),transparent 100%);
+}
 @keyframes marqueeBounce{
   from{transform:translateX(0)}
   to{transform:translateX(calc(-1 * var(--marquee-distance,0px)))}
