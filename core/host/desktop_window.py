@@ -292,7 +292,7 @@ class DesktopTkOverlay:
         self._save_after_id: str | None = None
         self._last_render_key = ""
         self._last_clickthrough_state: bool | None = None
-        self._last_window_size: tuple[int, int] | None = None
+        self._last_window_geometry: tuple[int, int, int, int] | None = None
         self._z_order_done = False
         self._last_bg_alpha: float | None = None
         self._platform_images: dict[str, Any] = {}
@@ -305,11 +305,18 @@ class DesktopTkOverlay:
         self.root.bind("<F8>", lambda _e: self._set_remote_editing(not self.editing))
 
     def _on_configure(self, _event=None) -> None:
-        size = (int(self.root.winfo_width()), int(self.root.winfo_height()))
-        if self._last_window_size == size:
+        geometry = (
+            int(self.root.winfo_x()),
+            int(self.root.winfo_y()),
+            int(self.root.winfo_width()),
+            int(self.root.winfo_height()),
+        )
+        if self._last_window_geometry == geometry:
             return
-        self._last_window_size = size
-        self._sync_background_window()
+        self._last_window_geometry = geometry
+        # Tk applies geometry changes asynchronously. Sync on the next idle
+        # turn so the transparent background uses the final x/y as well as size.
+        self.root.after_idle(self._sync_background_window)
         self.render()
 
     def run(self) -> int:
@@ -592,9 +599,17 @@ class DesktopTkOverlay:
     def _pointer_up(self, _event) -> None:
         if self.drag.mode in ("box-move", "box-resize", "window-move", "window-resize"):
             if self.drag.mode in ("window-move", "window-resize"):
-                self._capture_window_geometry()
+                self.drag = DragState()
+                # Capture after Tk has committed the final mouse geometry.
+                self.root.after_idle(self._capture_and_save_window_layout)
+                return
             self._schedule_layout_save()
         self.drag = DragState()
+
+    def _capture_and_save_window_layout(self) -> None:
+        self._sync_background_window()
+        self._capture_window_geometry()
+        self._save_layout()
 
     def _schedule_layout_save(self) -> None:
         if self._save_after_id:
@@ -607,7 +622,18 @@ class DesktopTkOverlay:
     def _save_layout(self) -> None:
         self._save_after_id = None
         try:
-            _post_json(self.layout_url, self.layout)
+            # The dashboard can change AutoStart/style while this native window
+            # is open. Merge only the geometry owned by this window into the
+            # newest server layout, otherwise an old local snapshot resets the
+            # checkbox or other settings on every drag.
+            latest = _fetch_json(self.layout_url, timeout=1.0)
+            if not isinstance(latest, dict):
+                latest = {}
+            for key in ("viewerBar", "chatPanel", "window"):
+                if isinstance(self.layout.get(key), dict):
+                    latest[key] = dict(self.layout[key])
+            self.layout = latest
+            _post_json(self.layout_url, latest)
         except Exception as exc:
             _log(f"layout speichern fehlgeschlagen: {exc}")
 
