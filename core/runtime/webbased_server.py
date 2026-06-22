@@ -727,6 +727,10 @@ class AppState:
         self.desktop_chat_pids = set()
         self.desktop_chat_process = None
         self._desktop_chat_lock = threading.RLock()
+        # Errors can be emitted by more than one poller/plugin at once. Keep
+        # one instance of an identical error per runtime session in the DEV log.
+        self._log_lock = threading.RLock()
+        self._seen_error_logs: dict[str, float] = {}
         self.main_url = ""
         self.shutting_down = False
         self._tiktok_cookie_backoff = {}
@@ -975,7 +979,18 @@ class AppState:
     def log(self, *parts):
         try:
             source, level, message = _normalize_log_parts(parts)
-            line = time.strftime("%Y-%m-%d %H:%M:%S") + f" | {source} | {level} | " + _redact_dev_log(message) + "\n"
+            message = _redact_dev_log(message)
+            if level == "error":
+                signature = source + "\x1f" + message
+                with self._log_lock:
+                    if signature in self._seen_error_logs:
+                        return
+                    now = time.time()
+                    self._seen_error_logs[signature] = now
+                    # Bound the small in-memory cache for very long runtimes.
+                    if len(self._seen_error_logs) > 512:
+                        self._seen_error_logs = {key: ts for key, ts in self._seen_error_logs.items() if now - ts < 21600}
+            line = time.strftime("%Y-%m-%d %H:%M:%S") + f" | {source} | {level} | " + message + "\n"
             self.log_file.parent.mkdir(parents=True, exist_ok=True)
             with self.log_file.open("a", encoding="utf-8") as f:
                 f.write(line)
