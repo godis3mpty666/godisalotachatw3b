@@ -506,7 +506,11 @@ class TwitchChatPlugin(ThreadedPlugin):
 
         return False, '', 'Twitch OAuth unusable: ' + ' | '.join(errors), cache
     def _refresh_runtime_auth(self, settings: dict, cache: dict) -> tuple[bool, str, str, dict]:
-        ok, username, msg, fresh_cache = self._resolve_auth(settings, allow_oauth=False)
+        # OAuth refreshes can happen in the core Platforms page while this
+        # long-running IRC plugin is alive. Do not retry Helix with the
+        # startup snapshot (often an expired bot token); re-read host settings.
+        current_settings = self._effective_settings(settings, self._host)
+        ok, username, msg, fresh_cache = self._resolve_auth(current_settings, allow_oauth=False)
         if ok:
             cache.clear()
             cache.update(fresh_cache)
@@ -836,8 +840,6 @@ class TwitchChatPlugin(ThreadedPlugin):
         if 'sub' in msg_id and system_msg:
             self._emit_alert(host, channel, username, system_msg, 'twitch_sub')
     def _emit_is_live(self, host: PluginHost, channel: str, is_live: bool) -> None:
-        if self._last_is_live is is_live:
-            return
         self._last_is_live = is_live
 
         payload = {

@@ -801,7 +801,10 @@ class DesktopTkOverlay:
         box = self.layout.get("chatPanel") or {}
         x, y, w, h = [int(box.get(k, 0)) for k in ("x", "y", "w", "h")]
         self._rounded_rect(x, y, w, h, radius, fill=bg, outline="", stipple=bg_stipple, canvas=self.bg_canvas)
-        messages = [m for m in (self.last_chat_state.get("messages", []) or []) if m.get("message_type") == "chat"][-40:]
+        messages = [
+            m for m in (self.last_chat_state.get("messages", []) or [])
+            if m.get("message_type") in {"chat", "moderation_notice"}
+        ][-40:]
         # Die Badge ist 24px hoch. Mit mindestens 34px pro Zeile bleibt sichtbar
         # Luft zwischen den farbigen Bereichen, auch bei kleiner Schrift.
         line_h = max(34, int(font_size * 1.8))

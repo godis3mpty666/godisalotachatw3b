@@ -455,6 +455,10 @@ class WebbasedPluginHost:
                 if payload.get("is_live") is not None:
                     merged["is_live_ts"] = now
                 self.state.metrics[platform] = merged
+            # The originating error is already logged by the plugin. Repeating
+            # its unchanged metric snapshot every poll adds no diagnostic value.
+            if payload.get("metric_error") or payload.get("viewer_count_error"):
+                return
             sig = "|".join([
                 str(plugin_id),
                 platform,

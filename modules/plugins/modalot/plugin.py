@@ -195,8 +195,6 @@ class ModalotPlugin(ProviderPlugin):
             "default_action": "delete",
             "default_timeout_seconds": 600,
             "delete_message_first": True,
-            "send_mod_notice": False,
-            "mod_notice_format": "@{user} wurde moderiert. ({action})",
             "reason_format": "Automod: {word}",
             "legacy_note": "Alte globale blocked_words/default_action bleiben als Fallback erhalten.",
             "manual_platform": "twitch",
@@ -307,6 +305,9 @@ class ModalotPlugin(ProviderPlugin):
         clean_user = _clean_login(username)
         if not clean_user or clean_user in _split_names(settings.get("excluded_users")):
             return
+        if self._is_protected_account(platform, clean_user):
+            self._log(f"Automod uebersprungen: {clean_user} ist ein eigenes {platform}-Konto.")
+            return
         text = self._message_text(msg)
         if not text:
             return
@@ -354,12 +355,9 @@ class ModalotPlugin(ProviderPlugin):
         if action in {"timeout", "ban"}:
             detail = f"Delete: {delete_detail} | Aktion: {detail}"
         self._remember_action(platform, action, username, word, reason, ok, detail, duration=duration, message_id=msg_id)
-        if _as_bool(settings.get("send_mod_notice"), False) and self._host is not None:
-            notice = self._format(settings.get("mod_notice_format") or "@{user} wurde moderiert. ({action})", username, platform, word, action, duration)
-            try:
-                self._host.send_platform_message(platform, notice, sender=self.plugin_id)
-            except Exception as exc:
-                self._log(f"Moderationsmeldung konnte nicht gesendet werden: {exc}")
+        # Moderationsdetails are private UI events. They must never be sent to a
+        # platform chat, even when an old settings file still contains the legacy
+        # send_mod_notice option.
 
     on_chat_message = on_message
     handle_message = on_message
@@ -474,6 +472,23 @@ class ModalotPlugin(ProviderPlugin):
                 pass
         return {}
 
+    def _is_protected_account(self, platform: str, username: Any) -> bool:
+        """Never moderate the authenticated bot or broadcaster account."""
+        target = _clean_login(username)
+        if not target:
+            return False
+        cfg = self._host_platform_settings(str(platform or "").strip().lower())
+        protected = {
+            _clean_login(cfg.get(key))
+            for key in (
+                "bot", "bot_account", "bot_username", "username", "oauth_login",
+                "main", "main_account", "main_username", "channel", "channel_slug",
+                "main_oauth_login",
+            )
+            if _clean_login(cfg.get(key))
+        }
+        return target in protected
+
     def _log(self, message: str) -> None:
         if self._host is not None:
             try:
@@ -544,7 +559,10 @@ class ModalotPlugin(ProviderPlugin):
                 "user": "modalot",
                 "username": "modalot",
                 "text": f"modalot {action} user {clean_user}",
-                "message_type": "chat",
+                # This is deliberately not a chat message. Chat messages are
+                # eligible for bridge/bot dispatch and could otherwise be sent to
+                # another platform or trigger modalot again.
+                "message_type": "moderation_notice",
                 "source_plugin_id": self.plugin_id,
                 "dispatch_to_plugins": False,
             })
@@ -1027,6 +1045,8 @@ class ModalotPlugin(ProviderPlugin):
 
     def _timeout_user(self, settings: dict[str, Any], platform: str, username: str, duration: int, reason: str) -> tuple[bool, str]:
         platform = platform.lower().strip()
+        if self._is_protected_account(platform, username):
+            return False, "Eigene Bot-/Broadcaster-Konten werden nicht moderiert"
         if platform == "twitch":
             return self._twitch_ban_or_timeout(username, reason, duration)
         if platform == "kick":
@@ -1037,6 +1057,8 @@ class ModalotPlugin(ProviderPlugin):
 
     def _ban_user(self, settings: dict[str, Any], platform: str, username: str, reason: str) -> tuple[bool, str]:
         platform = platform.lower().strip()
+        if self._is_protected_account(platform, username):
+            return False, "Eigene Bot-/Broadcaster-Konten werden nicht moderiert"
         if platform == "twitch":
             return self._twitch_ban_or_timeout(username, reason, 0)
         if platform == "kick":

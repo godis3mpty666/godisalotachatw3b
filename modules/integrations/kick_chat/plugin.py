@@ -66,7 +66,7 @@ class KickChatPlugin(ThreadedPlugin):
     # Das Maintool verwaltet Kick Main/Bot OAuth zentral und spiegelt nur die nötigen Werte.
     def settings_schema(self):
         return [
-            {'key': 'channel', 'label': 'Kick Channel', 'placeholder': 'godis3mpty'},
+            {'key': 'channel', 'label': 'Kick Channel', 'placeholder': 'dein-channelname'},
             {'key': 'diag_log', 'label': 'Diagnosis Log', 'type': 'multiline', 'placeholder': ''},
             {'key': 'diag_path', 'label': 'Diagnosis file path', 'placeholder': ''},
         ]
@@ -1062,10 +1062,8 @@ class KickChatPlugin(ThreadedPlugin):
         if value is None:
             return
         live = bool(value)
-        if self._is_live is live:
-            return
+        changed = self._is_live is not live
         self._is_live = live
-        self._append_diag(f'IS_LIVE {self._is_live}')
         try:
             host.emit_metric(self.plugin_id, {
                 'platform': 'kick',
@@ -1076,6 +1074,9 @@ class KickChatPlugin(ThreadedPlugin):
             })
         except Exception:
             pass
+        if not changed:
+            return
+        self._append_diag(f'IS_LIVE {self._is_live}')
         state = 'connected'
         host.set_status(self.plugin_id, PluginStatus(state, f'Watching #{channel} | live={str(self._is_live).lower()}'))
 

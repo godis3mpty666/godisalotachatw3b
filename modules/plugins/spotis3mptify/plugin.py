@@ -191,7 +191,7 @@ def _clean_request_user(value: Any, platform: str = '') -> str:
     name = re.sub(r'\s*@\s*(?:tw|tt|yt|twitch|tiktok|youtube|kick)$', '', name, flags=re.I).strip()
     name = re.sub(r'\s*[-_/|]\s*(?:tw|tt|yt|twitch|tiktok|youtube|kick)$', '', name, flags=re.I).strip()
 
-    # Old bridge builds sometimes glued the platform suffix directly to the name, e.g. godis3mptytw.
+    # Old bridge builds sometimes glued the platform suffix directly to the name, e.g. usernameTW.
     p = _clean_platform(platform)
     suffixes = {'twitch': ('tw', 'twitch'), 'tiktok': ('tt', 'tiktok'), 'youtube': ('yt', 'youtube'), 'kick': ('kick',)}.get(p, ())
     low = name.lower()
@@ -446,7 +446,7 @@ class Spotis3mptifyPlugin(ProviderPlugin):
             {'key': 'srplus_once_per_stream', 'type': 'bool', 'label': 'SR+ nur einmal pro Stream', 'default': True, 'tab': 'SR+'},
             {'key': 'srplus_shuffle', 'type': 'bool', 'label': 'SR+ Shuffle', 'default': True, 'tab': 'SR+'},
             {'key': 'srplus_allowed_platforms', 'label': 'SR+ Plattformen leer=alle', 'placeholder': 'twitch,tiktok,youtube,kick', 'tab': 'SR+'},
-            {'key': 'srplus_allowed_users', 'label': 'SR+ User leer=alle', 'placeholder': 'godis3mpty,psycho_edge', 'tab': 'SR+'},
+            {'key': 'srplus_allowed_users', 'label': 'SR+ User leer=alle', 'placeholder': 'username1,username2', 'tab': 'SR+'},
             {'key': 'log_verbose', 'type': 'bool', 'label': 'AusfÃ¼hrlich loggen', 'default': True, 'tab': 'Logs'},
         ]
 

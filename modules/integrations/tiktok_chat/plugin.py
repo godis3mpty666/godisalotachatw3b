@@ -2067,6 +2067,20 @@ class TikTokChatPlugin(ThreadedPlugin):
         )
 
     def _emit_is_live(self, host: PluginHost, channel: str, is_live: bool, *, force: bool = False) -> None:
+        # Live status is a metric for the shared viewer display. Keep it out
+        # of emit_message (which older hosts treated as an empty chat row), but
+        # publish it through the dedicated metric channel like Twitch/Kick.
+        try:
+            host.emit_metric(self.plugin_id, {
+                'platform': 'tiktok',
+                'channel': channel,
+                'message_type': 'is_live',
+                'is_live': bool(is_live),
+                'metric_only': True,
+            })
+        except Exception:
+            pass
+
         if not force and self._last_is_live is is_live:
             return
         self._last_is_live = is_live
