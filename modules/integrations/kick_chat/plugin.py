@@ -1066,6 +1066,16 @@ class KickChatPlugin(ThreadedPlugin):
             return
         self._is_live = live
         self._append_diag(f'IS_LIVE {self._is_live}')
+        try:
+            host.emit_metric(self.plugin_id, {
+                'platform': 'kick',
+                'channel': channel,
+                'message_type': 'is_live',
+                'is_live': live,
+                'metric_only': True,
+            })
+        except Exception:
+            pass
         state = 'connected'
         host.set_status(self.plugin_id, PluginStatus(state, f'Watching #{channel} | live={str(self._is_live).lower()}'))
 

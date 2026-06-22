@@ -3517,26 +3517,39 @@ def _chat_platform_state(st, settings):
         live_ts = float(metric.get("is_live_ts") or 0.0)
         metric_fresh = bool(metric) and now - float(metric.get("ts") or 0.0) < 120.0
         viewer_fresh = viewer_ts > 0 and now - viewer_ts < 180.0
-        # Helix can briefly time out while IRC remains connected. Preserve the
-        # last known count during that connection instead of showing no-entry.
-        viewer_cached = viewer_ts > 0 and now - viewer_ts < 600.0
         live_fresh = live_ts > 0 and now - live_ts < 180.0
         connected = plugin_state in {"connected", "running", "ready"}
         viewer_error = bool(metric.get("viewer_count_error") or metric.get("metric_error"))
-        has_viewer = (viewer_fresh or (connected and viewer_cached)) and str(viewer).isdigit()
         is_live = metric.get("is_live") if live_fresh else None
         plugin_error = plugin_state in {"error", "failed", "disconnected", "stopped"}
-        stale_detail = "Noch keine frischen Zuschauerdaten"
-        if metric and not viewer_fresh:
-            stale_detail = "Zuschauerdaten veraltet"
+        # Twitch/Kick chat can remain connected while the channel is offline.
+        # A viewer number is meaningful only for a fresh, explicitly live
+        # platform state; otherwise show the unavailable icon.
+        online = connected and is_live is True
+        has_viewer = online and viewer_fresh and not viewer_error and str(viewer).isdigit()
+        if plugin_error:
+            detail = str(plugin_status.get("message") or "Pluginverbindung verloren")
+        elif not connected:
+            detail = str(plugin_status.get("message") or "Plugin nicht verbunden")
+        elif is_live is False:
+            detail = "Kanal ist offline"
+        elif is_live is None:
+            detail = "Live-Status wird geprüft"
+        elif viewer_error:
+            detail = "Zuschauerdaten nicht verfügbar"
+        elif viewer_fresh:
+            detail = "Zuschauerdaten aktuell"
+        else:
+            detail = "Zuschauerdaten werden aktualisiert"
         out.append({
             "platform": platform,
             "plugin_id": plugin_id,
-            "connected": connected or has_viewer,
+            "connected": connected,
+            "online": online,
             "viewer_count": int(viewer) if has_viewer else None,
             "is_live": bool(is_live) if is_live is not None else None,
-            "blocked": plugin_error or (viewer_error and not connected and not has_viewer),
-            "detail": str(plugin_status.get("message") or ("Zuschauerdaten aktuell" if viewer_fresh else ("Zuschauerdaten werden aktualisiert" if has_viewer else stale_detail))),
+            "blocked": not online or viewer_error or plugin_error,
+            "detail": detail,
             "metric_fresh": metric_fresh,
             "viewer_fresh": viewer_fresh,
             "live_fresh": live_fresh,
