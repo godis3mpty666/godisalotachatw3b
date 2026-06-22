@@ -288,7 +288,7 @@ class ModalotPlugin(ProviderPlugin):
     handle_settings_button = on_settings_button
     on_settings_action = on_settings_button
 
-    def on_message(self, msg: Any) -> None:
+    def on_message(self, msg: Any) -> bool | None:
         if not self._enabled:
             return
         settings = self._current_settings()
@@ -331,7 +331,8 @@ class ModalotPlugin(ProviderPlugin):
             username_for_action = username
         key = f"{platform}|{clean_user}|{word}|{msg_id or text[:80].lower()}"
         if self._recent_hit(key):
-            return
+            # A duplicate of an already moderated message must stay local too.
+            return False
         action = str(rule.get("action") or "delete").strip().lower()
         if action not in {"delete", "timeout", "ban"}:
             action = "delete"
@@ -358,6 +359,9 @@ class ModalotPlugin(ProviderPlugin):
         # Moderationsdetails are private UI events. They must never be sent to a
         # platform chat, even when an old settings file still contains the legacy
         # send_mod_notice option.
+        # Returning False tells the host to stop the message before botalot or
+        # bridg3alot can process or forward it.
+        return False
 
     on_chat_message = on_message
     handle_message = on_message

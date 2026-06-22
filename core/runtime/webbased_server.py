@@ -408,9 +408,26 @@ class WebbasedPluginHost:
                 return
             if not str(item.get("text") or "").strip():
                 return
+            msg = dict(item)
+            msg.setdefault("source_platform", item.get("platform") or "")
+
+            # modalot is a synchronous ingress gate: it gets the original
+            # platform message before botalot/bridg3alot. A False return means a
+            # moderation rule matched, so the message must stay on its source
+            # platform and must not be forwarded or handled as a command.
+            modalot = getattr(self.state, "plugin_instances", {}).get("modalot")
+            modalot_handler = getattr(modalot, "on_message", None) if modalot is not None else None
+            if callable(modalot_handler):
+                try:
+                    if modalot_handler(dict(msg)) is False:
+                        self.log("modalot", f"chat ingress blocked | {msg.get('platform')}:{msg.get('user')}: {str(msg.get('text') or '')[:180]}")
+                        return
+                except Exception as exc:
+                    # A moderation-plugin fault must not take down chat routing.
+                    self.log("modalot", f"ingress moderation failed: {exc}")
             targets = []
             for target_id, plugin in list(getattr(self.state, "plugin_instances", {}).items()):
-                if target_id == source_plugin_id or target_id in CHAT_INPUT_PLUGIN_IDS:
+                if target_id in {source_plugin_id, "modalot"} or target_id in CHAT_INPUT_PLUGIN_IDS:
                     continue
                 handler = None
                 for handler_name in ("on_message", "on_chat_message", "handle_message"):
@@ -422,9 +439,6 @@ class WebbasedPluginHost:
                     targets.append((target_id, handler))
             if not targets:
                 return
-
-            msg = dict(item)
-            msg.setdefault("source_platform", item.get("platform") or "")
 
             def run_dispatch() -> None:
                 for target_id, handler in targets:
