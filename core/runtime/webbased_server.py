@@ -224,7 +224,7 @@ def default_desktop_chat_layout() -> dict:
         "alerts": {
             "enabled": True,
             "maxItems": 5,
-            "showTimestamp": True,
+            "showTimestamp": False,
             "platforms": {"twitch": True, "tiktok": True, "youtube": True, "kick": True},
         },
         "window": {"x": 80, "y": 80, "w": 780, "h": 820},
@@ -310,7 +310,7 @@ def normalize_desktop_chat_layout(raw_layout) -> dict:
     merged["alerts"] = {
         "enabled": bool(alerts.get("enabled", True)),
         "maxItems": max(1, min(20, int(alerts.get("maxItems", 5) or 5))),
-        "showTimestamp": bool(alerts.get("showTimestamp", True)),
+        "showTimestamp": False,
         "platforms": {name: bool(platforms.get(name, True)) for name in ("twitch", "tiktok", "youtube", "kick")},
     }
     merged["autoStart"] = bool(merged.get("autoStart", False))
@@ -4269,7 +4269,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json(normalize_desktop_chat_layout(stored))
             return
         if path == "/api/desktop-chat/layout":
-            default = {"viewerBar": {"x": 16, "y": 16, "w": 720, "h": 64}, "chatPanel": {"x": 16, "y": 92, "w": 720, "h": 420}, "alertPanel": {"x": 16, "y": 524, "w": 720, "h": 188}, "style": {"background": "#0d101d", "opacity": 82, "radius": 16, "fontFamily": "Segoe UI", "fontSize": 16, "textColor": "#ffffff"}, "alerts": {"enabled": True, "maxItems": 5, "showTimestamp": True, "platforms": {"twitch": True, "tiktok": True, "youtube": True, "kick": True}}, "window": {"x": 80, "y": 80, "w": 780, "h": 820}, "autoStart": False}
+            default = {"viewerBar": {"x": 16, "y": 16, "w": 720, "h": 64}, "chatPanel": {"x": 16, "y": 92, "w": 720, "h": 420}, "alertPanel": {"x": 16, "y": 524, "w": 720, "h": 188}, "style": {"background": "#0d101d", "opacity": 82, "radius": 16, "fontFamily": "Segoe UI", "fontSize": 16, "textColor": "#ffffff"}, "alerts": {"enabled": True, "maxItems": 5, "showTimestamp": False, "platforms": {"twitch": True, "tiktok": True, "youtube": True, "kick": True}}, "window": {"x": 80, "y": 80, "w": 780, "h": 820}, "autoStart": False}
             stored = _json_load(st.data / "plugins" / "chat_desktop" / "layout.json", {})
             merged = {
                 key: ({**value, **(stored.get(key, {}) if isinstance(stored.get(key), dict) else {})} if isinstance(value, dict) else stored.get(key, value))
@@ -4536,6 +4536,20 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"ok": False, "error": "Unbekanntes Ziel."}, 400)
             except Exception as exc:
                 st.log("automation", "test failed", exc)
+                return self._json({"ok": False, "error": str(exc)}, 500)
+
+        m_plugin_restart = re.match(r"^/api/plugins/([^/]+)/restart$", path)
+        if m_plugin_restart:
+            plugin_id = urllib.parse.unquote(m_plugin_restart.group(1)).strip()
+            if not plugin_id:
+                return self._json({"ok": False, "error": "plugin_id fehlt"}, 400)
+            try:
+                if not st.module_folder(plugin_id).exists():
+                    return self._json({"ok": False, "error": "Plugin nicht gefunden"}, 404)
+                st.plugin_manager.restart_plugin_async(plugin_id, "Manueller Restart; Neustart laeuft")
+                return self._json({"ok": True, "plugin_id": plugin_id, "restart": "queued"})
+            except Exception as exc:
+                st.log(plugin_id or "plugins", "manual restart failed", exc)
                 return self._json({"ok": False, "error": str(exc)}, 500)
 
         m_plugin_action = re.match(r"^/api/plugins/([^/]+)/action$", path)
@@ -4823,7 +4837,7 @@ class Handler(BaseHTTPRequestHandler):
                 clean["alerts"] = {
                     "enabled": bool(raw_alerts.get("enabled", True)),
                     "maxItems": max(1, min(20, int(raw_alerts.get("maxItems", 5)))),
-                    "showTimestamp": bool(raw_alerts.get("showTimestamp", True)),
+                    "showTimestamp": False,
                     "platforms": {name: bool(raw_platforms.get(name, True)) for name in ("twitch", "tiktok", "youtube", "kick")},
                 }
                 clean = normalize_desktop_chat_layout(clean)

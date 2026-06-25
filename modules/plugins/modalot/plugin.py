@@ -327,6 +327,8 @@ class ModalotPlugin(ProviderPlugin):
                 username_for_action = author_channel_id
             else:
                 username_for_action = username
+        elif platform == "kick":
+            username_for_action = self._message_user_id(msg) or username
         else:
             username_for_action = username
         key = f"{platform}|{clean_user}|{word}|{msg_id or text[:80].lower()}"
@@ -705,6 +707,9 @@ class ModalotPlugin(ProviderPlugin):
     def _message_author_channel_id(self, msg: Any) -> str:
         return _clean_text(self._message_value(msg, "author_channel_id", self._message_value(msg, "authorChannelId", self._message_value(msg, "channel_id", ""))))
 
+    def _message_user_id(self, msg: Any) -> str:
+        return _clean_text(self._message_value(msg, "user_id", self._message_value(msg, "userId", self._message_value(msg, "sender_user_id", ""))))
+
     def _http_json(self, url: str, *, method: str = "GET", data: dict[str, Any] | None = None, headers: dict[str, str] | None = None, timeout: float = 15.0) -> tuple[int, Any, str]:
         body = None
         if data is not None:
@@ -876,6 +881,76 @@ class ModalotPlugin(ProviderPlugin):
                 return value
         return ""
 
+    def _kick_target_user_id(self, settings: dict[str, Any], username: str) -> str:
+        user = _clean_login(username)
+        if not user:
+            return ""
+        if user.isdigit():
+            return user
+        cached = self._kick_user_cache.get(user)
+        if cached and time.time() - cached[1] < 3600:
+            return cached[0]
+
+        urls = [
+            f"https://kick.com/api/v2/channels/{urllib.parse.quote(user)}",
+            f"https://kick.com/{urllib.parse.quote(user)}",
+        ]
+        for url in urls:
+            try:
+                req = urllib.request.Request(
+                    url,
+                    headers={
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/133.0.0.0 Safari/537.36",
+                        "Accept": "application/json,text/html,*/*",
+                        "Referer": "https://kick.com/",
+                    },
+                )
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    raw = resp.read().decode("utf-8", errors="replace")
+                uid = self._kick_extract_user_id(raw)
+                if uid:
+                    self._kick_user_cache[user] = (uid, time.time())
+                    return uid
+            except Exception:
+                continue
+        return ""
+
+    def _kick_extract_user_id(self, raw: str) -> str:
+        try:
+            parsed = json.loads(raw)
+        except Exception:
+            parsed = None
+        if parsed is not None:
+            found = self._kick_find_user_id_in_json(parsed)
+            if found:
+                return found
+        for pattern in (
+            r'"broadcaster_user_id"\s*:\s*"?(?P<id>\d+)"?',
+            r'"user_id"\s*:\s*"?(?P<id>\d+)"?',
+            r'"userId"\s*:\s*"?(?P<id>\d+)"?',
+        ):
+            match = re.search(pattern, raw, re.IGNORECASE)
+            if match:
+                return match.group("id")
+        return ""
+
+    def _kick_find_user_id_in_json(self, value: Any) -> str:
+        if isinstance(value, dict):
+            for key in ("broadcaster_user_id", "user_id", "userId"):
+                raw = value.get(key)
+                if str(raw or "").strip().isdigit():
+                    return str(raw).strip()
+            for child in value.values():
+                found = self._kick_find_user_id_in_json(child)
+                if found:
+                    return found
+        elif isinstance(value, list):
+            for child in value:
+                found = self._kick_find_user_id_in_json(child)
+                if found:
+                    return found
+        return ""
+
     def _kick_headers(self, settings: dict[str, Any]) -> dict[str, str]:
         return {"Authorization": f"Bearer {self._kick_token(settings)}", "Accept": "application/json", "Content-Type": "application/json"}
 
@@ -903,20 +978,29 @@ class ModalotPlugin(ProviderPlugin):
         if not user:
             return False, "Kick User fehlt"
 
+        target_user_id = self._kick_target_user_id(kick, user)
         base_payloads: list[dict[str, Any]] = []
         bid_value: Any = int(broadcaster_id) if str(broadcaster_id).isdigit() else broadcaster_id
+        if target_user_id:
+            uid_value: Any = int(target_user_id) if str(target_user_id).isdigit() else target_user_id
+            base_payloads.append({"broadcaster_user_id": bid_value, "user_id": uid_value, "reason": reason[:500]})
+            base_payloads.append({"broadcaster_user_id": bid_value, "banned_user_id": uid_value, "reason": reason[:500]})
         for user_key in ("user_login", "username", "user_name"):
             payload: dict[str, Any] = {"broadcaster_user_id": bid_value, user_key: user, "reason": reason[:500]}
             if duration is not None and duration > 0:
                 payload["duration"] = int(duration)
             base_payloads.append(payload)
+        if duration is not None and duration > 0:
+            for payload in base_payloads:
+                payload.setdefault("duration", int(duration))
         last_detail = ""
         method = "DELETE" if delete else "POST"
         for payload in base_payloads:
-            status, _data, raw = self._http_json(KICK_MOD_BANS_URL, method=method, headers=self._kick_headers(kick), data=payload)
-            if status and status < 400:
-                return True, f"Kick Moderation API {method} ok"
-            last_detail = f"HTTP {status} {raw[:240]}"
+            for body in (payload, {"data": payload}):
+                status, _data, raw = self._http_json(KICK_MOD_BANS_URL, method=method, headers=self._kick_headers(kick), data=body)
+                if status and status < 400:
+                    return True, f"Kick Moderation API {method} ok"
+                last_detail = f"HTTP {status} {raw[:240]}"
         # Practical fallback: many Kick moderation setups still accept slash commands from a mod/bot account.
         if self._host is not None and not delete:
             cmd = f"/timeout {user} {int(duration)} {reason}" if duration and duration > 0 else f"/ban {user} {reason}"

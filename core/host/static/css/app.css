@@ -618,6 +618,10 @@ button.secondary{
 .pluginState.ok{background:rgba(46,233,135,.12);border-color:rgba(46,233,135,.35);color:var(--green)}
 .pluginState.bad{background:rgba(255,85,119,.12);border-color:rgba(255,85,119,.35);color:var(--red)}
 .pluginStatusText{margin-top:auto;overflow-wrap:anywhere}
+.pluginToggleBtn.enable{background:var(--green);color:#07140d}
+.pluginToggleBtn.disable{background:var(--red);color:#fff}
+.pluginToggleBtn.enable:hover{filter:brightness(1.06)}
+.pluginToggleBtn.disable:hover{filter:brightness(1.06)}
 .pluginSettingsCard{margin-bottom:18px;border-color:rgba(134,92,255,.45)}
 .pluginSettingsHead{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;margin-bottom:14px}
 .pluginSettingsGroup{border:1px solid rgba(255,255,255,.08);border-radius:14px;background:rgba(255,255,255,.03);padding:14px;margin:12px 0}

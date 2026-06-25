@@ -3569,7 +3569,7 @@ class TikTokChatPlugin(ThreadedPlugin):
                                     break
                                 return self._offline_status_text(resolved_unique_id, exc), False
 
-                            if self._is_transient_tiktoklive_error(exc):
+                            if self._is_transient_tiktok_chat_error(exc):
                                 self._emit_is_live(host, resolved_unique_id, False, force=True)
                                 final_status_text = self._transient_status_text(resolved_unique_id, exc)
                                 if hasattr(host, 'log'):

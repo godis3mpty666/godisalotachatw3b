@@ -23,6 +23,7 @@ VALIDATE_URL = 'https://id.twitch.tv/oauth2/validate'
 HELIX_USERS_URL = 'https://api.twitch.tv/helix/users'
 HELIX_STREAMS_URL = 'https://api.twitch.tv/helix/streams'
 HELIX_FOLLOWERS_URL = 'https://api.twitch.tv/helix/channels/followers'
+HELIX_CHATTERS_URL = 'https://api.twitch.tv/helix/chat/chatters'
 HELIX_CHANNEL_EMOTES_URL = 'https://api.twitch.tv/helix/chat/emotes?broadcaster_id={channel_id}'
 HELIX_GLOBAL_EMOTES_URL = 'https://api.twitch.tv/helix/chat/emotes/global'
 BTTV_GLOBAL_URL = 'https://api.betterttv.net/3/cached/emotes/global'
@@ -97,6 +98,10 @@ class TwitchChatPlugin(ThreadedPlugin):
         self._processed_usernotice_ids: set[str] = set()
         self._processed_join_names: set[str] = set()
         self._processed_join_seen_at: dict[str, float] = {}
+        self._active_chatters: set[str] = set()
+        self._chatters_initialized = False
+        self._last_chatters_poll = 0.0
+        self._last_chatters_error_log = 0.0
         self._run_started_at: float = time.time()
         self._host: PluginHost | None = None
         self._send_lock = threading.RLock()
@@ -126,6 +131,14 @@ class TwitchChatPlugin(ThreadedPlugin):
                 'type': 'checkbox',
                 'help': 'Zeigt Join-Alerts/Namensmeldungen, wenn Twitch IRC einen User im Chat meldet.'
             },
+            {
+                'key': 'viewer_join_poll_seconds',
+                'label': 'Join-Fallback Poll Sekunden',
+                'type': 'number',
+                'min': 3,
+                'max': 60,
+                'help': 'Fragt Twitch Chatters als Fallback ab. Beim Start wird nur eine Baseline gemerkt; danach werden neue Chat-Betreter gemeldet.'
+            },
         ]
     def default_settings(self):
         return {
@@ -134,6 +147,7 @@ class TwitchChatPlugin(ThreadedPlugin):
             'autoconnect': False,
             'viewer_count_enabled': True,
             'viewer_join_alerts': True,
+            'viewer_join_poll_seconds': 5,
         }
     def on_settings_button(self, key: str, host: PluginHost | None = None, parent: Any = None) -> bool:
         if key == 'test_twitch_sr_export':
@@ -266,7 +280,7 @@ class TwitchChatPlugin(ThreadedPlugin):
 
         # Plugin-local behavior only. This mirrors kick_chat's non-empty merge,
         # but avoids pulling old local OAuth/client fields back into runtime data.
-        for key in ('metrics_poll_seconds', 'viewer_count_enabled', 'viewer_join_alerts'):
+        for key in ('metrics_poll_seconds', 'viewer_count_enabled', 'viewer_join_alerts', 'viewer_join_poll_seconds'):
             value = local.get(key)
             if value not in (None, ''):
                 merged[key] = value
@@ -672,18 +686,14 @@ class TwitchChatPlugin(ThreadedPlugin):
         except Exception:
             return ''
 
-    def _handle_join_event(self, host: PluginHost, settings: dict, channel: str, login_username: str, line: str) -> None:
-        if not self._settings_bool(settings.get('viewer_join_alerts'), True):
-            return
-        joined_name = self._parse_join_name(line, channel)
-        if not joined_name:
-            return
-
-        joined_key = joined_name.strip().lower()
+    def _emit_viewer_join_once(self, host: PluginHost, channel: str, joined_name: str) -> None:
+        joined_name = (joined_name or '').strip()
+        joined_key = joined_name.lower()
         if not joined_key:
             return
+        self._active_chatters.add(joined_key)
 
-        if joined_key in _TWITCH_JOIN_BOT_LOGINS:
+        if joined_key in _TWITCH_JOIN_BOT_LOGINS or self._is_own_twitch_account(joined_key, channel):
             self._processed_join_names.add(joined_key)
             self._processed_join_seen_at[joined_key] = time.monotonic()
             return
@@ -702,6 +712,49 @@ class TwitchChatPlugin(ThreadedPlugin):
             self._processed_join_seen_at = {k: self._processed_join_seen_at.get(k, now) for k in keep}
 
         self._emit_alert(host, channel, joined_name, 'ist dem Stream beigetreten', 'twitch_join')
+
+    def _is_own_twitch_account(self, username: str, channel: str = '') -> bool:
+        key = self._clean_username(username)
+        if not key:
+            return False
+        settings = self._host_platform_settings(self._host)
+        own = {
+            self._clean_username(value)
+            for value in (
+                channel,
+                self._current_channel,
+                self._resolved_display_name,
+                settings.get('channel'),
+                settings.get('main'),
+                settings.get('main_account'),
+                settings.get('main_username'),
+                settings.get('main_oauth_login'),
+                settings.get('username'),
+                settings.get('bot'),
+                settings.get('bot_account'),
+                settings.get('bot_username'),
+                settings.get('oauth_login'),
+            )
+            if self._clean_username(value)
+        }
+        return key in own
+
+    def _mark_viewer_seen_without_alert(self, username: str) -> None:
+        key = self._clean_username(username)
+        if not key:
+            return
+        now = time.monotonic()
+        self._active_chatters.add(key)
+        self._processed_join_names.add(key)
+        self._processed_join_seen_at[key] = now
+
+    def _handle_join_event(self, host: PluginHost, settings: dict, channel: str, login_username: str, line: str) -> None:
+        if not self._settings_bool(settings.get('viewer_join_alerts'), True):
+            return
+        joined_name = self._parse_join_name(line, channel)
+        if not joined_name:
+            return
+        self._emit_viewer_join_once(host, channel, joined_name)
 
     def _handle_test_alert_command(self, host: PluginHost, channel: str, sender: str, message_text: str) -> bool:
         raw = self._normalize_chat_text(message_text)
@@ -783,6 +836,88 @@ class TwitchChatPlugin(ThreadedPlugin):
         self._known_follower_ids.update(ids)
         if len(self._known_follower_ids) > 250:
             self._known_follower_ids = set(list(self._known_follower_ids)[-200:])
+
+    def _moderator_id_for_chatters(self, settings: dict, cache: dict, channel: str) -> str:
+        for key in ('user_id', 'bot_user_id', 'oauth_user_id', 'main_oauth_user_id'):
+            value = str(cache.get(key) or settings.get(key) or '').strip()
+            if value:
+                return value
+        login = self._clean_username(
+            cache.get('username')
+            or settings.get('username')
+            or settings.get('bot_username')
+            or settings.get('main_oauth_login')
+            or settings.get('main_username')
+            or channel
+        )
+        if not login:
+            return ''
+        headers = self._helix_headers(settings, cache)
+        data = self._helix_get(f'{HELIX_USERS_URL}?login={urllib.parse.quote(login)}', headers)
+        rows = data.get('data') if isinstance(data, dict) else None
+        if isinstance(rows, list) and rows:
+            user_id = str((rows[0] if isinstance(rows[0], dict) else {}).get('id') or '').strip()
+            if user_id:
+                cache['user_id'] = user_id
+                return user_id
+        return ''
+
+    def _fetch_chatters(self, settings: dict, cache: dict, channel: str) -> dict[str, str]:
+        headers = self._helix_headers(settings, cache)
+        broadcaster_id = self._resolved_broadcaster_id
+        if not broadcaster_id:
+            broadcaster_id, _ = self._resolve_broadcaster(settings, cache, channel)
+        moderator_id = self._moderator_id_for_chatters(settings, cache, channel)
+        if not moderator_id:
+            raise RuntimeError('Moderator-ID fuer Twitch Chatters fehlt.')
+        qs = urllib.parse.urlencode({
+            'broadcaster_id': broadcaster_id,
+            'moderator_id': moderator_id,
+            'first': 1000,
+        })
+        data = self._helix_get(f'{HELIX_CHATTERS_URL}?{qs}', headers)
+        rows = data.get('data') if isinstance(data, dict) else None
+        out: dict[str, str] = {}
+        if isinstance(rows, list):
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                login = self._clean_username(row.get('user_login') or row.get('user_name') or '')
+                name = str(row.get('user_name') or row.get('user_login') or '').strip()
+                if login and name:
+                    out[login] = name
+        return out
+
+    def _maybe_poll_join_fallback(self, host: PluginHost, settings: dict, cache: dict, channel: str, *, force: bool = False) -> None:
+        if not self._settings_bool(settings.get('viewer_join_alerts'), True):
+            return
+        try:
+            poll_seconds = max(3.0, min(60.0, float(settings.get('viewer_join_poll_seconds') or 5)))
+        except Exception:
+            poll_seconds = 5.0
+        now = time.monotonic()
+        if not force and (now - self._last_chatters_poll) < poll_seconds:
+            return
+        self._last_chatters_poll = now
+        chatters = self._fetch_chatters(settings, cache, channel)
+        current = set(chatters.keys())
+        if not self._chatters_initialized:
+            self._active_chatters = set(current)
+            for key in current:
+                self._processed_join_names.add(key)
+                self._processed_join_seen_at[key] = now
+            self._chatters_initialized = True
+            return
+        for key in sorted(current - self._active_chatters):
+            self._emit_viewer_join_once(host, channel, chatters.get(key) or key)
+        self._active_chatters = current
+
+    def _log_join_fallback_warning(self, host: PluginHost, exc: Exception) -> None:
+        now = time.monotonic()
+        if (now - self._last_chatters_error_log) < 60.0:
+            return
+        self._last_chatters_error_log = now
+        host.log(self.plugin_id, f'Join fallback poll warning: {exc}')
 
     def _handle_usernotice(self, host: PluginHost, tags: dict[str, str], channel: str) -> None:
         msg_id = self._unescape_tag(tags.get('msg-id', '')).strip().lower()
@@ -1414,6 +1549,10 @@ class TwitchChatPlugin(ThreadedPlugin):
         self._last_valid_live_viewers = None
         self._known_follower_ids = set()
         self._followers_initialized = False
+        self._active_chatters = set()
+        self._chatters_initialized = False
+        self._last_chatters_poll = 0.0
+        self._last_chatters_error_log = 0.0
         self._run_started_at = time.time()
         self._processed_usernotice_ids = set()
         self._processed_join_names = set()
@@ -1455,9 +1594,17 @@ class TwitchChatPlugin(ThreadedPlugin):
                 host.set_status(self.plugin_id, PluginStatus('connected', f'Reading #{channel} as {username}'))
                 self._current_channel = channel
                 self._maybe_poll_metrics(host, settings, cache, channel, force=True)
+                try:
+                    self._maybe_poll_join_fallback(host, settings, cache, channel, force=True)
+                except Exception as exc:
+                    self._log_join_fallback_warning(host, exc)
                 while not self._stop.is_set():
                     try:
                         self._maybe_poll_metrics(host, settings, cache, channel)
+                        try:
+                            self._maybe_poll_join_fallback(host, settings, cache, channel)
+                        except Exception as exc:
+                            self._log_join_fallback_warning(host, exc)
                         data = self._sock.recv(4096)
                         if not data:
                             empty_reads += 1
@@ -1498,6 +1645,7 @@ class TwitchChatPlugin(ThreadedPlugin):
                                     prefix, rest = line_no_tags[1:].split(' ', 1)
                                     sender = prefix.split('!', 1)[0]
                                     display_name = self._unescape_tag(tags.get('display-name') or sender) or sender
+                                    self._mark_viewer_seen_without_alert(sender)
                                     message_text = rest.split(' :', 1)[1] if ' :' in rest else ''
                                     message_text = self._normalize_chat_text(message_text)
                                     bits = self._to_int(tags.get('bits'))
