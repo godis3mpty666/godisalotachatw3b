@@ -38,12 +38,13 @@ except Exception:  # pragma: no cover
 class KickChatPlugin(ThreadedPlugin):
     plugin_id = 'kick_chat'
     display_name = 'Kick Chat'
-    version = '2.1.4'
-    description = 'Kick chat reader/writer. OAuth and tokens are provided only by godisalotachat.'
+    version = '2.1.8'
+    description = 'Kick chat reader/writer plus Kick webhook alert receiver. OAuth and tokens are provided only by godisalotachat.'
 
     DEFAULT_WS_URL = 'wss://ws-us2.pusher.com/app/32cbd69e4b950bf97679?protocol=7&client=js&version=8.4.0&flash=false'
     KICK_API_BASE = 'https://api.kick.com/public/v1'
     KICK_CHAT_URL = 'https://api.kick.com/public/v1/chat'
+    KICK_EVENTS_URL = 'https://api.kick.com/public/v1/events/subscriptions'
     KICK_EMOTE_TOKEN_RE = re.compile(r'\[emote:(?P<id>\d+):(?P<name>[^\]]+)\]')
 
     def __init__(self):
@@ -61,12 +62,16 @@ class KickChatPlugin(ThreadedPlugin):
         self._connected = False
         self._write_ready = False
         self._active_account = ''
+        self._processed_alert_ids: dict[str, float] = {}
+        self._seen_unhandled_events: dict[str, float] = {}
 
     # Wichtig: Keine OAuth-/Token-/Client-Felder mehr im Plugin-Dialog.
     # Das Maintool verwaltet Kick Main/Bot OAuth zentral und spiegelt nur die nötigen Werte.
     def settings_schema(self):
         return [
             {'key': 'channel', 'label': 'Kick Channel', 'placeholder': 'dein-channelname'},
+            {'key': 'event_subscriptions_enabled', 'label': 'Kick Webhook-Events abonnieren', 'type': 'bool'},
+            {'key': 'webhook_public_url', 'label': 'Öffentliche Kick Webhook URL', 'placeholder': 'https://dein-tunnel.example/api/webhooks/kick'},
             {'key': 'diag_log', 'label': 'Diagnosis Log', 'type': 'multiline', 'placeholder': ''},
             {'key': 'diag_path', 'label': 'Diagnosis file path', 'placeholder': ''},
         ]
@@ -74,6 +79,8 @@ class KickChatPlugin(ThreadedPlugin):
     def default_settings(self):
         return {
             'channel': '',
+            'event_subscriptions_enabled': True,
+            'webhook_public_url': '',
             'diag_log': self._read_diag() or 'No diagnosis yet. Press Test or Connect once.',
             'diag_path': str(self._diag_path()),
             'autoconnect': False,
@@ -146,7 +153,7 @@ class KickChatPlugin(ThreadedPlugin):
         # channel/token values must not redirect Kick away from the main channel.
         merged: dict[str, Any] = dict(self._host_platform_settings(host))
         if isinstance(settings, dict):
-            local_keys = {'diag_log', 'diag_path', 'autoconnect'}
+            local_keys = {'diag_log', 'diag_path', 'autoconnect', 'event_subscriptions_enabled', 'webhook_public_url', 'webhook_secret'}
             for key in local_keys:
                 value = settings.get(key)
                 if value not in (None, ''):
@@ -191,6 +198,17 @@ class KickChatPlugin(ThreadedPlugin):
         if token.lower().startswith('bearer '):
             token = token[7:]
         return token.strip()
+
+    def _setting_enabled(self, settings: dict[str, Any], key: str, default: bool = True) -> bool:
+        raw = settings.get(key, default) if isinstance(settings, dict) else default
+        if isinstance(raw, bool):
+            return raw
+        text = str(raw).strip().lower()
+        if text in {'0', 'false', 'no', 'off', 'nein', 'aus'}:
+            return False
+        if text in {'1', 'true', 'yes', 'on', 'ja', 'an'}:
+            return True
+        return bool(default)
 
     def _token_for_send(self, settings: dict[str, Any]) -> tuple[str, str]:
         bot_token = self._clean_token(settings.get('access_token'))
@@ -1058,6 +1076,381 @@ class KickChatPlugin(ThreadedPlugin):
             'follower_count': count,
         })
 
+    def _payload_preview(self, value: Any, limit: int = 1200) -> str:
+        try:
+            text = json.dumps(value, ensure_ascii=False, default=str)
+        except Exception:
+            text = str(value)
+        text = re.sub(r'\s+', ' ', text).strip()
+        return text[:max(80, int(limit))]
+
+    def _payload_keys(self, value: Any) -> list[str]:
+        if not isinstance(value, dict):
+            return []
+        keys: list[str] = []
+        for key, val in value.items():
+            keys.append(str(key))
+            if isinstance(val, dict):
+                for sub in list(val.keys())[:12]:
+                    keys.append(f'{key}.{sub}')
+        return keys[:80]
+
+    def _find_first_text_recursive(self, value: Any, keys: tuple[str, ...], depth: int = 0) -> str:
+        if depth > 4:
+            return ''
+        if isinstance(value, dict):
+            for key in keys:
+                raw = value.get(key)
+                if isinstance(raw, str):
+                    text = self._normalize_chat_text(raw)
+                    if text:
+                        return text
+                if raw not in (None, '') and not isinstance(raw, (dict, list, tuple)):
+                    text = self._normalize_chat_text(raw)
+                    if text:
+                        return text
+            preferred = ('user', 'sender', 'chat_sender', 'follower', 'subscriber', 'gifter', 'gift_sender', 'host', 'raider', 'data', 'event', 'message')
+            for key in preferred:
+                if key in value:
+                    found = self._find_first_text_recursive(value.get(key), keys, depth + 1)
+                    if found:
+                        return found
+            for raw in value.values():
+                found = self._find_first_text_recursive(raw, keys, depth + 1)
+                if found:
+                    return found
+        elif isinstance(value, (list, tuple)):
+            for raw in value[:12]:
+                found = self._find_first_text_recursive(raw, keys, depth + 1)
+                if found:
+                    return found
+        return ''
+
+    def _log_unhandled_event(self, event: str, payload: dict[str, Any], raw: str = '') -> None:
+        ev = str(event or 'unknown')
+        if ev.startswith('pusher:') or ev.startswith('pusher_internal:'):
+            return
+        keys = self._payload_keys(payload)
+        sig = ev + '|' + ','.join(keys[:18])
+        now = time.time()
+        try:
+            for key, ts in list(self._seen_unhandled_events.items()):
+                if now - float(ts or 0.0) > 180.0:
+                    self._seen_unhandled_events.pop(key, None)
+        except Exception:
+            pass
+        last = float(self._seen_unhandled_events.get(sig) or 0.0)
+        if last and now - last < 12.0:
+            return
+        self._seen_unhandled_events[sig] = now
+        preview = self._payload_preview(payload if payload else raw, 1400)
+        self._append_diag(f'UNHANDLED EVENT event={ev} keys={keys} payload={preview}')
+        try:
+            if self._host is not None:
+                self._host.log(self.plugin_id, f'unhandled kick event event={ev} keys={keys[:30]} payload={preview[:900]}')
+        except Exception:
+            pass
+
+    def _alert_user_from_payload(self, payload: dict[str, Any]) -> str:
+        if not isinstance(payload, dict):
+            return 'Kick'
+        keys = (
+            'username', 'user_name', 'display_name', 'displayName', 'name', 'slug',
+            'sender_username', 'senderUserName', 'follower_username', 'followerUserName',
+            'subscriber_username', 'gifter_username', 'gift_sender_username', 'raider_username',
+        )
+        found = self._find_first_text_recursive(payload, keys)
+        return found or 'Kick'
+
+    def _alert_text_from_payload(self, payload: dict[str, Any], fallback: str) -> str:
+        if not isinstance(payload, dict):
+            return fallback
+        text = self._find_first_text_recursive(payload, ('message', 'text', 'content', 'description', 'title', 'body'))
+        if text:
+            return text
+        amount = self._parse_int(payload.get('amount') or payload.get('count') or payload.get('quantity') or payload.get('months'))
+        if amount:
+            return f'{fallback} ({amount})'
+        return fallback
+
+    def _emit_alert(self, host: PluginHost, channel: str, username: str, text: str, event_type: str, raw: dict[str, Any] | None = None) -> None:
+        clean_type = self._normalize_chat_text(event_type) or 'kick_alert'
+        clean_name = self._normalize_chat_text(username) or 'Kick'
+        clean_text = self._normalize_chat_text(text)
+        if not clean_text:
+            return
+        raw = raw if isinstance(raw, dict) else {}
+        now = time.time()
+        try:
+            for key, ts in list(self._processed_alert_ids.items()):
+                if now - float(ts or 0.0) > 20.0:
+                    self._processed_alert_ids.pop(key, None)
+        except Exception:
+            pass
+        raw_id = str(raw.get('id') or raw.get('message_id') or raw.get('uuid') or raw.get('event_id') or '').strip()
+        dedupe = f'id:{raw_id}' if raw_id else f'sig:{clean_type}:{self._clean_login(clean_name)}:{clean_text.lower()}'
+        if dedupe in self._processed_alert_ids and now - float(self._processed_alert_ids.get(dedupe) or 0.0) <= 8.0:
+            return
+        self._processed_alert_ids[dedupe] = now
+        self._append_diag(f'ALERT {clean_type} {clean_name}: {clean_text[:220]}')
+        host.emit_message(self.plugin_id, {
+            'platform': 'kick',
+            'username': clean_name,
+            'display_name': clean_name,
+            'text': clean_text,
+            'message': clean_text,
+            'content': clean_text,
+            'channel': channel,
+            'message_type': clean_type,
+            'type': clean_type,
+            'event_type': clean_type,
+            'alert_type': clean_type,
+            'source_plugin_id': self.plugin_id,
+            'source': self.plugin_id,
+            'is_alert': True,
+            'alert': True,
+            'show_in_desktop': True,
+            'show_in_obs': True,
+            'raw': raw,
+        })
+
+    def _handle_alert_event(self, event: str, payload: dict[str, Any], host: PluginHost, channel: str) -> bool:
+        ev = str(event or '')
+        low = ev.lower().replace('\\', '.').replace('::', '.').replace('-', '_')
+        if 'chatmessage' in low or 'messageevent' in low or low.startswith('pusher'):
+            return False
+        user = self._alert_user_from_payload(payload)
+
+        follow_terms = (
+            'follow', 'follower', 'channel_followed', 'channelfollowed',
+            'userfollowed', 'user_followed', 'newfollower', 'new_follower',
+        )
+        gift_terms = (
+            'gift', 'gifted', 'subgift', 'sub_gift', 'giftedsubscription',
+            'gifted_subscription', 'giftedsubscriptions', 'gifted_subscriptions',
+        )
+        sub_terms = (
+            'subscription', 'subscribe', 'subscriber', 'subscribed', 'subscribedevent',
+            'channel_subscription', 'channelsubscription', 'membership', 'member',
+        )
+        raid_terms = ('raid', 'raided', 'host', 'hosted')
+        join_terms = (
+            'join', 'joined', 'userjoined', 'user_joined', 'chatroomuserjoined',
+            'chatroom_user_joined', 'viewerjoined', 'viewer_joined', 'presencejoined',
+            'presence_joined', 'memberadded', 'member_added',
+        )
+
+        if any(term in low for term in follow_terms):
+            self._emit_alert(host, channel, user, self._alert_text_from_payload(payload, 'folgt jetzt dem Kanal'), 'kick_follow', payload)
+            return True
+        if any(term in low for term in gift_terms):
+            self._emit_alert(host, channel, user, self._alert_text_from_payload(payload, 'verschenkt ein Abo'), 'kick_gift', payload)
+            return True
+        if any(term in low for term in sub_terms):
+            self._emit_alert(host, channel, user, self._alert_text_from_payload(payload, 'abonniert den Kanal'), 'kick_sub', payload)
+            return True
+        if any(term in low for term in raid_terms):
+            self._emit_alert(host, channel, user, self._alert_text_from_payload(payload, 'raided/hostet den Stream'), 'kick_raid', payload)
+            return True
+        if any(term in low for term in join_terms):
+            self._emit_alert(host, channel, user, self._alert_text_from_payload(payload, 'ist dem Stream beigetreten'), 'kick_join', payload)
+            return True
+        return False
+
+    def _webhook_event_name(self, payload: dict[str, Any], headers: dict[str, str] | None = None) -> str:
+        headers = headers if isinstance(headers, dict) else {}
+        candidates = [
+            headers.get('Kick-Event-Type'),
+            headers.get('kick-event-type'),
+            headers.get('X-Kick-Event-Type'),
+            headers.get('x-kick-event-type'),
+            payload.get('event_type') if isinstance(payload, dict) else '',
+            payload.get('type') if isinstance(payload, dict) else '',
+            payload.get('event') if isinstance(payload, dict) else '',
+        ]
+        for value in candidates:
+            text = str(value or '').strip()
+            if text:
+                return text
+        sub = payload.get('subscription') if isinstance(payload.get('subscription'), dict) else {}
+        text = str(sub.get('event') or sub.get('type') or '').strip()
+        return text
+
+    def _webhook_payload_body(self, payload: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(payload, dict):
+            return {}
+        for key in ('event', 'data', 'payload'):
+            value = payload.get(key)
+            if isinstance(value, dict):
+                return value
+        return payload
+
+    def _webhook_events(self) -> list[str]:
+        return [
+            'channel.followed',
+            'channel.subscription.new',
+            'channel.subscription.renewal',
+            'channel.subscription.gifts',
+            'kicks.gifted',
+            'livestream.status.updated',
+        ]
+
+    def _event_url_from_settings(self, settings: dict[str, Any]) -> str:
+        return str(
+            settings.get('webhook_public_url')
+            or settings.get('kick_webhook_url')
+            or settings.get('events_webhook_url')
+            or ''
+        ).strip()
+
+    def _existing_event_subscriptions(self, headers: dict[str, str]) -> set[tuple[str, str]]:
+        existing: set[tuple[str, str]] = set()
+        try:
+            resp = requests.get(self.KICK_EVENTS_URL, headers=headers, timeout=12)
+            if resp.status_code >= 400:
+                self._append_diag(f'Kick webhook subscription list failed HTTP {resp.status_code} {resp.text[:400]}')
+                return existing
+            data = resp.json()
+            rows = data.get('data') if isinstance(data, dict) else data
+            if not isinstance(rows, list):
+                rows = data.get('subscriptions') if isinstance(data, dict) else []
+            for row in rows or []:
+                if not isinstance(row, dict):
+                    continue
+                event_name = str(row.get('event') or row.get('type') or '').strip()
+                transport = row.get('transport') if isinstance(row.get('transport'), dict) else {}
+                url = str(transport.get('url') or transport.get('callback') or '').strip()
+                if event_name and url:
+                    existing.add((event_name.lower(), url))
+        except Exception as exc:
+            self._append_diag(f'Kick webhook subscription list failed: {exc}')
+        return existing
+
+    def _subscribe_kick_events(self, settings: dict[str, Any], channel: str) -> None:
+        if not self._setting_enabled(settings, 'event_subscriptions_enabled', True):
+            self._append_diag('Kick webhook event subscriptions disabled')
+            return
+        url = self._event_url_from_settings(settings)
+        if not (url.startswith('https://') or url.startswith('http://')):
+            self._append_diag('Kick webhook subscriptions skipped: webhook_public_url fehlt')
+            return
+        headers = self._api_headers(settings, prefer_main=True)
+        if not headers:
+            self._append_diag('Kick webhook subscriptions skipped: main access token fehlt')
+            return
+        headers = dict(headers)
+        headers['Content-Type'] = 'application/json'
+        existing = self._existing_event_subscriptions(headers)
+        for event_name in self._webhook_events():
+            if (event_name.lower(), url) in existing:
+                self._append_diag(f'Kick webhook already subscribed event={event_name} url={url}')
+                continue
+            body = {
+                'event': event_name,
+                'condition': '',
+                'transport': {'type': 'webhook', 'url': url},
+            }
+            try:
+                resp = requests.post(self.KICK_EVENTS_URL, headers=headers, json=body, timeout=15)
+                if resp.status_code < 400:
+                    self._append_diag(f'Kick webhook subscribed event={event_name} url={url}')
+                else:
+                    self._append_diag(f'Kick webhook subscribe failed event={event_name} HTTP {resp.status_code} {resp.text[:500]}')
+            except Exception as exc:
+                self._append_diag(f'Kick webhook subscribe failed event={event_name}: {exc}')
+
+    def _event_type_from_kick_webhook(self, event_name: str) -> str:
+        low = str(event_name or '').strip().lower()
+        mapping = {
+            'channel.followed': 'kick_follow',
+            'channel.subscription.new': 'kick_sub',
+            'channel.subscription.renewal': 'kick_sub',
+            'channel.subscription.gifts': 'kick_gift',
+            'kicks.gifted': 'kick_gift',
+            'livestream.status.updated': 'kick_live_status',
+        }
+        return mapping.get(low, '')
+
+    def _amount_from_payload(self, payload: dict[str, Any]) -> int | None:
+        if not isinstance(payload, dict):
+            return None
+        for key in ('amount', 'count', 'quantity', 'months', 'duration', 'gift_count', 'gifted_subscriptions_count'):
+            value = self._parse_int(payload.get(key))
+            if value is not None:
+                return value
+        for value in payload.values():
+            if isinstance(value, dict):
+                found = self._amount_from_payload(value)
+                if found is not None:
+                    return found
+        return None
+
+    def _webhook_alert_text(self, event_name: str, payload: dict[str, Any]) -> str:
+        low = str(event_name or '').strip().lower()
+        amount = self._amount_from_payload(payload)
+        if low == 'channel.followed':
+            return self._alert_text_from_payload(payload, 'folgt jetzt dem Kanal')
+        if low == 'channel.subscription.new':
+            return self._alert_text_from_payload(payload, 'abonniert den Kanal')
+        if low == 'channel.subscription.renewal':
+            fallback = 'verlängert das Abo'
+            if amount:
+                fallback = f'verlängert das Abo ({amount})'
+            return self._alert_text_from_payload(payload, fallback)
+        if low == 'channel.subscription.gifts':
+            fallback = 'verschenkt ein Abo'
+            if amount:
+                fallback = f'verschenkt {amount} Abos'
+            return self._alert_text_from_payload(payload, fallback)
+        if low == 'kicks.gifted':
+            fallback = 'verschenkt Kicks'
+            if amount:
+                fallback = f'verschenkt {amount} Kicks'
+            return self._alert_text_from_payload(payload, fallback)
+        if low == 'livestream.status.updated':
+            return self._alert_text_from_payload(payload, 'Kick Live-Status wurde aktualisiert')
+        return self._alert_text_from_payload(payload, event_name or 'Kick Alert')
+
+    def handle_webhook(self, payload: dict[str, Any], host: PluginHost | None = None, headers: dict[str, str] | None = None):
+        host = host or self._host
+        if host is None:
+            return False, 'Kick Webhook ignoriert: Host fehlt'
+        payload = payload if isinstance(payload, dict) else {}
+        headers = headers if isinstance(headers, dict) else {}
+        event_name = self._webhook_event_name(payload, headers)
+        body = self._webhook_payload_body(payload)
+        channel = self._channel_from_settings(self._effective_settings(None, host)) or str(body.get('channel') or body.get('broadcaster') or '').strip() or 'kick'
+        if not event_name:
+            self._append_diag(f'WEBHOOK unknown event payload={self._payload_preview(payload, 1200)}')
+            return False, 'Kick Webhook ohne Eventnamen'
+        self._append_diag(f'WEBHOOK event={event_name} keys={self._payload_keys(body)} payload={self._payload_preview(body, 1200)}')
+
+        low = event_name.strip().lower()
+        if low == 'chat.message.sent':
+            # Chat kommt bereits über den bestehenden Kick-Realtime-Reader.
+            # Nicht erneut aus dem Webhook emitten, sonst entstehen doppelte Chatzeilen.
+            return True, 'Kick Chat-Webhook ignoriert; Chat kommt über Realtime-Websocket'
+
+        mapped = self._event_type_from_kick_webhook(event_name)
+        if mapped == 'kick_live_status':
+            live_text = json.dumps(body, ensure_ascii=False, default=str).lower()
+            if any(word in live_text for word in ('offline', 'ended', 'false')):
+                self._emit_is_live(host, channel, False)
+            elif any(word in live_text for word in ('online', 'live', 'started', 'true')):
+                self._emit_is_live(host, channel, True)
+            return True, 'Kick Live-Status Webhook verarbeitet'
+
+        if mapped:
+            user = self._alert_user_from_payload(body)
+            text = self._webhook_alert_text(event_name, body)
+            self._emit_alert(host, channel, user, text, mapped, body)
+            return True, f'Kick Webhook verarbeitet: {mapped}'
+
+        if self._handle_alert_event(event_name, body, host, channel):
+            return True, f'Kick Webhook verarbeitet: {event_name}'
+        self._log_unhandled_event('webhook:' + event_name, body, self._payload_preview(payload, 1200))
+        return False, f'Kick Webhook unbekannt: {event_name}'
+
     def _emit_is_live(self, host: PluginHost, channel: str, value: bool | None) -> None:
         if value is None:
             return
@@ -1167,8 +1560,15 @@ class KickChatPlugin(ThreadedPlugin):
             'text': content,
             'raw_text': raw_content,
             'channel': channel,
+            'message': content,
+            'content': content,
             'message_type': 'chat',
+            'type': 'chat',
+            # Normale Chatnachrichten bleiben Chat fuer Bridge/AI/Desktop,
+            # duerfen aber nicht als Alert im Alert-Fenster landen.
+            'event_type': 'chat_no_alert',
             'source_plugin_id': self.plugin_id,
+            'source': self.plugin_id,
             'show_in_desktop': True,
             'show_in_obs': True,
             'overlay_html': overlay_html,
@@ -1205,6 +1605,9 @@ class KickChatPlugin(ThreadedPlugin):
             self._append_diag(f'PUSHER ERROR {raw[:700]}')
             with contextlib.suppress(Exception):
                 host.log(self.plugin_id, f'pusher error {raw[:500]}')
+            return
+
+        if self._handle_alert_event(event, payload, host, channel):
             return
 
         if event == 'App\\Events\\ChatMessageEvent':
@@ -1248,6 +1651,9 @@ class KickChatPlugin(ThreadedPlugin):
             for item in payload.get('messages') or []:
                 if isinstance(item, dict):
                     self._emit_chat_item(host, channel, item, seen)
+            return
+
+        self._log_unhandled_event(event, payload, raw)
 
     def _subscribe_channels(self, chatroom_id: int, channel_id: int | None = None) -> list[str]:
         channels = [
@@ -1414,8 +1820,10 @@ class KickChatPlugin(ThreadedPlugin):
             f'followers_count={followers_count}\n'
             f'source={source}\n'
             f'ws={ws_url}\n'
-            f'Note: OAuth/tokens are owned by godisalotachat. Chat reading uses Kick realtime websocket. Writing uses host.send_platform_message("kick", ...).'
+            f'Note: OAuth/tokens are owned by godisalotachat. Chat reading uses Kick realtime websocket. Writing uses host.send_platform_message("kick", ...). Kick alerts use official webhooks when configured.'
         )
+
+        self._subscribe_kick_events(effective, channel)
 
         while not self._stop.is_set():
             try:

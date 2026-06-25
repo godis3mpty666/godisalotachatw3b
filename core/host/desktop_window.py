@@ -389,6 +389,8 @@ class DesktopTkOverlay:
             _log(f"layout konnte nicht geladen werden: {exc}")
         self.layout.setdefault("viewerBar", {"x": 20, "y": 20, "w": 700, "h": 58})
         self.layout.setdefault("chatPanel", {"x": 20, "y": 90, "w": 700, "h": 590})
+        self.layout.setdefault("alertPanel", {"x": 20, "y": 694, "w": 700, "h": 170})
+        self.layout.setdefault("alerts", {"enabled": True, "maxItems": 5, "showTimestamp": True, "platforms": {"twitch": True, "tiktok": True, "youtube": True, "kick": True}})
         self.layout.setdefault(
             "style",
             {
@@ -409,6 +411,21 @@ class DesktopTkOverlay:
             y = max(-4000, min(4000, int(window.get("y", 80))))
             w = max(MIN_SIZE[0], min(4000, int(window.get("w", DEFAULT_SIZE[0]))))
             h = max(MIN_SIZE[1], min(4000, int(window.get("h", DEFAULT_SIZE[1]))))
+            try:
+                if user32 is not None:
+                    screen_x = int(user32.GetSystemMetrics(76))
+                    screen_y = int(user32.GetSystemMetrics(77))
+                    screen_w = int(user32.GetSystemMetrics(78))
+                    screen_h = int(user32.GetSystemMetrics(79))
+                else:
+                    screen_x = 0
+                    screen_y = 0
+                    screen_w = int(self.root.winfo_screenwidth())
+                    screen_h = int(self.root.winfo_screenheight())
+                if x > screen_x + screen_w - 80 or y > screen_y + screen_h - 80 or x + w < screen_x + 80 or y + h < screen_y + 80:
+                    x, y = 80, 80
+            except Exception:
+                pass
             self.root.geometry(f"{w}x{h}+{x}+{y}")
         except Exception as exc:
             _log(f"Fensterposition konnte nicht geladen werden: {exc}")
@@ -542,7 +559,7 @@ class DesktopTkOverlay:
         # Native Resize-Griff fuer das komplette Fenster
         if self.editing and x >= self.root.winfo_width() - 34 and y >= self.root.winfo_height() - 34:
             return ("window-resize", "window")
-        for box_id in ("viewerBar", "chatPanel"):
+        for box_id in ("viewerBar", "chatPanel", "alertPanel"):
             box = self.layout.get(box_id) or {}
             bx, by, bw, bh = int(box.get("x", 0)), int(box.get("y", 0)), int(box.get("w", 0)), int(box.get("h", 0))
             if bx <= x <= bx + bw and by <= y <= by + bh:
@@ -629,7 +646,7 @@ class DesktopTkOverlay:
             latest = _fetch_json(self.layout_url, timeout=1.0)
             if not isinstance(latest, dict):
                 latest = {}
-            for key in ("viewerBar", "chatPanel", "window"):
+            for key in ("viewerBar", "chatPanel", "alertPanel", "window"):
                 if isinstance(self.layout.get(key), dict):
                     latest[key] = dict(self.layout[key])
             self.layout = latest
@@ -719,6 +736,78 @@ class DesktopTkOverlay:
                 lines.append(cur)
         return lines[-3:] if len(lines) > 3 else lines
 
+    def _split_token_to_width(self, token: str, font: Any, max_px: int) -> list[str]:
+        max_px = max(12, int(max_px))
+        if not token:
+            return [""]
+        parts: list[str] = []
+        cur = ""
+        for char in token:
+            candidate = cur + char
+            if not cur or font.measure(candidate) <= max_px:
+                cur = candidate
+            else:
+                parts.append(cur)
+                cur = char
+        if cur:
+            parts.append(cur)
+        return parts or [token]
+
+    def _wrap_text_px(self, text: str, font: Any, first_px: int, next_px: int, *, max_lines: int = 12) -> list[str]:
+        """Wrap text by real Tk font pixels, not guessed character counts.
+
+        The desktop overlay can be resized with the mouse. Tk's canvas text does
+        not know about our dashed edit border or resize handle, so we pre-wrap
+        against the current element width. Normal words stay whole and wrap at
+        spaces. Only single tokens that are wider than the available line are
+        split as a last-resort overflow guard.
+        """
+        text = str(text or "").replace("\r", "").strip()
+        if not text:
+            return [""]
+
+        first_px = max(20, int(first_px))
+        next_px = max(20, int(next_px))
+        lines: list[str] = []
+        limit = first_px
+
+        for raw in text.split("\n"):
+            words = [w for w in raw.split(" ") if w != ""]
+            cur = ""
+            for word in words:
+                candidate = word if not cur else cur + " " + word
+                if font.measure(candidate) <= limit:
+                    cur = candidate
+                    continue
+
+                if cur:
+                    lines.append(cur)
+                    if len(lines) >= max_lines:
+                        return lines[:max_lines]
+                    cur = ""
+                    limit = next_px
+
+                if font.measure(word) <= limit:
+                    cur = word
+                    continue
+
+                pieces = self._split_token_to_width(word, font, limit)
+                for piece in pieces[:-1]:
+                    lines.append(piece)
+                    if len(lines) >= max_lines:
+                        return lines[:max_lines]
+                    limit = next_px
+                cur = pieces[-1]
+                limit = next_px
+
+            if cur:
+                lines.append(cur)
+                if len(lines) >= max_lines:
+                    return lines[:max_lines]
+                limit = next_px
+
+        return lines or [""]
+
     def render(self) -> None:
         c = self.canvas
         bgc = self.bg_canvas
@@ -750,6 +839,7 @@ class DesktopTkOverlay:
 
         self._draw_viewer_bar(bg, bg_stipple, radius, font_family, text_color)
         self._draw_chat_panel(bg, bg_stipple, radius, font_family, font_size, text_color)
+        self._draw_alert_panel(bg, bg_stipple, radius, font_family, font_size, text_color)
 
         if not self.last_chat_state and self.editing:
             c.create_text(18, 18, anchor="nw", text="Desktop-Overlay aktiv · F8 toggelt Editmode", fill="#b9c2e2", font=(font_family, 10))
@@ -811,33 +901,84 @@ class DesktopTkOverlay:
         rows: list[tuple[str, str, str, str]] = []
         text_font = self.tkfont.Font(family=font_family, size=font_size)
         name_font = self.tkfont.Font(family=font_family, size=font_size, weight="bold")
+        left_pad = 12
+        right_pad = 36 if self.editing else 18
+        continuation_x = x + left_pad + 70
+        panel_right = x + w - right_pad
         for msg in messages:
             platform = str(msg.get("platform") or "")
             user = str(msg.get("user") or "?")
             text = _strip_html(msg.get("html")) or str(msg.get("text") or "")
             badge_w = 22
-            first_line_width = max(80, w - 24 - badge_w - 8 - name_font.measure(user) - 10)
-            char_width = max(7, int(font_size * 0.55))
-            wrapped = self._wrap_text(text, max(8, int(first_line_width / char_width)))
+            first_text_x = x + left_pad + badge_w + 8 + name_font.measure(user) + 10
+            first_line_width = max(40, panel_right - first_text_x)
+            next_line_width = max(40, panel_right - continuation_x)
+            wrapped = self._wrap_text_px(text, text_font, first_line_width, next_line_width, max_lines=6)
             for i, line in enumerate(wrapped):
                 rows.append((platform if i == 0 else "", user if i == 0 else "", line, platform))
         max_rows = max(1, int((h - 24) / line_h))
         rows = rows[-max_rows:]
         cy = y + h - 12 - len(rows) * line_h
         for platform, user, line, color_platform in rows:
-            px = x + 12
+            px = x + left_pad
             if platform:
                 badge_y = cy + int((line_h - 24) / 2)
                 bw = self._draw_platform_badge(px, badge_y, platform)
                 px += bw + 8
                 self.canvas.create_text(px, cy + line_h / 2, text=user, fill=_user_color(platform, user), font=name_font, anchor="w")
-                # Tk misst die echte Glyphenbreite (statt einer Schaetzung nach
-                # Zeichenanzahl). Dadurch beginnt die Nachricht stets hinter dem Namen.
                 px += name_font.measure(user) + 10
             else:
-                px = x + 92
-            self.canvas.create_text(px, cy + line_h / 2, text=line, fill=text_color, font=text_font, anchor="w")
+                px = continuation_x
+            available = max(20, panel_right - px)
+            safe_line = self._wrap_text_px(line, text_font, available, available, max_lines=1)[0]
+            self.canvas.create_text(px, cy + line_h / 2, text=safe_line, fill=text_color, font=text_font, anchor="w")
             cy += line_h
+        if self.editing:
+            self.canvas.create_rectangle(x, y, x + w, y + h, outline="#936cff", dash=(4, 3))
+            self.canvas.create_polygon(x + w, y + h - 24, x + w, y + h, x + w - 24, y + h, fill="#936cff")
+
+    def _draw_alert_panel(self, bg: str, bg_stipple: str | None, radius: int, font_family: str, font_size: int, text_color: str) -> None:
+        cfg = self.layout.get("alerts") if isinstance(self.layout.get("alerts"), dict) else {}
+        if not bool(cfg.get("enabled", True)):
+            return
+        box = self.layout.get("alertPanel") or {}
+        x, y, w, h = [int(box.get(k, 0)) for k in ("x", "y", "w", "h")]
+        self._rounded_rect(x, y, w, h, radius, fill=bg, outline="", stipple=bg_stipple, canvas=self.bg_canvas)
+        platforms = cfg.get("platforms") if isinstance(cfg.get("platforms"), dict) else {}
+        alerts = [
+            item for item in (self.last_chat_state.get("messages", []) or [])
+            if item.get("message_type") == "alert" and bool(platforms.get(str(item.get("platform") or "").lower(), True))
+        ][-max(1, min(20, int(cfg.get("maxItems", 5) or 5))):]
+        title_font = self.tkfont.Font(family=font_family, size=max(10, int(font_size * .9)), weight="bold")
+        text_font = self.tkfont.Font(family=font_family, size=max(10, int(font_size * .9)))
+        self.canvas.create_text(x + 12, y + 12, text="ALERTS", fill="#b9c2e2", font=title_font, anchor="w")
+        if not alerts:
+            if self.editing:
+                self.canvas.create_text(x + 12, y + 36, text="Neue Live-Events erscheinen hier.", fill="#8f9abe", font=text_font, anchor="w")
+        else:
+            line_h = max(32, int(font_size * 1.7))
+            rows = alerts[-max(1, int((h - 28) / line_h)):]
+            cy = y + h - 10 - len(rows) * line_h
+            for item in rows:
+                platform = str(item.get("platform") or "")
+                px = x + 12 + self._draw_platform_badge(x + 12, cy + int((line_h - 24) / 2), platform) + 8
+                user = str(item.get("user") or "Unbekannt")
+                line = _strip_html(item.get("html")) or str(item.get("text") or item.get("alert_title") or "Alert")
+                # Das Event kommt bereits mit einem User-Feld. Einen gleichlautenden
+                # Präfix aus alten Templates entfernen, damit der Name nicht doppelt
+                # erscheint und jede Meldung wirklich nur eine Zeile bleibt.
+                line = re.sub(r"^\s*" + re.escape(user) + r"\s*[:·,\-–—]*\s*", "", line, flags=re.IGNORECASE)
+                prefix = (str(item.get("time") or "") + "  ") if bool(cfg.get("showTimestamp", True)) else ""
+                if prefix:
+                    self.canvas.create_text(px, cy + line_h / 2, text=prefix, fill="#8f9abe", font=text_font, anchor="w")
+                    px += text_font.measure(prefix)
+                self.canvas.create_text(px, cy + line_h / 2, text=user, fill=_user_color(platform, user), font=title_font, anchor="w")
+                px += title_font.measure(user) + 8
+                panel_right = x + w - (36 if self.editing else 18)
+                available = max(20, panel_right - px)
+                safe_line = self._wrap_text_px(line, text_font, available, available, max_lines=1)[0]
+                self.canvas.create_text(px, cy + line_h / 2, text=safe_line, fill=text_color, font=text_font, anchor="w")
+                cy += line_h
         if self.editing:
             self.canvas.create_rectangle(x, y, x + w, y + h, outline="#936cff", dash=(4, 3))
             self.canvas.create_polygon(x + w, y + h - 24, x + w, y + h, x + w - 24, y + h, fill="#936cff")

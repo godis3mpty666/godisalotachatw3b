@@ -238,6 +238,7 @@ SHARED_SECRET   = SHARED_SECRET_DEFAULT
 TOKENS_DIR      = TOKENS_DIR_DEFAULT
 REDIRECT_URI_OV = REDIRECT_URI_DEFAULT
 CENTRAL_SPOTIFY_TOKENS: dict[str, Any] = {}
+CENTRAL_SPOTIFY_TOKEN_FILE = ""
 
 COOLDOWN_MINUTES        = COOLDOWN_MINUTES_DEFAULT
 PLAYLIST_PREFIX         = PLAYLIST_PREFIX_DEFAULT
@@ -567,7 +568,23 @@ def _read_tokens():
 
 def _write_tokens(tok):
     CENTRAL_SPOTIFY_TOKENS.clear()
-    CENTRAL_SPOTIFY_TOKENS.update(dict(tok or {}))
+    token = dict(tok or {})
+    CENTRAL_SPOTIFY_TOKENS.update(token)
+    if CENTRAL_SPOTIFY_TOKEN_FILE:
+        try:
+            saved = dict(token)
+            saved.setdefault("platform", "spotify")
+            saved.setdefault("account", "main")
+            saved.setdefault("saved_at", time.time())
+            if saved.get("expires_at") and not saved.get("expires_in"):
+                try:
+                    saved["expires_in"] = max(0, int(float(saved.get("expires_at") or 0) - time.time()))
+                except Exception:
+                    pass
+            _ensure_dir(os.path.dirname(CENTRAL_SPOTIFY_TOKEN_FILE))
+            _save_json(CENTRAL_SPOTIFY_TOKEN_FILE, saved)
+        except Exception as exc:
+            logw(f"central spotify token write failed: {exc}")
 
 def _is_authorized(): t = _read_tokens(); return bool(t.get("refresh_token") or t.get("access_token"))
 
@@ -3711,7 +3728,7 @@ def stop_server():
 
 # ============== PUBLIC SETTERS (fÃ¼r UI) ==============
 def apply_settings(cfg: Dict[str, Any]):
-    global CLIENT_ID, CLIENT_SECRET, PORT, SHARED_SECRET, DATA_DIR, AUTH_DIR, CONFIG_DIR, NOWPLAYING_DIR, COVERS_DIR, PLAYLISTS_DIR, STATE_DIR, EXPORT_DIR, CERTS_DIR, YOUTUBE_DIR, TOKENS_DIR, REDIRECT_URI_OV, CENTRAL_SPOTIFY_TOKENS, CUSTOM_OVERLAY_JSON, _LOCAL_CA_CERT, _LOCAL_CA_KEY, _LOCAL_TLS_CERT, _LOCAL_TLS_KEY
+    global CLIENT_ID, CLIENT_SECRET, PORT, SHARED_SECRET, DATA_DIR, AUTH_DIR, CONFIG_DIR, NOWPLAYING_DIR, COVERS_DIR, PLAYLISTS_DIR, STATE_DIR, EXPORT_DIR, CERTS_DIR, YOUTUBE_DIR, TOKENS_DIR, CENTRAL_SPOTIFY_TOKEN_FILE, REDIRECT_URI_OV, CENTRAL_SPOTIFY_TOKENS, CUSTOM_OVERLAY_JSON, _LOCAL_CA_CERT, _LOCAL_CA_KEY, _LOCAL_TLS_CERT, _LOCAL_TLS_KEY
     global COOLDOWN_MINUTES, PLAYLIST_PREFIX, PLAYLIST_COVER_ENABLED, PLAYLIST_COVER_FILE, SRPLUS_DURATION_MIN, SRPLUS_ONCE_PER_STREAM, SRPLUS_SHUFFLE, SRPLUS_SUBSCRIBERS_ONLY
     global ENABLED, AUTO_STOP_ON_DISABLE, REPEAT_GUARD, PLAY_NOW, QUEUE_THEN_SKIP, ASYNC_PLAYLIST_ADD, ASYNC_COVER_FETCH
     global LOG_VERBOSE, LOG_SLOW_MS, LOG_DEDUP_SEC, LOG_NP_ON_CHANGE, NOWPLAYING_ENABLE_FILES, NOWPLAYING_POLL_MS
@@ -3753,6 +3770,7 @@ def apply_settings(cfg: Dict[str, Any]):
     _LOCAL_TLS_CERT = os.path.join(CERTS_DIR, "localhost_https_cert.pem")
     _LOCAL_TLS_KEY  = os.path.join(CERTS_DIR, "localhost_https_key.pem")
     TOKENS_DIR      = _normalize_tokens_dir(cfg.get("tokens_dir", AUTH_DIR) or AUTH_DIR)
+    CENTRAL_SPOTIFY_TOKEN_FILE = os.path.expandvars(os.path.expanduser(str(cfg.get("central_spotify_token_file") or ""))).strip()
     CENTRAL_SPOTIFY_TOKENS = {
         "access_token": cfg.get("spotify_access_token") or None,
         "refresh_token": cfg.get("spotify_refresh_token") or None,

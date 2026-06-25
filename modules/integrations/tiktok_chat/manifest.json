@@ -1,6 +1,6 @@
 {
   "id": "tiktok_chat",
   "name": "TikTok Chat",
-  "version": "1.7.7.platform-settings",
+  "version": "1.7.8.test-channel-alerts",
   "entry": "plugin.py"
 }

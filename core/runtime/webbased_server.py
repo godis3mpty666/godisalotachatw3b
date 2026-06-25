@@ -8,6 +8,55 @@ from shared.version import APP_VERSION
 APP_NAME = "godisalotachat webbased"
 VERSION = APP_VERSION
 
+
+def _sanitize_automation_rules(value):
+    if not isinstance(value, list):
+        return []
+    allowed_platforms = {"tiktok", "twitch", "youtube", "kick"}
+    allowed_targets = {"obs", "meld"}
+    allowed_actions = {"text", "show", "hide", "play", "scene"}
+    allowed_startup = {"keep", "placeholder"}
+    cleaned = []
+    for raw in value:
+        if not isinstance(raw, dict):
+            continue
+        platform = str(raw.get("platform") or "").strip().lower()
+        target = str(raw.get("target") or "").strip().lower()
+        action = str(raw.get("action") or "text").strip().lower()
+        if platform not in allowed_platforms or target not in allowed_targets:
+            continue
+        if action not in allowed_actions:
+            action = "text"
+        item = {
+            "name": str(raw.get("name") or "").strip()[:120],
+            "platform": platform,
+            "value": str(raw.get("value") or "").strip().lower()[:80],
+            "target": target,
+            "scene": str(raw.get("scene") or "").strip()[:180],
+            "source": str(raw.get("source") or "").strip()[:180],
+            "action": action,
+            "startup": str(raw.get("startup") or "keep").strip().lower(),
+            "placeholder": str(raw.get("placeholder") or "---").strip()[:240],
+            "testText": str(raw.get("testText") or "").strip()[:300],
+        }
+        try:
+            item["hideSeconds"] = max(0.0, min(3600.0, float(str(raw.get("hideSeconds") or raw.get("hide_seconds") or 4).replace(",", "."))))
+        except Exception:
+            item["hideSeconds"] = 4.0
+        if platform == "tiktok" and item["value"] == "like_total":
+            item["likeUser"] = str(raw.get("likeUser") or raw.get("like_user") or "").strip().lstrip("@")[:120]
+            try:
+                item["likeThreshold"] = max(1, int(float(str(raw.get("likeThreshold") or raw.get("like_threshold") or 1).replace(",", "."))))
+            except Exception:
+                item["likeThreshold"] = 1
+        if item["startup"] not in allowed_startup:
+            item["startup"] = "keep"
+        if not item["name"]:
+            item["name"] = f'{platform} {item["value"] or "live_value"}'
+        if item["value"]:
+            cleaned.append(item)
+    return cleaned[:200]
+
 PLATFORM_ORDER = ["twitch", "tiktok", "youtube", "kick", "spotify", "openai", "meld", "obs"]
 CHAT_INPUT_PLUGIN_IDS = {"twitch_chat", "tiktok_chat", "youtube_chat", "kick_chat"}
 CALLBACK_PORT = 5173
@@ -24,7 +73,7 @@ DEFAULT_SCOPES = {
         "main": "https://www.googleapis.com/auth/youtube https://www.googleapis.com/auth/youtube.force-ssl https://www.googleapis.com/auth/youtube.readonly",
         "bot": "https://www.googleapis.com/auth/youtube https://www.googleapis.com/auth/youtube.force-ssl https://www.googleapis.com/auth/youtube.readonly",
     },
-    "kick": {"main": "user:read channel:read channel:write chat:write moderation:ban moderation:chat_message:manage", "bot": "user:read channel:read channel:write chat:write moderation:ban moderation:chat_message:manage"},
+    "kick": {"main": "user:read channel:read channel:write chat:write moderation:ban moderation:chat_message:manage events:subscribe", "bot": "user:read channel:read channel:write chat:write moderation:ban moderation:chat_message:manage events:subscribe"},
     "spotify": {"main": "user-modify-playback-state user-read-playback-state user-read-currently-playing playlist-modify-private playlist-modify-public playlist-read-private ugc-image-upload"},
 }
 
@@ -77,6 +126,190 @@ def _desktop_dir() -> Path:
         except Exception:
             pass
     return home
+
+
+UI_BROWSER_PROFILE_KEEP_FILES = {
+    ("Local State",),
+    ("Last Browser",),
+    ("Last Version",),
+    ("Variations",),
+    ("Default", "Preferences"),
+    ("Default", "Secure Preferences"),
+}
+UI_BROWSER_PROFILE_KEEP_DIRS = {
+    (),
+    ("Default",),
+}
+
+
+def prune_ui_browser_profile(profile_dir: Path | str) -> int:
+    """Keep only the portable UI browser profile bits worth carrying forward."""
+    profile = Path(profile_dir)
+    removed = 0
+    if not profile.exists():
+        return removed
+    try:
+        profile = profile.resolve()
+    except Exception:
+        pass
+
+    def rel_parts(path: Path) -> tuple[str, ...]:
+        try:
+            return path.relative_to(profile).parts
+        except Exception:
+            return ()
+
+    def remove_path(path: Path) -> None:
+        nonlocal removed
+        try:
+            if path.is_dir():
+                shutil.rmtree(path, ignore_errors=True)
+            else:
+                path.unlink(missing_ok=True)
+            removed += 1
+        except Exception:
+            pass
+
+    def prune_dir(path: Path) -> None:
+        try:
+            children = sorted(path.iterdir(), key=lambda p: len(p.parts), reverse=True)
+        except Exception:
+            return
+        for child in children:
+            parts = rel_parts(child)
+            if child.is_dir():
+                if parts in UI_BROWSER_PROFILE_KEEP_DIRS:
+                    prune_dir(child)
+                else:
+                    remove_path(child)
+                continue
+            if parts not in UI_BROWSER_PROFILE_KEEP_FILES:
+                remove_path(child)
+
+    prune_dir(profile)
+    try:
+        (profile / "Default").mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    return removed
+
+
+def prune_ui_browser_profile_data(data_dir: Path | str) -> int:
+    data = Path(data_dir)
+    removed = prune_ui_browser_profile(data / "ui_browser_profile")
+    try:
+        zip_path = data / "ui_browser_profile.zip"
+        if zip_path.exists():
+            zip_path.unlink()
+            removed += 1
+    except Exception:
+        pass
+    return removed
+
+
+def default_desktop_chat_layout() -> dict:
+    return {
+        "viewerBar": {"x": 16, "y": 16, "w": 720, "h": 64},
+        "chatPanel": {"x": 16, "y": 92, "w": 720, "h": 420},
+        "alertPanel": {"x": 16, "y": 524, "w": 720, "h": 188},
+        "style": {
+            "background": "#0d101d",
+            "opacity": 82,
+            "radius": 16,
+            "fontFamily": "Segoe UI",
+            "fontSize": 16,
+            "textColor": "#ffffff",
+        },
+        "alerts": {
+            "enabled": True,
+            "maxItems": 5,
+            "showTimestamp": True,
+            "platforms": {"twitch": True, "tiktok": True, "youtube": True, "kick": True},
+        },
+        "window": {"x": 80, "y": 80, "w": 780, "h": 820},
+        "autoStart": False,
+    }
+
+
+def normalize_desktop_chat_layout(raw_layout) -> dict:
+    default = default_desktop_chat_layout()
+    raw_layout = raw_layout if isinstance(raw_layout, dict) else {}
+    merged = {
+        key: ({**value, **(raw_layout.get(key, {}) if isinstance(raw_layout.get(key), dict) else {})} if isinstance(value, dict) else raw_layout.get(key, value))
+        for key, value in default.items()
+    }
+
+    window = merged.get("window") if isinstance(merged.get("window"), dict) else {}
+    win_w = max(320, min(4000, int(window.get("w", 780) or 780)))
+    win_h = max(240, min(4000, int(window.get("h", 820) or 820)))
+    merged["window"] = {
+        "x": max(-4000, min(4000, int(window.get("x", 80) or 80))),
+        "y": max(-4000, min(4000, int(window.get("y", 80) or 80))),
+        "w": win_w,
+        "h": win_h,
+    }
+
+    min_sizes = {
+        "viewerBar": (160, 42),
+        "chatPanel": (180, 100),
+        "alertPanel": (180, 72),
+    }
+
+    def default_box(key: str) -> dict:
+        box = dict(default[key])
+        box["w"] = min(int(box["w"]), max(140, win_w - 32))
+        if key == "chatPanel":
+            box["h"] = min(int(box["h"]), max(100, win_h - 188))
+        if key == "alertPanel":
+            box["y"] = min(int(box["y"]), max(16, win_h - int(box["h"]) - 16))
+            box["h"] = min(int(box["h"]), max(72, win_h - int(box["y"]) - 16))
+        return box
+
+    def clean_box(key: str) -> dict:
+        raw = merged.get(key) if isinstance(merged.get(key), dict) else {}
+        fallback = default_box(key)
+        min_w, min_h = min_sizes[key]
+        try:
+            x = int(raw.get("x", fallback["x"]) or fallback["x"])
+            y = int(raw.get("y", fallback["y"]) or fallback["y"])
+            w = int(raw.get("w", fallback["w"]) or fallback["w"])
+            h = int(raw.get("h", fallback["h"]) or fallback["h"])
+        except Exception:
+            return fallback
+        if x > win_w - 40 or y > win_h - 32 or x + w < 40 or y + h < 32:
+            return fallback
+        x = max(0, min(x, max(0, win_w - min_w)))
+        y = max(0, min(y, max(0, win_h - min_h)))
+        w = max(min_w, min(w, max(min_w, win_w - x)))
+        h = max(min_h, min(h, max(min_h, win_h - y)))
+        return {"x": x, "y": y, "w": w, "h": h}
+
+    for key in ("viewerBar", "chatPanel", "alertPanel"):
+        merged[key] = clean_box(key)
+
+    if not isinstance(raw_layout.get("alertPanel"), dict):
+        merged["chatPanel"]["h"] = min(int(merged["chatPanel"].get("h", 420)), max(100, merged["alertPanel"]["y"] - merged["chatPanel"]["y"] - 12))
+
+    style = merged.get("style") if isinstance(merged.get("style"), dict) else {}
+    merged["style"] = {
+        "background": str(style.get("background") or "#0d101d")[:20],
+        "opacity": max(0, min(100, int(style.get("opacity", 82) or 82))),
+        "radius": max(0, min(100, int(style.get("radius", 16) or 16))),
+        "fontFamily": str(style.get("fontFamily") or "Segoe UI")[:80],
+        "fontSize": max(8, min(72, int(style.get("fontSize", 16) or 16))),
+        "textColor": str(style.get("textColor") or "#ffffff")[:20],
+    }
+    alerts = merged.get("alerts") if isinstance(merged.get("alerts"), dict) else {}
+    platforms = alerts.get("platforms") if isinstance(alerts.get("platforms"), dict) else {}
+    merged["alerts"] = {
+        "enabled": bool(alerts.get("enabled", True)),
+        "maxItems": max(1, min(20, int(alerts.get("maxItems", 5) or 5))),
+        "showTimestamp": bool(alerts.get("showTimestamp", True)),
+        "platforms": {name: bool(platforms.get(name, True)) for name in ("twitch", "tiktok", "youtube", "kick")},
+    }
+    merged["autoStart"] = bool(merged.get("autoStart", False))
+    return merged
+
 
 def _open_text_file(path: Path) -> None:
     try:
@@ -272,8 +505,12 @@ class WebbasedPluginHost:
         try:
             st = getattr(status, "state", None) or (status.get("state") if isinstance(status, dict) else None) or str(status)
             msg = getattr(status, "message", None) or (status.get("message") if isinstance(status, dict) else None) or ""
-            self.state.plugin_status[str(plugin_id)] = {"state": str(st), "message": str(msg), "ts": time.time()}
-            self.state.log(str(plugin_id), "status", st, msg)
+            plugin_id = str(plugin_id)
+            previous = self.state.plugin_status.get(plugin_id, {})
+            changed = str(previous.get("state") or "") != str(st) or str(previous.get("message") or "") != str(msg)
+            self.state.plugin_status[plugin_id] = {"state": str(st), "message": str(msg), "ts": time.time()}
+            if changed:
+                self.state.log(plugin_id, "status", st, msg)
         except Exception:
             pass
 
@@ -306,6 +543,13 @@ class WebbasedPluginHost:
                 "message_type": str(payload.get("message_type") or "chat"),
                 "type": str(payload.get("type") or payload.get("message_type") or "chat"),
                 "event_type": str(payload.get("event_type") or payload.get("type") or payload.get("message_type") or "chat"),
+                # Vollständiger Alert-Vertrag: Diese Werte bleiben im zentralen
+                # Event-Stream erhalten und können später unverändert von OBS-
+                # oder Meld-Ausgaben genutzt werden.
+                "alert_title": str(payload.get("title") or payload.get("alert_title") or ""),
+                "amount": payload.get("amount") if payload.get("amount") is not None else payload.get("count"),
+                "color": str(payload.get("color") or payload.get("accent_color") or ""),
+                "raw": payload.get("raw") if isinstance(payload.get("raw"), dict) else {},
                 "source_plugin_id": str(payload.get("source_plugin_id") or plugin_id),
                 "source": str(payload.get("source") or payload.get("source_plugin_id") or plugin_id),
                 "dispatch_to_plugins": bool(payload.get("dispatch_to_plugins") or payload.get("bridge_to_platforms")),
@@ -375,8 +619,8 @@ class WebbasedPluginHost:
                 "follow", "follower", "new_follow", "new_follower",
                 "join", "viewer_join", "user_join", "like", "likes",
                 "gift", "gifts", "share", "shares", "subscribe", "sub",
-                "subscription", "raid", "member", "membership", "superchat",
-                "super_chat", "super-chat",
+                "subscription", "raid", "donation", "donate", "donated", "tip", "bits", "cheer", "member", "membership",
+                "sponsor", "new_sponsor", "superchat", "supersticker", "super_chat", "super-chat", "super_sticker", "super-sticker",
             }:
                 return
             plugin = getattr(self.state, "plugin_instances", {}).get("al3rtalot")
@@ -623,7 +867,7 @@ class WebbasedPluginManager:
         if self.started:
             return
         self.started = True
-        for plugin_id in ("twitch_chat", "tiktok_chat", "youtube_chat", "kick_chat", "spotis3mptify", "al3rtalot", "gam3pick3r", "botalot", "bridg3alot", "modalot"):
+        for plugin_id in ("twitch_chat", "tiktok_chat", "youtube_chat", "kick_chat", "spotis3mptify", "al3rtalot", "gam3pick3r", "botalot", "bridg3alot", "modalot", "meld_control", "obs_control"):
             self.start_plugin(plugin_id)
 
     def load_plugin(self, plugin_id: str):
@@ -766,6 +1010,12 @@ class AppState:
         self._obs_lock = threading.RLock()
         self._obs_conn_key = None
         self.data.mkdir(exist_ok=True)
+        try:
+            removed = prune_ui_browser_profile_data(self.data)
+            if removed:
+                self.log("ui", f"browser profile cleanup removed {removed} items")
+        except Exception:
+            pass
         (self.data / "plugins").mkdir(parents=True, exist_ok=True)
         for module_root in self.module_roots:
             module_root.mkdir(parents=True, exist_ok=True)
@@ -1019,11 +1269,14 @@ class AppState:
         default = {
             "version": VERSION,
             "platforms": {p: {"enabled": False, "status": "nicht verbunden"} for p in PLATFORM_ORDER},
-            "plugins": {}
+            "plugins": {},
+            "automation_rules": []
         }
         s = _json_load(self.settings_path, default)
         s["version"] = VERSION
         s.setdefault("platforms", {})
+        if not isinstance(s.get("automation_rules"), list):
+            s["automation_rules"] = []
         for p in PLATFORM_ORDER:
             s["platforms"].setdefault(p, {"enabled": False, "status": "nicht verbunden"})
         # Original-kompatible Redirect-URIs und sichtbare/unsichtbare Token-Felder.
@@ -1034,6 +1287,7 @@ class AppState:
                 s["platforms"][k]["redirect_url"] = v
         self._migrate_platform_defaults(s["platforms"])
         self._ensure_auth_files_from_settings(s)
+        self._sync_spotify_settings_from_auth(s)
         return s
 
     def _migrate_platform_defaults(self, platforms):
@@ -1098,9 +1352,14 @@ class AppState:
         tt.setdefault("autoconnect", True)
         main_name = str(tt.get("main") or tt.get("main_account") or tt.get("unique_id") or "").strip().lstrip("@")
         bot_name = str(tt.get("bot") or tt.get("bot_account") or "").strip().lstrip("@")
+        test_channel = str(tt.get("test_channel") or tt.get("test_unique_id") or tt.get("test_account") or "").strip().lstrip("@")
         tt["main"] = main_name; tt["main_account"] = main_name; tt["unique_id"] = main_name
         tt["bot"] = bot_name; tt["bot_account"] = bot_name
-        tt["live_url"] = f"https://www.tiktok.com/@{main_name}/live" if main_name else ""
+        tt.setdefault("test_channel_enabled", False)
+        tt["test_channel"] = test_channel
+        read_channel = test_channel if bool(tt.get("test_channel_enabled")) and test_channel else main_name
+        tt["active_read_channel"] = read_channel
+        tt["live_url"] = f"https://www.tiktok.com/@{read_channel}/live" if read_channel else ""
         tt["resolved_live_url"] = tt["live_url"]
         tt.setdefault("browser_path", "")
         default_main_profile = str(self.data / "tiktok" / "main_profile")
@@ -1461,6 +1720,10 @@ class AppState:
         """
         browser = self._find_browser_exe({})
         profile = self._ui_browser_profile_dir()
+        try:
+            prune_ui_browser_profile(profile)
+        except Exception:
+            pass
         try:
             profile.mkdir(parents=True, exist_ok=True)
         except Exception:
@@ -2195,6 +2458,56 @@ class AppState:
             except Exception:
                 pass
 
+    def _sync_spotify_settings_from_auth(self, settings: dict | None = None) -> bool:
+        try:
+            settings = settings if isinstance(settings, dict) else _json_load(self.settings_path, {})
+            if not isinstance(settings, dict):
+                return False
+            sp = settings.setdefault("platforms", {}).setdefault("spotify", {})
+            if not isinstance(sp, dict) or bool(sp.get("main_disconnected_at")):
+                return False
+            token = _json_load(self.auth_dir / "spotify_main.json", {})
+            if not isinstance(token, dict) or not str(token.get("access_token") or token.get("refresh_token") or "").strip():
+                return False
+            try:
+                token_saved = float(token.get("saved_at") or 0.0)
+            except Exception:
+                token_saved = 0.0
+            try:
+                settings_saved = float(sp.get("saved_at") or 0.0)
+            except Exception:
+                settings_saved = 0.0
+            if settings_saved > token_saved + 1.0 and str(sp.get("access_token") or sp.get("refresh_token") or "").strip():
+                return False
+            updates = {
+                "access_token": token.get("access_token"),
+                "refresh_token": token.get("refresh_token"),
+                "expires_at": token.get("expires_at"),
+                "expires_in": token.get("expires_in"),
+                "scope": token.get("scope"),
+                "scopes": token.get("scope") or token.get("scopes"),
+                "token_type": token.get("token_type"),
+                "saved_at": token.get("saved_at"),
+                "connection_status": "Verbunden",
+                "enabled": True,
+            }
+            changed = False
+            for key, value in updates.items():
+                if value in (None, ""):
+                    continue
+                if sp.get(key) != value:
+                    sp[key] = value
+                    changed = True
+            if changed:
+                _json_save(self.settings_path, settings)
+            return changed
+        except Exception as exc:
+            try:
+                self.log("spotify", "auth settings sync failed", exc)
+            except Exception:
+                pass
+            return False
+
     def _auth_token_ok(self, platform, account="main") -> bool:
         try:
             platform = str(platform or "").lower().strip()
@@ -2765,7 +3078,7 @@ class AppState:
         try:
             s = self.settings()
             platforms = s.get("platforms", {}) if isinstance(s.get("platforms", {}), dict) else {}
-            platform_for_plugin = {"twitch_chat": "twitch", "tiktok_chat": "tiktok", "youtube_chat": "youtube", "kick_chat": "kick"}.get(plugin_id)
+            platform_for_plugin = {"twitch_chat": "twitch", "tiktok_chat": "tiktok", "youtube_chat": "youtube", "kick_chat": "kick", "meld_control": "meld", "obs_control": "obs"}.get(plugin_id)
             if platform_for_plugin:
                 pdata = platforms.get(platform_for_plugin, {}) if isinstance(platforms.get(platform_for_plugin, {}), dict) else {}
                 # Core platform switch is the source of truth for chat plugins.
@@ -3646,6 +3959,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._page("platforms.html")
         if path == "/chat":
             return self._page("chat.html")
+        if path == "/obs-meld-integration":
+            return self._page("obs_meld_integration.html")
         if path in ("/spotis3mptify", "/spotify"):
             return self._page("spotify.html")
         if path in ("/overlays", "/overlay-urls"):
@@ -3664,6 +3979,56 @@ class Handler(BaseHTTPRequestHandler):
                 st.log("status", "failed", exc)
                 plats = {p: {"enabled": False, "status": "nicht verbunden", "detail": str(exc)} for p in PLATFORM_ORDER}
             self._json({"version": VERSION, "uptime": int(time.time()-st.started), "port": st.port, "platforms": plats, "plugins": st.plugin_list()})
+            return
+        if path == "/api/automation/targets":
+            result = {"obs": {"connected": False, "scenes": [], "sources": [], "sources_by_scene": {}}, "meld": {"connected": False, "scenes": [], "sources": [], "sources_by_scene": {}}}
+            try:
+                obs = getattr(st, "plugin_instances", {}).get("obs_control")
+                if obs is not None:
+                    ok, scenes_or_error = obs.get_scene_list()
+                    if ok:
+                        scenes = list(scenes_or_error or [])
+                        result["obs"]["connected"] = True
+                        result["obs"]["scenes"] = [str(row.get("sceneName") or "") for row in scenes if str(row.get("sceneName") or "")]
+                        sources = set()
+                        for scene in scenes:
+                            name = str(scene.get("sceneName") or "")
+                            if not name:
+                                continue
+                            ok_items, items_or_error = obs.request("GetSceneItemList", {"sceneName": name}, timeout=2.0)
+                            if ok_items:
+                                scene_sources = sorted({str(row.get("sourceName") or "") for row in list((items_or_error or {}).get("sceneItems", []) or []) if str(row.get("sourceName") or "")}, key=str.casefold)
+                                result["obs"]["sources_by_scene"][name] = scene_sources
+                                sources.update(scene_sources)
+                        result["obs"]["sources"] = sorted(sources, key=str.casefold)
+            except Exception as exc:
+                result["obs"]["detail"] = str(exc)
+            try:
+                meld = getattr(st, "plugin_instances", {}).get("meld_control")
+                if meld is not None:
+                    items = meld.get_session_items()
+                    result["meld"]["connected"] = bool(getattr(meld, "is_connected", lambda: False)())
+                    rows = [dict(value, id=key) for key, value in items.items()]
+                    result["meld"]["scenes"] = sorted({str(row.get("name") or "") for row in rows if str(row.get("type") or "").lower() == "scene" and str(row.get("name") or "")}, key=str.casefold)
+                    for scene in result["meld"]["scenes"]:
+                        scene_layers = []
+                        for row in rows:
+                            if str(row.get("type") or "").lower() != "layer":
+                                continue
+                            try:
+                                if meld._item_matches_scene(row, scene.casefold(), items):
+                                    scene_layers.append(str(row.get("name") or ""))
+                            except Exception:
+                                continue
+                        result["meld"]["sources_by_scene"][scene] = sorted(set(scene_layers), key=str.casefold)
+                    result["meld"]["sources"] = sorted({source for names in result["meld"]["sources_by_scene"].values() for source in names}, key=str.casefold)
+                    st.log("automation", "meld targets", f"connected={result['meld']['connected']} scenes={len(result['meld']['scenes'])} layers={len(result['meld']['sources'])}")
+                else:
+                    result["meld"]["detail"] = "Meld-Control-Plugin ist nicht gestartet"
+                    st.log("automation", "meld targets", "Meld-Control-Plugin ist nicht gestartet")
+            except Exception as exc:
+                result["meld"]["detail"] = str(exc)
+            self._json({"ok": True, "targets": result})
             return
         if path == "/api/settings":
             self._json(st.settings())
@@ -3810,12 +4175,20 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"messages": st.messages[-100:], "platforms": _chat_platform_state(st, st.settings())})
             return
         if path == "/api/desktop-chat/layout":
-            default = {"viewerBar": {"x": 16, "y": 16, "w": 720, "h": 64}, "chatPanel": {"x": 16, "y": 92, "w": 720, "h": 620}, "style": {"background": "#0d101d", "opacity": 82, "radius": 16, "fontFamily": "Segoe UI", "fontSize": 16, "textColor": "#ffffff"}, "window": {"x": 80, "y": 80, "w": 780, "h": 820}, "autoStart": False}
+            stored = _json_load(st.data / "plugins" / "chat_desktop" / "layout.json", {})
+            self._json(normalize_desktop_chat_layout(stored))
+            return
+        if path == "/api/desktop-chat/layout":
+            default = {"viewerBar": {"x": 16, "y": 16, "w": 720, "h": 64}, "chatPanel": {"x": 16, "y": 92, "w": 720, "h": 420}, "alertPanel": {"x": 16, "y": 524, "w": 720, "h": 188}, "style": {"background": "#0d101d", "opacity": 82, "radius": 16, "fontFamily": "Segoe UI", "fontSize": 16, "textColor": "#ffffff"}, "alerts": {"enabled": True, "maxItems": 5, "showTimestamp": True, "platforms": {"twitch": True, "tiktok": True, "youtube": True, "kick": True}}, "window": {"x": 80, "y": 80, "w": 780, "h": 820}, "autoStart": False}
             stored = _json_load(st.data / "plugins" / "chat_desktop" / "layout.json", {})
             merged = {
                 key: ({**value, **(stored.get(key, {}) if isinstance(stored.get(key), dict) else {})} if isinstance(value, dict) else stored.get(key, value))
                 for key, value in default.items()
             }
+            # Bestehende Layouts kannten den Alertbereich noch nicht. Beim ersten
+            # Laden etwas Chat-Höhe freigeben, damit das neue Element sichtbar ist.
+            if not isinstance(stored.get("alertPanel"), dict):
+                merged["chatPanel"]["h"] = min(int(merged["chatPanel"].get("h", 420)), 420)
             self._json(merged)
             return
         if path == "/api/desktop-chat/state":
@@ -3950,6 +4323,131 @@ class Handler(BaseHTTPRequestHandler):
         path = parsed.path
         data = self._read_json()
 
+        if path == "/api/automation/reload-targets":
+            try:
+                meld = st.plugin_instances.get("meld_control")
+                if meld is not None:
+                    # Meld publishes the complete session during the WebChannel
+                    # handshake. Dropping this one connection makes the plugin
+                    # reconnect immediately and refresh its source cache.
+                    meld._drop_connection()
+                    st.log("automation", "targets reload", "Meld session refresh requested")
+                else:
+                    st.log("automation", "targets reload", "Meld-Control-Plugin ist nicht gestartet")
+                return self._json({"ok": True})
+            except Exception as exc:
+                st.log("automation", "targets reload failed", exc)
+                return self._json({"ok": False, "error": str(exc)}, 500)
+
+        if path == "/api/automation/test":
+            try:
+                target = str(data.get("target") or "").lower()
+                action = str(data.get("action") or "text").lower()
+                source_name = str(data.get("source") or "").strip()
+                scene_name = str(data.get("scene") or "").strip()
+                preview_text = str(data.get("preview") or "Testwert aus godisalotachat")
+                if target == "meld":
+                    meld = st.plugin_instances.get("meld_control")
+                    if meld is None or not meld.is_connected():
+                        st.log("automation", "test", "Meld-Control ist nicht verbunden")
+                        return self._json({"ok": False, "error": "Meld-Control ist nicht verbunden."}, 400)
+                    items = meld.get_session_items()
+                    if action == "scene":
+                        ok, detail = meld.invoke_meld_method("showScene", [scene_name], timeout=3.0)
+                    else:
+                        match = next((dict(value, id=key) for key, value in items.items() if str(value.get("name") or "").casefold() == source_name.casefold() and meld._item_matches_scene(value, scene_name.casefold(), items)), None)
+                        if match is None:
+                            st.log("automation", "test", f"Meld Quelle nicht gefunden: scene={scene_name} source={source_name}")
+                            return self._json({"ok": False, "error": "Gewählte Meld-Quelle wurde nicht gefunden."}, 400)
+                        if action == "text":
+                            ok, detail = meld.set_session_property(str(match["id"]), "text", preview_text, timeout=3.0)
+                        elif action in {"show", "hide"}:
+                            visible = action == "show"
+                            # A layer hidden inside a hidden group still cannot be seen.
+                            # Walk its parent chain so a saved scene-specific rule behaves
+                            # exactly like the user expects in Meld.
+                            if visible:
+                                parent_id = str(match.get("parentId") or match.get("parent_id") or match.get("parent") or match.get("groupId") or match.get("group_id") or "")
+                                visited = set()
+                                while parent_id and parent_id not in visited:
+                                    visited.add(parent_id)
+                                    parent = items.get(parent_id)
+                                    if not isinstance(parent, dict) or str(parent.get("type") or "").lower() == "scene":
+                                        break
+                                    meld.set_session_property(parent_id, "visible", True, timeout=3.0)
+                                    parent_id = str(parent.get("parentId") or parent.get("parent_id") or parent.get("parent") or parent.get("groupId") or parent.get("group_id") or "")
+                            ok, detail = meld.set_session_property(str(match["id"]), "visible", visible, timeout=3.0)
+                        elif action == "play":
+                            layer_id = str(match["id"])
+                            details = []
+                            try:
+                                meld.set_session_property(layer_id, "visible", False, timeout=1.0)
+                                time.sleep(0.12)
+                                meld.set_session_property(layer_id, "visible", True, timeout=1.0)
+                            except Exception as exc:
+                                details.append(f"visible edge: {exc}")
+                            ok = False
+                            detail = ""
+                            for command in ("stop", "restart", "replay", "reset", "seekToStart", "play"):
+                                step_ok, step_detail = meld.call_layer_function(layer_id, command, timeout=1.5)
+                                details.append(f"{command}={bool(step_ok)}:{step_detail}")
+                                ok = bool(step_ok) or ok
+                                detail = step_detail
+                                time.sleep(0.05)
+                            if not ok:
+                                ok = True
+                                detail = "Quelle neu sichtbar geschaltet; Meld hat keine Play-Funktion bestätigt. " + " | ".join(str(x) for x in details[-6:])
+                        else:
+                            st.log("automation", "test", f"Unbekannte Aktion: {action}")
+                            return self._json({"ok": False, "error": "Unbekannte Aktion."}, 400)
+                    st.log("automation", "test", f"meld action={action} scene={scene_name} source={source_name} ok={bool(ok)}")
+                    return self._json({"ok": bool(ok), "detail": str(detail or "Test ausgeführt")})
+                if target == "obs":
+                    obs = st.plugin_instances.get("obs_control")
+                    if obs is None or not obs.is_connected():
+                        st.log("automation", "test", "OBS-Control ist nicht verbunden")
+                        return self._json({"ok": False, "error": "OBS-Control ist nicht verbunden."}, 400)
+                    if action == "text":
+                        ok, detail = obs.request("SetInputSettings", {"inputName": source_name, "inputSettings": {"text": preview_text}, "overlay": True}, timeout=3.0)
+                    elif action in {"show", "hide"}:
+                        ok, detail = obs.set_source_visible(source_name, action == "show")
+                    elif action == "scene":
+                        ok, detail = obs.request("SetCurrentProgramScene", {"sceneName": scene_name}, timeout=3.0)
+                    elif action == "play":
+                        details = []
+                        try:
+                            obs.set_source_visible(source_name, False)
+                            time.sleep(0.12)
+                        except Exception as exc:
+                            details.append(f"hide: {exc}")
+                        for media_action in ("OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP", "OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART", "OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PLAY"):
+                            step_ok, step_detail = obs.request("TriggerMediaInputAction", {"inputName": source_name, "mediaAction": media_action}, timeout=1.5)
+                            details.append(f"{media_action}={bool(step_ok)}:{step_detail}")
+                            if media_action == "OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP":
+                                try:
+                                    obs.request("SetMediaInputCursor", {"inputName": source_name, "mediaCursor": 0}, timeout=1.0)
+                                except Exception:
+                                    pass
+                            time.sleep(0.08)
+                        # Browser sources do not support media actions, so refresh them as fallback.
+                        for prop in ("refreshnocache", "refresh"):
+                            step_ok, step_detail = obs.request("PressInputPropertiesButton", {"inputName": source_name, "propertyName": prop}, timeout=1.5)
+                            details.append(f"{prop}={bool(step_ok)}:{step_detail}")
+                        show_ok, show_detail = obs.set_source_visible(source_name, True)
+                        details.append(f"show={bool(show_ok)}:{show_detail}")
+                        ok = bool(show_ok)
+                        detail = " | ".join(str(x) for x in details[-6:])
+                    else:
+                        st.log("automation", "test", f"Unbekannte Aktion: {action}")
+                        return self._json({"ok": False, "error": "Unbekannte Aktion."}, 400)
+                    st.log("automation", "test", f"obs action={action} scene={scene_name} source={source_name} ok={bool(ok)}")
+                    return self._json({"ok": bool(ok), "detail": str(detail or "Test ausgeführt")})
+                st.log("automation", "test", f"Unbekanntes Ziel: {target}")
+                return self._json({"ok": False, "error": "Unbekanntes Ziel."}, 400)
+            except Exception as exc:
+                st.log("automation", "test failed", exc)
+                return self._json({"ok": False, "error": str(exc)}, 500)
+
         m_plugin_action = re.match(r"^/api/plugins/([^/]+)/action$", path)
         if m_plugin_action:
             plugin_id = urllib.parse.unquote(m_plugin_action.group(1)).strip()
@@ -4036,6 +4534,16 @@ class Handler(BaseHTTPRequestHandler):
                     # Ein bereits bestätigter Login darf nur über den Trennen-Endpunkt gelöscht werden.
                     new_tiktok["main_login_ok"] = bool(old_tiktok.get("main_login_ok") or new_tiktok.get("main_login_ok"))
                     new_tiktok["bot_login_ok"] = bool(old_tiktok.get("bot_login_ok") or new_tiktok.get("bot_login_ok"))
+                    for key in ("main", "main_account", "unique_id", "bot", "bot_account", "test_channel"):
+                        if key in new_tiktok and isinstance(new_tiktok.get(key), str):
+                            new_tiktok[key] = str(new_tiktok.get(key) or "").strip().lstrip("@")
+                    test_enabled_raw = new_tiktok.get("test_channel_enabled", False)
+                    if isinstance(test_enabled_raw, str):
+                        new_tiktok["test_channel_enabled"] = test_enabled_raw.strip().lower() in {"1", "true", "yes", "ja", "on"}
+                    read_channel = new_tiktok.get("test_channel") if bool(new_tiktok.get("test_channel_enabled")) and str(new_tiktok.get("test_channel") or "").strip() else new_tiktok.get("main_account") or new_tiktok.get("main") or ""
+                    new_tiktok["active_read_channel"] = str(read_channel or "").strip().lstrip("@")
+                    new_tiktok["live_url"] = f"https://www.tiktok.com/@{new_tiktok['active_read_channel']}/live" if new_tiktok.get("active_read_channel") else ""
+                    new_tiktok["resolved_live_url"] = new_tiktok["live_url"]
                     if bool(new_tiktok.get("main_login_ok") or new_tiktok.get("bot_login_ok")):
                         new_tiktok["enabled"] = True
                 openai_cfg = incoming["platforms"].get("openai", {})
@@ -4044,6 +4552,8 @@ class Handler(BaseHTTPRequestHandler):
                 current["platforms"] = incoming["platforms"]
             if "plugins" in incoming and isinstance(incoming["plugins"], dict):
                 current["plugins"] = incoming["plugins"]
+            if "automation_rules" in incoming:
+                current["automation_rules"] = _sanitize_automation_rules(incoming.get("automation_rules"))
             old_key = getattr(st, "_obs_conn_key", None)
             st.save_settings(current)
             try:
@@ -4064,6 +4574,27 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 pass
             return self._json({"ok": True, "settings": current})
+
+        if path in ("/api/webhooks/kick", "/api/kick/events", "/api/kick/webhook"):
+            try:
+                plugin = st.plugin_instances.get("kick_chat")
+                if plugin is None:
+                    plugin = st.plugin_manager.load_plugin("kick_chat")
+                handler = getattr(plugin, "handle_webhook", None) if plugin is not None else None
+                if not callable(handler):
+                    return self._json({"ok": False, "error": "kick_chat unterstuetzt keine Webhooks"}, 500)
+                headers = {str(k): str(v) for k, v in self.headers.items()}
+                result = handler(data if isinstance(data, dict) else {}, st.plugin_manager.host, headers=headers)
+                if isinstance(result, tuple):
+                    ok = bool(result[0]) if result else False
+                    detail = str(result[1]) if len(result) > 1 else ""
+                else:
+                    ok = bool(result)
+                    detail = "Kick Webhook verarbeitet" if ok else "Kick Webhook ignoriert"
+                return self._json({"ok": ok, "detail": detail})
+            except Exception as exc:
+                st.log("kick_chat", "kick webhook failed", exc)
+                return self._json({"ok": False, "error": str(exc)}, 500)
 
         if path == "/api/client-error":
             st.log("client-error", json.dumps(data, ensure_ascii=False))
@@ -4117,7 +4648,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/desktop-chat/layout":
             try:
                 clean = {}
-                for key in ("viewerBar", "chatPanel"):
+                for key in ("viewerBar", "chatPanel", "alertPanel"):
                     raw = data.get(key) if isinstance(data, dict) else {}
                     clean[key] = {name: max(0, min(4000, int(raw.get(name, fallback)))) for name, fallback in (("x", 16), ("y", 16), ("w", 720), ("h", 100))}
                 raw_window = data.get("window") if isinstance(data, dict) else {}
@@ -4130,6 +4661,7 @@ class Handler(BaseHTTPRequestHandler):
                 }
                 clean["autoStart"] = bool(data.get("autoStart", False)) if isinstance(data, dict) else False
                 raw_style = data.get("style") if isinstance(data, dict) else {}
+                raw_style = raw_style if isinstance(raw_style, dict) else {}
                 clean["style"] = {
                     "background": str(raw_style.get("background") or "#0d101d")[:20],
                     "opacity": max(0, min(100, int(raw_style.get("opacity", 82)))),
@@ -4138,6 +4670,16 @@ class Handler(BaseHTTPRequestHandler):
                     "fontSize": max(8, min(72, int(raw_style.get("fontSize", 16)))),
                     "textColor": str(raw_style.get("textColor") or "#ffffff")[:20],
                 }
+                raw_alerts = data.get("alerts") if isinstance(data, dict) else {}
+                raw_alerts = raw_alerts if isinstance(raw_alerts, dict) else {}
+                raw_platforms = raw_alerts.get("platforms") if isinstance(raw_alerts.get("platforms"), dict) else {}
+                clean["alerts"] = {
+                    "enabled": bool(raw_alerts.get("enabled", True)),
+                    "maxItems": max(1, min(20, int(raw_alerts.get("maxItems", 5)))),
+                    "showTimestamp": bool(raw_alerts.get("showTimestamp", True)),
+                    "platforms": {name: bool(raw_platforms.get(name, True)) for name in ("twitch", "tiktok", "youtube", "kick")},
+                }
+                clean = normalize_desktop_chat_layout(clean)
                 _json_save(st.data / "plugins" / "chat_desktop" / "layout.json", clean)
                 return self._json({"ok": True, "layout": clean})
             except Exception as exc:
@@ -4156,7 +4698,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"ok": True})
         if path == "/api/desktop-chat/reset":
             try:
-                default = {"viewerBar": {"x": 16, "y": 16, "w": 720, "h": 64}, "chatPanel": {"x": 16, "y": 92, "w": 720, "h": 620}, "style": {"background": "#0d101d", "opacity": 82, "radius": 16, "fontFamily": "Segoe UI", "fontSize": 16, "textColor": "#ffffff"}, "window": {"x": 80, "y": 80, "w": 780, "h": 820}, "autoStart": False}
+                default = normalize_desktop_chat_layout(default_desktop_chat_layout())
                 _json_save(st.data / "plugins" / "chat_desktop" / "layout.json", default)
                 _close_desktop_chat(st)
                 proc, _opened = _open_desktop_chat(st)

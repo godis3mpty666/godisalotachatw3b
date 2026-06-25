@@ -1,4 +1,4 @@
-# al3rtalot ver.0.01
+# al3rtalot ver.0.03
 
 `al3rtalot` ist ein plattformübergreifendes Alert-Plugin für das neue webbasierte `godischatalotw3b`/`godisalotachat`-System.
 
@@ -46,10 +46,10 @@ Danach das Tool neu starten oder die Plugins neu laden.
 Aktuelle Version:
 
 ```text
-0.01
+0.03
 ```
 
-Diese README wurde ohne Versionssprung ergänzt. Die Pluginversion bleibt absichtlich bei `0.01`.
+Diese Version ergänzt ausschließlich Kick-spezifische Event-Mappings. Twitch, TikTok und YouTube bleiben funktional unverändert.
 
 ## Einstellungsbereiche
 
@@ -195,3 +195,57 @@ Sicherheitsrelevante Daten gehören nicht in den Pluginordner.
 
 1. `al3rtalot` je Plattform feinjustieren.
 2. Später optional Sounds, Bilder, Animationen und eigene Alert-Layouts ergänzen.
+
+
+---
+
+## Änderung 0.03
+
+Diese Version prüft und korrigiert die Alert-Zuordnung für Twitch, TikTok, YouTube und Kick.
+
+### Wichtigste Änderungen
+
+- Normale Chatnachrichten bleiben standardmäßig **kein Alert** mehr.
+- `chat_no_alert` wird ausdrücklich ignoriert, damit die Chat-/Alert-Trennung sauber bleibt.
+- Twitch unterstützt jetzt zusätzlich `join`, damit User, die dem Stream/Chat joinen, als Alert angezeigt werden können.
+- Kick unterstützt jetzt zusätzlich `join`, `gift` und `raid`.
+- YouTube unterstützt jetzt zusätzlich `supersticker` und `donation`.
+- Event-Aliase wurden erweitert:
+  - Twitch/Kick: `viewer_join`, `user_joined`, `gift_sub`, `gifted_subs`, `cheer`
+  - YouTube: `new_member`, `membership`, `super_chat`, `super_sticker`
+  - TikTok: `joined`, `likes`, `gifts`, `shares`
+- Dedupe wurde verbessert, damit doppelte TikTok-/Realtime-Alerts mit anderer ID innerhalb kurzer Zeit geblockt werden.
+
+### Erwartete Eventtypen
+
+Twitch:
+`join`, `follow`, `subscribe`, `gift`, `raid`, `donation`, `bits`
+
+TikTok:
+`follow`, `join`, `like`, `gift`, `share`
+
+YouTube:
+`subscribe`, `member`, `superchat`, `supersticker`, `donation`
+
+Kick:
+`join`, `follow`, `subscribe`, `gift`, `raid`
+
+`chat` ist weiterhin technisch vorhanden, aber standardmäßig deaktiviert, weil Chat ins Chatfenster gehört und nicht doppelt als Alert auftauchen soll.
+
+
+## Änderung 0.03 - Kick Webhook-Eventnamen
+
+Diese Version bereitet `al3rtalot` auf offizielle Kick-Events/Webhooks vor, ohne das Verhalten von Twitch, TikTok oder YouTube zu ändern.
+
+Neu für Kick normalisiert:
+
+```text
+channel.followed              -> kick follow alert
+channel.subscription.new      -> kick subscribe alert
+channel.subscription.renewal  -> kick subscribe alert
+channel.subscription.gifts    -> kick gift alert
+kicks.gifted                  -> kick gift alert
+livestream.status.updated     -> kick live_status alert
+```
+
+Die eigentliche Kick-Webhooks/Event-Subscription-Logik gehört weiterhin in die Kick-Integration. `al3rtalot` zeigt nur die intern ankommenden Alerts an.

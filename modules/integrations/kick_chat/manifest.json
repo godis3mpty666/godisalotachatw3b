@@ -1,6 +1,7 @@
 {
   "id": "kick_chat",
   "name": "Kick Chat",
-  "version": "2.1.4",
-  "entry": "plugin.py"
+  "version": "2.1.8",
+  "entry": "plugin.py",
+  "description": "Kick chat reader/writer plus official Kick webhook alert receiver."
 }

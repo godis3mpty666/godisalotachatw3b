@@ -1,5 +1,28 @@
 # godisalotachat webbased
 
+## 0.92 Kick Webhook Patch (2026-06-25)
+
+- Kick-OAuth-Scope im Core um `events:subscribe` erweitert.
+- Neuer Core-Endpunkt `POST /api/webhooks/kick` ergänzt; Alias-Endpunkte `/api/kick/events` und `/api/kick/webhook` leiten ebenfalls an `kick_chat` weiter.
+- `kick_chat` auf 2.1.8 aktualisiert und für offizielle Kick-Webhook-Events vorbereitet.
+- Kick-Chat-Websocket bleibt unverändert für normale Chatnachrichten; Webhooks werden nur für echte Kick-Events wie Follow/Sub/Gift/Live-Status genutzt.
+- Twitch, TikTok und YouTube wurden nicht geändert.
+
+## 0.91
+
+- OBS/Meld-Integration speichert neue Live-Wert-Einträge wie TikTok Top-Liker jetzt dauerhaft in `settings.json`.
+- `/api/settings` übernimmt `automation_rules` nun sauber als Top-Level-Einstellung statt sie beim Speichern zu verwerfen.
+- Automationsregeln werden beim Speichern bereinigt, damit nur gültige Plattformen, Ziele und Aktionen persistiert werden.
+- Die App-Version wurde auf `0.01` gesetzt.
+
+
+## 0.89
+
+- Plattformen -> TikTok hat jetzt einen Testkanal-Schalter mit frei eintragbarem Kanalnamen.
+- Wenn der Testkanal aktiv ist, liest `tiktok_chat` Chat und TikTok-Events vom Testkanal statt vom eigenen Main-Kanal. Dadurch koennen TikTok-Alerts getestet werden, ohne selbst live zu gehen.
+- `tiktok_chat` registriert wieder Follow-, Share-, Join-, Like- und Gift-Events und startet die Alert-Queue fuer Desktop-/OBS-Ausgabe.
+- TikTok-Alert-Events werden weiter direkt an `al3rtalot` gebridged, damit der Alertbereich im Desktopfenster Joins/Likes/Gifts/Follows/Shares anzeigen kann.
+
 ## 0.68
 
 - Autoconnect-Auswahl im Core jetzt für alle Plattformen ergänzt: Twitch, TikTok, YouTube, Kick, Spotify, OpenAI, Meld und OBS.

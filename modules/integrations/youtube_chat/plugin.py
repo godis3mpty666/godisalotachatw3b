@@ -26,7 +26,7 @@ SEARCH_URL = 'https://www.googleapis.com/youtube/v3/search'
 class YouTubeChatPlugin(ThreadedPlugin):
     plugin_id = 'youtube_chat'
     display_name = 'YouTube Chat'
-    version = '1.1.1'
+    version = '1.1.3'
     description = 'YouTube Live chat reader/writer using central OAuth with slow live detection.'
 
     def __init__(self) -> None:
@@ -687,14 +687,39 @@ class YouTubeChatPlugin(ThreadedPlugin):
                     continue
                 add = action.get('addChatItemAction') if isinstance(action.get('addChatItemAction'), dict) else {}
                 item = add.get('item') if isinstance(add.get('item'), dict) else {}
+                renderer_type = 'textMessageEvent'
                 renderer = item.get('liveChatTextMessageRenderer') if isinstance(item.get('liveChatTextMessageRenderer'), dict) else None
                 if renderer is None:
                     renderer = item.get('liveChatPaidMessageRenderer') if isinstance(item.get('liveChatPaidMessageRenderer'), dict) else None
+                    if renderer is not None:
+                        renderer_type = 'superChatEvent'
+                if renderer is None:
+                    renderer = item.get('liveChatPaidStickerRenderer') if isinstance(item.get('liveChatPaidStickerRenderer'), dict) else None
+                    if renderer is not None:
+                        renderer_type = 'superStickerEvent'
+                if renderer is None:
+                    renderer = item.get('liveChatMembershipItemRenderer') if isinstance(item.get('liveChatMembershipItemRenderer'), dict) else None
+                    if renderer is not None:
+                        renderer_type = 'memberMilestoneChatEvent' if renderer.get('message') else 'newSponsorEvent'
+                if renderer is None:
+                    renderer = item.get('liveChatSponsorshipsGiftPurchaseAnnouncementRenderer') if isinstance(item.get('liveChatSponsorshipsGiftPurchaseAnnouncementRenderer'), dict) else None
+                    if renderer is not None:
+                        renderer_type = 'membershipGiftingEvent'
+                if renderer is None:
+                    renderer = item.get('liveChatSponsorshipsGiftRedemptionAnnouncementRenderer') if isinstance(item.get('liveChatSponsorshipsGiftRedemptionAnnouncementRenderer'), dict) else None
+                    if renderer is not None:
+                        renderer_type = 'giftMembershipReceivedEvent'
                 if not isinstance(renderer, dict):
                     continue
                 msg_id = str(renderer.get('id') or action.get('clientId') or '').strip()
-                message = self._normalize_text(self._extract_text_runs(renderer.get('message')))
+                message = self._normalize_text(
+                    self._extract_text_runs(renderer.get('message'))
+                    or self._extract_text_runs(renderer.get('headerSubtext'))
+                    or self._extract_text_runs(renderer.get('primaryText'))
+                    or self._extract_text_runs(renderer.get('subtext'))
+                )
                 author = self._normalize_text(self._extract_text_runs(renderer.get('authorName'))) or 'YouTube'
+                purchase_amount = self._normalize_text(self._extract_text_runs(renderer.get('purchaseAmountText')))
                 timestamp = str(renderer.get('timestampUsec') or '').strip()
                 published = ''
                 if timestamp.isdigit():
@@ -708,9 +733,16 @@ class YouTubeChatPlugin(ThreadedPlugin):
                     items.append({
                         'id': msg_id,
                         'snippet': {
+                            'type': renderer_type,
                             'displayMessage': message,
                             'publishedAt': published,
                             'textMessageDetails': {'messageText': message},
+                            'superChatDetails': {'amountDisplayString': purchase_amount} if renderer_type == 'superChatEvent' else {},
+                            'superStickerDetails': {'amountDisplayString': purchase_amount} if renderer_type == 'superStickerEvent' else {},
+                            'newSponsorDetails': {'memberLevelName': message} if renderer_type == 'newSponsorEvent' else {},
+                            'memberMilestoneChatDetails': {'userComment': message} if renderer_type == 'memberMilestoneChatEvent' else {},
+                            'membershipGiftingDetails': {'giftMembershipLevelName': message} if renderer_type == 'membershipGiftingEvent' else {},
+                            'giftMembershipReceivedDetails': {'gifterChannelName': author} if renderer_type == 'giftMembershipReceivedEvent' else {},
                         },
                         'authorDetails': {'displayName': author},
                     })
@@ -1037,12 +1069,99 @@ class YouTubeChatPlugin(ThreadedPlugin):
             pass
         return max(float(fallback), 1.0)
 
+    def _alert_payload(self, *, channel: str, name: str, text: str, event_type: str, msg_id: str = '', raw: dict[str, Any] | None = None, amount: Any = None) -> dict[str, Any] | None:
+        clean_text = self._normalize_text(text)
+        if not clean_text:
+            return None
+        clean_name = str(name or 'YouTube').strip().lstrip('@').strip() or 'YouTube'
+        clean_type = self._normalize_text(event_type) or 'youtube_alert'
+        out = {
+            'platform': 'youtube',
+            'username': clean_name,
+            'display_name': clean_name,
+            'text': clean_text,
+            'message': clean_text,
+            'content': clean_text,
+            'comment': clean_text,
+            'channel': channel,
+            'message_id': msg_id,
+            'message_type': clean_type,
+            'type': clean_type,
+            'event_type': clean_type,
+            'alert_type': clean_type,
+            'source_plugin_id': self.plugin_id,
+            'source': self.plugin_id,
+            'is_alert': True,
+            'alert': True,
+            'show_in_desktop': True,
+            'show_in_obs': True,
+            'raw': raw if isinstance(raw, dict) else {},
+        }
+        if amount not in (None, ''):
+            out['amount'] = amount
+        return out
+
+    def _youtube_alert_from_snippet(self, item: dict[str, Any], channel: str, msg_id: str, snippet: dict[str, Any], author: dict[str, Any], text: str) -> dict[str, Any] | None:
+        message_type = str(snippet.get('type') or '').strip()
+        name = str(author.get('displayName') or 'YouTube').strip().lstrip('@').strip() or 'YouTube'
+        low = message_type.lower()
+
+        if low == 'superchatevent':
+            details = snippet.get('superChatDetails') if isinstance(snippet.get('superChatDetails'), dict) else {}
+            amount = self._normalize_text(details.get('amountDisplayString') or '')
+            comment = self._normalize_text(details.get('userComment') or text)
+            label = f'Super Chat {amount}'.strip() if amount else 'Super Chat'
+            msg = f'{label}: {comment}' if comment else label
+            return self._alert_payload(channel=channel, name=name, text=msg, event_type='youtube_superchat', msg_id=msg_id, raw=item, amount=amount)
+
+        if low == 'superstickerevent':
+            details = snippet.get('superStickerDetails') if isinstance(snippet.get('superStickerDetails'), dict) else {}
+            amount = self._normalize_text(details.get('amountDisplayString') or '')
+            meta = details.get('superStickerMetadata') if isinstance(details.get('superStickerMetadata'), dict) else {}
+            sticker = self._normalize_text(meta.get('altText') or text or 'Super Sticker')
+            msg = f'Super Sticker {amount}: {sticker}'.strip() if amount else f'Super Sticker: {sticker}'
+            return self._alert_payload(channel=channel, name=name, text=msg, event_type='youtube_supersticker', msg_id=msg_id, raw=item, amount=amount)
+
+        if low in {'newsponsorevent', 'sponsorevent'}:
+            details = snippet.get('newSponsorDetails') if isinstance(snippet.get('newSponsorDetails'), dict) else {}
+            level = self._normalize_text(details.get('memberLevelName') or '')
+            msg = f'wird Mitglied ({level})' if level else 'wird Mitglied'
+            return self._alert_payload(channel=channel, name=name, text=msg, event_type='youtube_member', msg_id=msg_id, raw=item)
+
+        if low == 'membermilestonechatevent':
+            details = snippet.get('memberMilestoneChatDetails') if isinstance(snippet.get('memberMilestoneChatDetails'), dict) else {}
+            months = details.get('memberMonth') or details.get('memberMonths')
+            comment = self._normalize_text(details.get('userComment') or text)
+            base = f'Mitglied seit {months} Monaten' if months else 'Mitglieds-Meilenstein'
+            msg = f'{base}: {comment}' if comment else base
+            return self._alert_payload(channel=channel, name=name, text=msg, event_type='youtube_member', msg_id=msg_id, raw=item)
+
+        if low == 'membershipgiftingevent':
+            details = snippet.get('membershipGiftingDetails') if isinstance(snippet.get('membershipGiftingDetails'), dict) else {}
+            count = details.get('giftMembershipsCount') or details.get('giftMembershipCount')
+            level = self._normalize_text(details.get('giftMembershipLevelName') or '')
+            msg = f'verschenkt {count} Mitgliedschaften' if count else 'verschenkt Mitgliedschaften'
+            if level:
+                msg += f' ({level})'
+            return self._alert_payload(channel=channel, name=name, text=msg, event_type='youtube_gift', msg_id=msg_id, raw=item)
+
+        if low == 'giftmembershipreceivedevent':
+            details = snippet.get('giftMembershipReceivedDetails') if isinstance(snippet.get('giftMembershipReceivedDetails'), dict) else {}
+            giver = self._normalize_text(details.get('gifterChannelName') or '')
+            msg = f'erhält eine geschenkte Mitgliedschaft von {giver}' if giver else 'erhält eine geschenkte Mitgliedschaft'
+            return self._alert_payload(channel=channel, name=name, text=msg, event_type='youtube_gift', msg_id=msg_id, raw=item)
+
+        return None
+
     def _message_payload(self, item: dict[str, Any], channel: str) -> dict[str, Any] | None:
         msg_id = str(item.get('id') or '').strip()
         snippet = item.get('snippet') if isinstance(item.get('snippet'), dict) else {}
         author = item.get('authorDetails') if isinstance(item.get('authorDetails'), dict) else {}
         text_details = snippet.get('textMessageDetails') if isinstance(snippet.get('textMessageDetails'), dict) else {}
         text = self._normalize_text(snippet.get('displayMessage') or text_details.get('messageText') or '')
+        alert_payload = self._youtube_alert_from_snippet(item, channel, msg_id, snippet, author, text)
+        if alert_payload is not None:
+            return alert_payload
         if not text:
             return None
         name = str(author.get('displayName') or 'YouTube').strip().lstrip('@').strip()
@@ -1060,7 +1179,9 @@ class YouTubeChatPlugin(ThreadedPlugin):
             'message_id': msg_id,
             'message_type': 'chat',
             'type': 'chat',
-            'event_type': 'chat',
+            # Normale Chatnachrichten bleiben Chat fuer Bridge/AI/Desktop,
+            # duerfen aber nicht als Alert im Alert-Fenster landen.
+            'event_type': 'chat_no_alert',
             'source_plugin_id': self.plugin_id,
             'source': self.plugin_id,
             'published_at': str((snippet or {}).get('publishedAt') or '').strip(),

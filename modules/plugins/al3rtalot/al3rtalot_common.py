@@ -23,8 +23,12 @@ EVENT_LABELS = {
     "share": "Share",
     "subscribe": "Sub",
     "raid": "Raid",
+    "donation": "Donation",
+    "bits": "Bits",
     "member": "Member",
     "superchat": "Superchat",
+    "supersticker": "Supersticker",
+    "live_status": "Live-Status",
 }
 
 

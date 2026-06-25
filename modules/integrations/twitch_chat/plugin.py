@@ -74,7 +74,7 @@ _TWITCH_JOIN_BOT_LOGINS = {
 class TwitchChatPlugin(ThreadedPlugin):
     plugin_id = 'twitch_chat'
     display_name = 'Twitch Chat'
-    version = '1.7.9'
+    version = '1.8.1'
     description = 'Twitch chat via IRC with OAuth, viewer count polling, and inline emote rendering for Twitch/7TV/BTTV/FFZ.'
     def __init__(self) -> None:
         super().__init__()
@@ -701,7 +701,7 @@ class TwitchChatPlugin(ThreadedPlugin):
             self._processed_join_names = set(keep)
             self._processed_join_seen_at = {k: self._processed_join_seen_at.get(k, now) for k in keep}
 
-        self._emit_alert(host, channel, joined_name, 'ist dem Stream beigetreten', 'twitch_alert')
+        self._emit_alert(host, channel, joined_name, 'ist dem Stream beigetreten', 'twitch_join')
 
     def _handle_test_alert_command(self, host: PluginHost, channel: str, sender: str, message_text: str) -> bool:
         raw = self._normalize_chat_text(message_text)
@@ -1523,7 +1523,9 @@ class TwitchChatPlugin(ThreadedPlugin):
                                         'raw_tags': dict(tags),
                                         'message_type': 'chat',
                                         'type': 'chat',
-                                        'event_type': 'chat',
+                                        # Normale Chatnachrichten bleiben Chat fuer Bridge/AI/Desktop,
+                                        # duerfen aber nicht als Alert im Alert-Fenster landen.
+                                        'event_type': 'chat_no_alert',
                                         'source_plugin_id': self.plugin_id,
                                         'source': self.plugin_id,
                                         'show_in_desktop': True,

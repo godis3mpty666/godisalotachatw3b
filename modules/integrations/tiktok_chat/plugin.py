@@ -131,6 +131,7 @@ class _PendingAlert:
         last_update: float,
         count: int = 1,
         message_type: str = 'alert',
+        extra: dict[str, Any] | None = None,
     ) -> None:
         self.username = username
         self.text = text
@@ -139,6 +140,7 @@ class _PendingAlert:
         self.last_update = last_update
         self.count = count
         self.message_type = message_type
+        self.extra = dict(extra or {})
 
 
 class _CommandRowWidget(QtWidgets.QWidget):
@@ -637,7 +639,7 @@ class _SimpleMeldWebSocket:
 class TikTokChatPlugin(ThreadedPlugin):
     plugin_id = 'tiktok_chat'
     display_name = 'TikTok Chat'
-    version = '1.7.7.platform-settings'
+    version = '1.7.8.test-channel-alerts'
     description = 'TikTok chat read/write using central TikTok account data from core.'
 
     def __init__(self) -> None:
@@ -647,6 +649,7 @@ class TikTokChatPlugin(ThreadedPlugin):
         self._last_viewer_count: int | None = None
         self._last_is_live: bool | None = None
         self._last_valid_live_viewers: int | None = None
+        self._last_like_totals: dict[str, int] = {}
         self._host: PluginHost | None = None
         self._chat_commands_window: _ChatCommandsWindow | None = None
         self._recent_songrequest_comment_keys: dict[str, float] = {}
@@ -681,14 +684,16 @@ class TikTokChatPlugin(ThreadedPlugin):
             pass
 
     def stop(self, *args, **kwargs) -> None:
-        settings = self._settings if isinstance(self._settings, dict) else {}
-        for account in ('main', 'bot'):
-            try:
-                profile = self._account_profile_dir(settings, account)
-                port = self._debug_port(settings, account)
-                self._close_browser_profile_windows(profile, port)
-            except Exception:
-                pass
+        close_browser_windows = bool(kwargs.pop('close_browser_windows', False))
+        if close_browser_windows:
+            settings = self._settings if isinstance(self._settings, dict) else {}
+            for account in ('main', 'bot'):
+                try:
+                    profile = self._account_profile_dir(settings, account)
+                    port = self._debug_port(settings, account)
+                    self._close_browser_profile_windows(profile, port)
+                except Exception:
+                    pass
         try:
             super().stop(*args, **kwargs)
         except TypeError:
@@ -1044,10 +1049,27 @@ class TikTokChatPlugin(ThreadedPlugin):
         )
         bot_account = platform.get('bot_account') or platform.get('bot_username') or merged.get('bot_account') or ''
 
-        unique_id = self._normalize_unique_id(main_account)
+        test_channel_enabled = self._as_bool(
+            platform.get('test_channel_enabled'),
+            self._as_bool(platform.get('test_enabled'), False),
+        )
+        test_channel = (
+            platform.get('test_channel')
+            or platform.get('test_unique_id')
+            or platform.get('test_account')
+            or ''
+        )
+
+        unique_id = self._normalize_unique_id(test_channel if test_channel_enabled and str(test_channel or '').strip() else main_account)
+        main_unique_id = self._normalize_unique_id(main_account)
         if unique_id:
             merged['unique_id'] = unique_id
             merged['creator_unique_id'] = unique_id
+            merged['active_read_channel'] = unique_id
+        if main_unique_id:
+            merged['main_unique_id'] = main_unique_id
+        merged['test_channel_enabled'] = bool(test_channel_enabled)
+        merged['test_channel'] = self._normalize_unique_id(test_channel)
         if bot_account not in (None, ''):
             merged['bot_account'] = self._normalize_unique_id(bot_account)
 
@@ -1875,21 +1897,150 @@ class TikTokChatPlugin(ThreadedPlugin):
                     continue
         return default
 
+    def _like_count(self, event: Any, user_key: str = '') -> int:
+        # TikTokLive versions expose LikeEvent fields inconsistently. Some builds
+        # expose count=0 while the real delta sits in repeat_count/like_count or
+        # inside a dict-like payload. Scan all known delta fields and ignore zero
+        # values so one heart never becomes "0 Likes" in al3rtalot/desktop alerts.
+        def read_int(path: str) -> int:
+            current: Any = event
+            for part in path.split('.'):
+                if isinstance(current, dict):
+                    current = current.get(part)
+                else:
+                    current = getattr(current, part, None)
+                if current is None:
+                    return 0
+            try:
+                value = int(current)
+            except Exception:
+                return 0
+            return value if value > 0 else 0
+
+        delta_paths = (
+            'repeat_count', 'repeatCount', 'alert_count', 'event_count',
+            'increment', 'delta', 'like_delta', 'likeDelta',
+            'data.repeat_count', 'data.repeatCount', 'data.increment', 'data.delta',
+        )
+        for path in delta_paths:
+            value = read_int(path)
+            if value > 0:
+                return value
+
+        total_paths = (
+            'total', 'total_likes', 'totalLikes', 'total_like_count',
+            'data.total', 'data.total_likes', 'data.totalLikes', 'data.total_like_count',
+        )
+        user_key = str(user_key or self._user_handle(event) or '').strip().lower()
+        if user_key:
+            for path in total_paths:
+                total = read_int(path)
+                if total <= 0:
+                    continue
+                previous = int(self._last_like_totals.get(user_key) or 0)
+                self._last_like_totals[user_key] = max(previous, total)
+                if previous > 0 and total > previous:
+                    return total - previous
+
+        fallback_paths = (
+            'like_count', 'likeCount', 'count', 'likes',
+            'data.like_count', 'data.likeCount', 'data.count', 'data.likes',
+        )
+        for path in fallback_paths:
+            value = read_int(path)
+            if value > 0:
+                return value
+        return 1
+
+    def _debug_like_event_fields(self, host: PluginHost, event: Any, username: str, count: int) -> None:
+        parts: list[str] = []
+        for path in (
+            'count', 'likes', 'likeCount', 'like_count', 'repeat_count',
+            'repeatCount', 'alert_count', 'event_count', 'increment', 'delta',
+            'total', 'total_likes', 'totalLikes', 'total_like_count',
+        ):
+            current = event
+            ok = True
+            for part in path.split('.'):
+                current = getattr(current, part, None)
+                if current is None:
+                    ok = False
+                    break
+            if ok:
+                parts.append(f'{path}={current!r}')
+        try:
+            host.log(self.plugin_id, f'LIKE event: {username} sent {count} like(s)' + ((' | raw: ' + ', '.join(parts)) if parts else ''))
+        except Exception:
+            pass
+
     def _gift_name(self, event: Any) -> str:
-        gift = getattr(event, 'gift', None)
-        if gift is None:
-            return 'gift'
-        for attr in ('name', 'gift_name'):
-            value = getattr(gift, attr, None)
-            if value:
-                return str(value)
-        info = getattr(gift, 'info', None)
-        if info is not None:
-            for attr in ('name', 'gift_name'):
-                value = getattr(info, attr, None)
-                if value:
-                    return str(value)
-        return 'gift'
+        def pick(obj: Any, *attrs: str) -> str:
+            for attr in attrs:
+                current = obj
+                ok = True
+                for part in attr.split('.'):
+                    if isinstance(current, dict):
+                        current = current.get(part)
+                    else:
+                        current = getattr(current, part, None)
+                    if current in (None, ''):
+                        ok = False
+                        break
+                if ok:
+                    text = self._normalize_chat_text(current)
+                    if text:
+                        return text
+            return ''
+
+        for source in (
+            getattr(event, 'gift', None),
+            getattr(event, 'data', None),
+            event,
+        ):
+            if source is None:
+                continue
+            name = pick(
+                source,
+                'name',
+                'gift_name',
+                'giftName',
+                'display_name',
+                'displayName',
+                'label',
+                'title',
+                'describe',
+                'description',
+                'info.name',
+                'info.gift_name',
+                'info.giftName',
+                'extended_gift.name',
+                'extendedGift.name',
+                'gift.name',
+                'gift.gift_name',
+                'gift.giftName',
+            )
+            if name:
+                return name
+        return 'Gift'
+
+    def _gift_id(self, event: Any) -> str:
+        for source in (getattr(event, 'gift', None), getattr(event, 'data', None), event):
+            if source is None:
+                continue
+            for attr in ('id', 'gift_id', 'giftId', 'diamond_count', 'diamondCount', 'gift.id', 'gift.gift_id', 'gift.giftId'):
+                current = source
+                ok = True
+                for part in attr.split('.'):
+                    if isinstance(current, dict):
+                        current = current.get(part)
+                    else:
+                        current = getattr(current, part, None)
+                    if current in (None, ''):
+                        ok = False
+                        break
+                if ok:
+                    return str(current)
+        return ''
 
     def _resolve_event_key(self, *candidate_names: str, fallback: str) -> Any:
         lib_name = 'TikTok' + 'Live'
@@ -1939,6 +2090,13 @@ class TikTokChatPlugin(ThreadedPlugin):
         if not show_in_desktop and not show_in_obs and not should_bridge_alert and not metric_only_event and not should_dispatch_chat:
             return
 
+        # Normal TikTok chat must stay a chat row for the desktop/chat/bridge
+        # pipeline, but it must not be normalizable as an al3rtalot event.
+        # The host dispatches all platform chat input plugins to command/bridge
+        # plugins; al3rtalot also receives that stream. Giving normal comments a
+        # non-alert event_type keeps them out of the Alert panel while preserving
+        # message_type=chat for botalot/bridg3alot/modalot and the chat UI.
+        payload_event_type = 'chat_no_alert' if msg_type in {'chat', 'message', 'comment'} else message_type
         payload = {
             'platform': 'tiktok',
             'username': username,
@@ -1949,7 +2107,7 @@ class TikTokChatPlugin(ThreadedPlugin):
             'channel': channel,
             'message_type': message_type,
             'type': message_type,
-            'event_type': message_type,
+            'event_type': payload_event_type,
             'source_plugin_id': self.plugin_id,
             'show_in_desktop': show_in_desktop,
             'show_in_obs': show_in_obs,
@@ -2045,6 +2203,19 @@ class TikTokChatPlugin(ThreadedPlugin):
         }
         if extra:
             payload.update(extra)
+
+        # Keep all counter aliases positive after extra payload merge. al3rtalot
+        # uses different keys depending on event type/version; a raw zero from
+        # TikTokLive must not overwrite the normalized count.
+        for key in ('alert_count', 'event_count', 'increment', 'count'):
+            payload[key] = c
+        if message_type in {'tiktok_like', 'like'}:
+            payload['likes'] = c
+            payload['like_count'] = c
+            payload['likeCount'] = c
+        elif message_type in {'tiktok_gift', 'gift'}:
+            payload['gift_count'] = c
+
         self._emit_al3rtalot_bridge(host, payload)
 
     def _emit_viewer_count(self, host: PluginHost, channel: str, viewer_count: int, *, force: bool = False) -> None:
@@ -2336,7 +2507,7 @@ class TikTokChatPlugin(ThreadedPlugin):
             return f'tiktok_{kind}'
         return 'alert'
 
-    async def _queue_alert(self, key: str, username: str, text: str, channel: str, increment: int = 1) -> None:
+    async def _queue_alert(self, key: str, username: str, text: str, channel: str, increment: int = 1, extra: dict[str, Any] | None = None) -> None:
         message_type = self._message_type_from_alert_key(key)
         if self._pending_lock is None:
             self._pending_lock = asyncio.Lock()
@@ -2355,6 +2526,7 @@ class TikTokChatPlugin(ThreadedPlugin):
                     last_update=now,
                     count=max(1, int(increment)),
                     message_type=message_type,
+                    extra=dict(extra or {}),
                 )
             else:
                 existing.last_update = now
@@ -2363,6 +2535,8 @@ class TikTokChatPlugin(ThreadedPlugin):
                 existing.username = username
                 existing.channel = channel
                 existing.message_type = message_type
+                if extra:
+                    existing.extra.update(extra)
 
     async def _flush_pending_loop(self, host: PluginHost, aggregate_window: float, *, show_in_desktop: bool = True, show_in_obs: bool = True) -> None:
         while not self._stop.is_set():
@@ -2386,6 +2560,17 @@ class TikTokChatPlugin(ThreadedPlugin):
 
         for pending in ready:
             text = pending.text.format(count=pending.count)
+            extra_payload = dict(pending.extra or {})
+            extra_payload.update({
+                'alert_count': int(pending.count),
+                'event_count': int(pending.count),
+                'increment': int(pending.count),
+                'count': int(pending.count),
+                'likes': int(pending.count) if pending.message_type in {'tiktok_like', 'like'} else None,
+                'like_count': int(pending.count) if pending.message_type in {'tiktok_like', 'like'} else None,
+                'likeCount': int(pending.count) if pending.message_type in {'tiktok_like', 'like'} else None,
+                '_skip_direct_bridge': True,
+            })
             self._emit_message(
                 host,
                 username=pending.username,
@@ -2394,12 +2579,7 @@ class TikTokChatPlugin(ThreadedPlugin):
                 message_type=pending.message_type,
                 show_in_desktop=show_in_desktop,
                 show_in_obs=show_in_obs,
-                extra={
-                    'alert_count': int(pending.count),
-                    'event_count': int(pending.count),
-                    'increment': int(pending.count),
-                    '_skip_direct_bridge': True,
-                },
+                extra=extra_payload,
             )
 
     async def _viewer_refresh_loop(self, host: PluginHost, client: Any, channel: str, interval_seconds: float) -> None:
@@ -3247,7 +3427,8 @@ class TikTokChatPlugin(ThreadedPlugin):
             async def _on_like(event: Any):
                 username = self._user_name(event)
                 user_key = self._user_handle(event)
-                like_count = self._int_from_paths(event, 'count', 'like_count', 'likes', default=1)
+                like_count = self._like_count(event, user_key)
+                self._debug_like_event_fields(host, event, username, like_count)
                 self._bridge_alert_event(
                     host,
                     username=username,
@@ -3265,6 +3446,7 @@ class TikTokChatPlugin(ThreadedPlugin):
                 username = self._user_name(event)
                 user_key = self._user_handle(event)
                 gift_name = self._gift_name(event)
+                gift_id = self._gift_id(event)
 
                 streakable = bool(getattr(getattr(event, 'gift', None), 'streakable', False))
                 streaking = bool(getattr(event, 'streaking', False) or getattr(getattr(event, 'gift', None), 'streaking', False))
@@ -3280,11 +3462,18 @@ class TikTokChatPlugin(ThreadedPlugin):
                     channel=resolved_unique_id,
                     message_type='tiktok_gift',
                     count=gift_count,
-                    extra={'user_id': user_key, 'unique_id': user_key, 'alert_type': 'gift', 'gift_name': gift_name, 'gift_count': gift_count},
+                    extra={'user_id': user_key, 'unique_id': user_key, 'alert_type': 'gift', 'gift_name': gift_name, 'gift_id': gift_id, 'gift_count': gift_count},
                 )
                 if not enable_gifts:
                     return
-                await self._queue_alert(f'gift:{user_key}:{gift_name.lower()}', username, f'sent {{count}} x {gift_name}', resolved_unique_id, gift_count)
+                await self._queue_alert(
+                    f'gift:{user_key}:{gift_name.lower()}:{gift_id}',
+                    username,
+                    f'sent {{count}} x {gift_name}',
+                    resolved_unique_id,
+                    gift_count,
+                    extra={'gift_name': gift_name, 'gift_id': gift_id, 'gift_count': gift_count},
+                )
 
             async def _on_room_user_seq(event: Any):
                 viewer_count = self._extract_viewer_count_from_event(event)
@@ -3298,18 +3487,28 @@ class TikTokChatPlugin(ThreadedPlugin):
 
             self._register_listener(client, connect_event, _on_connect)
             self._register_listener(client, comment_event, _on_comment)
+            self._register_listener(client, follow_event, _on_follow)
+            self._register_listener(client, share_event, _on_share)
+            self._register_listener(client, join_event, _on_join)
+            self._register_listener(client, like_event, _on_like)
+            self._register_listener(client, gift_event, _on_gift)
             self._register_listener(client, room_user_seq_event, _on_room_user_seq)
             try:
-                self.log('TikTok Chat is running in chat-only mode; alerts are handled by al3rtalot.')
+                self.log('TikTok Chat is running with chat + alert event listeners; al3rtalot receives alert events directly.')
             except Exception:
                 pass
 
             host.set_status(self.plugin_id, PluginStatus('connecting', f'Connecting to {resolved_unique_id}'))
             self._emit_is_live(host, resolved_unique_id, False, force=True)
 
-            # Chat-only split: this plugin must not emit or flush alert messages.
-            # al3rtalot owns follows/likes/gifts/joins/shares and all alert routing.
-            flush_task = None
+            flush_task = asyncio.create_task(
+                self._flush_pending_loop(
+                    host,
+                    aggregate_window,
+                    show_in_desktop=show_alerts_in_desktop,
+                    show_in_obs=show_alerts_in_obs,
+                )
+            ) if alerts_visible_anywhere else None
 
             should_watch_again = False
             final_status_text: str | None = None

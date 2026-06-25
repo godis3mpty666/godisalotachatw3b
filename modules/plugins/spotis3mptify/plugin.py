@@ -32,6 +32,7 @@ def _main_data_dir(plugin_name: str) -> Path:
 
 DATA_DIR = _main_data_dir('spotis3mptify')
 AUTH_DIR = DATA_DIR / 'auth'
+CENTRAL_AUTH_DIR = DATA_DIR.parent / 'auth'
 CONFIG_DIR = DATA_DIR / 'config'
 NOWPLAYING_DIR = DATA_DIR / 'nowplaying'
 COVERS_DIR = DATA_DIR / 'covers'
@@ -47,7 +48,7 @@ LOCAL_CONFIG_FILE = CONFIG_DIR / 'spotis3mptify_plugin_config.json'
 
 
 def _ensure_data_dirs() -> None:
-    for path in (DATA_DIR, AUTH_DIR, CONFIG_DIR, NOWPLAYING_DIR, COVERS_DIR, PLAYLISTS_DIR, STATE_DIR, EXPORT_DIR, CERTS_DIR, YOUTUBE_DIR):
+    for path in (DATA_DIR, AUTH_DIR, CENTRAL_AUTH_DIR, CONFIG_DIR, NOWPLAYING_DIR, COVERS_DIR, PLAYLISTS_DIR, STATE_DIR, EXPORT_DIR, CERTS_DIR, YOUTUBE_DIR):
         try:
             path.mkdir(parents=True, exist_ok=True)
         except Exception:
@@ -575,6 +576,7 @@ class Spotis3mptifyPlugin(ProviderPlugin):
             'data_dir': str(DATA_DIR),
             'tokens_dir': str(AUTH_DIR),
             'auth_dir': str(AUTH_DIR),
+            'central_spotify_token_file': str(CENTRAL_AUTH_DIR / 'spotify_main.json'),
             'config_dir': str(CONFIG_DIR),
             'nowplaying_dir': str(NOWPLAYING_DIR),
             'cover_dir': str(COVERS_DIR),

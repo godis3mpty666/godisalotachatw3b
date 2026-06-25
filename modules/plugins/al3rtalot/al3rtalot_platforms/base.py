@@ -45,23 +45,74 @@ class BaseAlertPlatform:
         if event_type.startswith(self.platform + "_"):
             event_type = event_type[len(self.platform) + 1:]
         event_aliases = {
+            # normaler Chat darf im Alertplugin nicht versehentlich als Alert landen.
+            # Die Chat-Integrationen markieren normalen Chat inzwischen als chat_no_alert.
+            "chat_no_alert": "chat_no_alert",
+            "message_no_alert": "chat_no_alert",
+            "comment_no_alert": "chat_no_alert",
+
             "message": "chat",
             "comment": "chat",
+
             "follower": "follow",
             "new_follow": "follow",
             "new_follower": "follow",
+            "followed": "follow",
+
             "sub": "subscribe",
             "subscription": "subscribe",
+            "subscriber": "subscribe",
+            "new_subscriber": "subscribe",
+            "new_subscription": "subscribe",
+            "resub": "subscribe",
+            "resubscribe": "subscribe",
+
             "member": "member",
             "membership": "member",
+            "new_member": "member",
+            "sponsor": "member",
+            "new_sponsor": "member",
+            "member_milestone": "member",
+
             "viewer_join": "join",
+            "viewer_joined": "join",
             "user_join": "join",
+            "user_joined": "join",
             "joiner": "join",
+            "joined": "join",
+            "chat_join": "join",
+            "chat_joined": "join",
+
             "likes": "like",
+            "gifted_likes": "like",
+            "like_count": "like",
+
             "gifts": "gift",
+            "gifted": "gift",
+            "gift_sub": "gift",
+            "gift_subs": "gift",
+            "gifted_sub": "gift",
+            "gifted_subs": "gift",
+            "subscription_gift": "gift",
+
             "shares": "share",
+            "shared": "share",
+
             "super_chat": "superchat",
             "super-chat": "superchat",
+            "super_chat_event": "superchat",
+            "superchat_event": "superchat",
+
+            "super_sticker": "supersticker",
+            "super-sticker": "supersticker",
+            "supersticker_event": "supersticker",
+            "super_sticker_event": "supersticker",
+
+            "donate": "donation",
+            "donated": "donation",
+            "tip": "donation",
+            "cheer": "bits",
+            "bit": "bits",
         }
         event_type = event_aliases.get(event_type, event_type)
         if event_type in {"message", "comment"}:
@@ -79,6 +130,7 @@ class BaseAlertPlatform:
             0,
             0,
         )
+        gift_name = clean_text(msg.get("gift_name") or msg.get("giftName") or msg.get("gift") or "")
         raw = msg.get("raw") if isinstance(msg.get("raw"), dict) else {}
         return {
             "platform": self.platform,
@@ -86,6 +138,7 @@ class BaseAlertPlatform:
             "username": username,
             "text": text,
             "amount": amount,
+            "gift_name": gift_name,
             "channel": clean_text(msg.get("channel") or ""),
             "message_id": clean_text(msg.get("message_id") or msg.get("id") or ""),
             "raw": raw,
@@ -95,6 +148,8 @@ class BaseAlertPlatform:
         if not self.enabled(settings):
             return False
         event_type = clean_text(event.get("event_type") or "chat").lower()
+        if event_type == "chat_no_alert":
+            return False
         if event_type not in self.supported_events:
             return False
         if not self.event_enabled(settings, event_type):
@@ -120,6 +175,7 @@ class BaseAlertPlatform:
             "user": user,
             "text": text,
             "amount": amount,
+            "gift_name": clean_text(event.get("gift_name")),
             "channel": clean_text(event.get("channel")),
         }
         line = render_template(template, data)

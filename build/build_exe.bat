@@ -2,8 +2,8 @@
 setlocal
 cd /d "%~dp0.."
 
-set DATA_EXCLUDE_DIRS=__pycache__ Cache "Code Cache" GPUCache GrShaderCache ShaderCache BrowserMetrics optimization_guide_model_store Crashpad DawnCache blob_storage
-set DATA_EXCLUDE_FILES=__init__.py paths.py .gitkeep
+set DATA_EXCLUDE_DIRS=__pycache__ ui_browser_profile Cache "Code Cache" GPUCache GrShaderCache ShaderCache BrowserMetrics optimization_guide_model_store Crashpad DawnCache blob_storage
+set DATA_EXCLUDE_FILES=__init__.py paths.py .gitkeep ui_browser_profile.zip
 
 if /I not "%~1"=="/Y" (
     choice /C JN /N /M "Aenderungen als EXE bauen und danach starten? [J/N] "
@@ -40,7 +40,7 @@ if exist "dist\webbased\data" (
     if errorlevel 8 goto :fail
 )
 if exist "temp\root_auth_backup" (
-    powershell -NoProfile -ExecutionPolicy Bypass -Command "$backup='temp\root_auth_backup'; $auth='data\auth'; $settings='data\settings.json'; $cfg=$null; if(Test-Path $settings){ try{ $cfg=Get-Content $settings -Raw | ConvertFrom-Json } catch{} }; New-Item -ItemType Directory -Force -Path $auth | Out-Null; Get-ChildItem $backup -Filter *.json -ErrorAction SilentlyContinue | ForEach-Object { $stem=$_.BaseName.ToLower(); $parts=$stem -split '_'; $skip=$false; if($parts.Count -ge 2 -and $cfg -and $cfg.platforms){ $platform=($parts[0]); $account=($parts[-1]); $pcfg=$cfg.platforms.$platform; if($pcfg){ if($account -eq 'main' -and $pcfg.main_disconnected_at){ $skip=$true }; if($account -eq 'bot' -and $pcfg.bot_disconnected_at){ $skip=$true } } }; if($skip){ return }; $dst=Join-Path $auth $_.Name; $has=$false; if(Test-Path $dst){ try{ $j=Get-Content $dst -Raw | ConvertFrom-Json; if($j.access_token -or $j.refresh_token){ $has=$true } } catch{} }; if(-not $has){ Copy-Item $_.FullName $dst -Force } }"
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "$backup='temp\root_auth_backup'; $auth='data\auth'; $settings='data\settings.json'; $cfg=$null; if(Test-Path $settings){ try{ $cfg=Get-Content $settings -Raw | ConvertFrom-Json } catch{} }; New-Item -ItemType Directory -Force -Path $auth | Out-Null; Get-ChildItem $backup -Filter *.json -ErrorAction SilentlyContinue | ForEach-Object { $stem=$_.BaseName.ToLower(); $parts=$stem -split '_'; $skip=$false; if($parts.Count -ge 2 -and $cfg -and $cfg.platforms){ $platform=($parts[0]); $account=($parts[-1]); $pcfg=$cfg.platforms.$platform; if($pcfg){ if($account -eq 'main' -and $pcfg.main_disconnected_at){ $skip=$true }; if($account -eq 'bot' -and $pcfg.bot_disconnected_at){ $skip=$true } } }; if($skip){ return }; $dst=Join-Path $auth $_.Name; $copy=$false; $src=$null; $cur=$null; try{ $src=Get-Content $_.FullName -Raw | ConvertFrom-Json } catch{}; if($src -and ($src.access_token -or $src.refresh_token)){ if(Test-Path $dst){ try{ $cur=Get-Content $dst -Raw | ConvertFrom-Json } catch{} }; if(-not ($cur -and ($cur.access_token -or $cur.refresh_token))){ $copy=$true } else { $srcSaved=0.0; $curSaved=0.0; try{ if($src.saved_at){ $srcSaved=[double]$src.saved_at } } catch{}; try{ if($cur.saved_at){ $curSaved=[double]$cur.saved_at } } catch{}; if($srcSaved -gt ($curSaved + 1.0)){ $copy=$true } } }; if($copy){ Copy-Item $_.FullName $dst -Force } }"
 )
 
 if exist dist rmdir /s /q dist
@@ -84,10 +84,13 @@ robocopy "data" "dist\webbased\data" /E /R:5 /W:1 /XD %DATA_EXCLUDE_DIRS% /XF %D
 if errorlevel 8 goto :fail
 if not exist "dist\webbased\data\plugins" mkdir "dist\webbased\data\plugins"
 
-rem Chromium legt in den portablen Browserprofilen grosse, jederzeit neu erzeugbare
-rem Cache-, Safe-Browsing- und Telemetriedaten ab. Cookies, Local State und Tokens
-rem bleiben bewusst erhalten; nur diese entbehrlichen Laufzeitdaten werden entfernt.
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$data=(Resolve-Path 'dist\webbased\data').Path; $names=@('Cache','Code Cache','GPUCache','GrShaderCache','ShaderCache','BrowserMetrics','optimization_guide_model_store','Crashpad','blob_storage','Safe Browsing','extensions_crx_cache','component_crx_cache'); Get-ChildItem -LiteralPath $data -Directory -Recurse -Force | Where-Object { $names -contains $_.Name } | Sort-Object FullName -Descending | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue; Get-ChildItem -LiteralPath $data -File -Recurse -Force -Filter '*.pma' | Remove-Item -Force -ErrorAction SilentlyContinue"
+rem Das isolierte Chrome/Edge-Profil fuer die Haupt-UI wird sehr schnell gross.
+rem Fuer die WebUI reichen Local State und die Default-Preferences; alles andere
+rem wird von Chromium beim naechsten Start neu erzeugt.
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$src=Join-Path (Resolve-Path 'data').Path 'ui_browser_profile'; $dst=Join-Path (Resolve-Path 'dist\webbased\data').Path 'ui_browser_profile'; if(Test-Path $dst){ Remove-Item -LiteralPath $dst -Recurse -Force -ErrorAction SilentlyContinue }; New-Item -ItemType Directory -Force -Path (Join-Path $dst 'Default') | Out-Null; $keep=@('Local State','Last Browser','Last Version','Variations','Default\Preferences','Default\Secure Preferences'); foreach($rel in $keep){ $from=Join-Path $src $rel; if(Test-Path -LiteralPath $from){ $to=Join-Path $dst $rel; New-Item -ItemType Directory -Force -Path (Split-Path $to -Parent) | Out-Null; Copy-Item -LiteralPath $from -Destination $to -Force -ErrorAction SilentlyContinue } }; $zip=Join-Path (Resolve-Path 'dist\webbased\data').Path 'ui_browser_profile.zip'; if(Test-Path $zip){ Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue }"
+
+rem Safety net fuer andere Chromium-Laufzeitdaten ausserhalb des UI-Profils.
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$data=(Resolve-Path 'dist\webbased\data').Path; $names=@('Cache','Code Cache','GPUCache','GrShaderCache','ShaderCache','BrowserMetrics','optimization_guide_model_store','Crashpad','blob_storage','Safe Browsing','extensions_crx_cache','component_crx_cache','GPUPersistentCache','DawnCache','DawnGraphiteCache','DawnWebGPUCache'); Get-ChildItem -LiteralPath $data -Directory -Recurse -Force | Where-Object { $names -contains $_.Name } | Sort-Object FullName -Descending | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue; Get-ChildItem -LiteralPath $data -File -Recurse -Force -Filter '*.pma' | Remove-Item -Force -ErrorAction SilentlyContinue"
 
 if exist temp rmdir /s /q temp
 set ERRORLEVEL=0

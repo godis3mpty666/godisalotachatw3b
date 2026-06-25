@@ -9,7 +9,7 @@ let shutdownInProgress = false;
 
 function nav(active){
   const items = [
-    ["dashboard","Dashboard","/"],["platforms","Plattformen","/plattformen"],["chat","Chat","/chat"],
+    ["dashboard","Dashboard","/"],["platforms","Plattformen","/plattformen"],["chat","Chat","/chat"],["obs_meld","OBS/Meld Integration","/obs-meld-integration"],
     ["spotify","Spotis3mptify","/spotis3mptify"],["overlays","Overlay URLs","/overlays"],["plugins","Plugins","/plugins"],["dev","DEV","/dev"]
   ];
   return `<aside class="sidebar"><div class="brand"><div class="logo"></div><div><h1>godisalotachat</h1><div class="ver">Ver. ${window.WEB_VERSION}</div></div><div class="webbased">webbased</div></div><nav class="nav">${items.map(i=>`<a class="${active===i[0]?'active':''}" href="${i[2]}">${i[1]}</a>`).join("")}</nav></aside>`;
@@ -306,7 +306,7 @@ function normalizeObsFields(form){
 }
 function sel(name,label,val){return `<label><div>${label}</div><select name="${name}"><option value="false" ${!val?'selected':''}>Nein</option><option value="true" ${val?'selected':''}>Ja</option></select></label>`;}
 function platformForm(p,cfg){
-  if(p==="tiktok") return `<form class="platformForm" data-platform="${p}">${sel("enabled","Aktiv",cfg.enabled)}${sel("autoconnect","Autoconnect",cfg.autoconnect ?? true)}${field("main","Main/Kanal",cfg.main)}${field("bot","Botaccount",cfg.bot)}<div class="hint">TikTok nutzt getrennte gespeicherte Browserprofile für Main und Bot. Es gibt keine Redirect URL. Beim Login öffnet sich die TikTok-Anmeldeseite, dort kannst du dich z.B. per QR-Code anmelden.</div><div class="btnLine"><button type="submit">Speichern</button><button type="button" class="btn tiktokLogin" data-account="main">Main anmelden</button><button type="button" class="btn tiktokLogin" data-account="bot">Bot anmelden</button><button type="button" class="secondary disconnect" data-platform="${p}" data-account="main">Main trennen</button><button type="button" class="secondary disconnect" data-platform="${p}" data-account="bot">Bot trennen</button><span class="small">Status: ${esc(cfg.status||"nicht verbunden")}${cfg.detail ? " · "+esc(cfg.detail) : ""}</span></div></form>`;
+  if(p==="tiktok") return `<form class="platformForm" data-platform="${p}">${sel("enabled","Aktiv",cfg.enabled)}${sel("autoconnect","Autoconnect",cfg.autoconnect ?? true)}${field("main","Main/Kanal",cfg.main)}${field("bot","Botaccount",cfg.bot)}<div class="platformSubBox"><b>Testkanal / Fremd-Live lesen</b>${sel("test_channel_enabled","Testkanal aktiv",cfg.test_channel_enabled ?? false)}${field("test_channel","Testkanal ohne @",cfg.test_channel || "")}<div class="hint">Wenn aktiv, liest das TikTok-Chatplugin Chat, Joins, Likes, Gifts, Follows und Shares aus diesem Kanal. So kannst du Alerts testen, ohne mit deinem eigenen Account live zu gehen. Der angegebene Kanal muss selbst gerade live sein.</div></div><div class="hint">TikTok nutzt getrennte gespeicherte Browserprofile für Main und Bot. Es gibt keine Redirect URL. Beim Login öffnet sich die TikTok-Anmeldeseite, dort kannst du dich z.B. per QR-Code anmelden.</div><div class="btnLine"><button type="submit">Speichern</button><button type="button" class="btn tiktokLogin" data-account="main">Main anmelden</button><button type="button" class="btn tiktokLogin" data-account="bot">Bot anmelden</button><button type="button" class="secondary disconnect" data-platform="${p}" data-account="main">Main trennen</button><button type="button" class="secondary disconnect" data-platform="${p}" data-account="bot">Bot trennen</button><span class="small">Status: ${esc(cfg.status||"nicht verbunden")}${cfg.detail ? " · "+esc(cfg.detail) : ""}</span></div></form>`;
   if(p==="meld") return `<form class="platformForm" data-platform="${p}">${sel("enabled","Aktiv",cfg.enabled)}${sel("autoconnect","Autoconnect",cfg.autoconnect ?? true)}${field("host","Host",cfg.host || "127.0.0.1")}${field("port","Port",cfg.port || "13376")}<div class="hint">Meld Studio braucht keine Anmeldedaten. Wie im Original wird nur per lokalem WebSocket verbunden.</div><div class="btnLine"><button type="submit">Speichern</button><button type="button" class="secondary testMeld">Verbindung testen</button><span class="small">Status: ${esc(cfg.status||"nicht verbunden")}${cfg.detail ? " · "+esc(cfg.detail) : ""}</span></div></form>`;
   if(p==="obs") return `<form class="platformForm" data-platform="${p}">${sel("enabled","Aktiv",cfg.enabled)}${sel("autoconnect","Autoconnect",cfg.autoconnect ?? true)}${field("host","Host",cfg.host || "127.0.0.1")}${field("port","Port",cfg.port || "4455")}${field("password","Passwort",cfg.password,"password")}<div class="hint">OBS WebSocket Standard: <b>ws://127.0.0.1:4455</b>. In OBS muss unter <b>Werkzeuge &gt; WebSocket-Servereinstellungen</b> der WebSocket-Server aktiviert sein.</div><div class="btnLine"><button type="submit">Speichern</button><button type="button" class="secondary testObs">Verbindung testen</button><span class="small">Status: ${esc(cfg.status||"nicht verbunden")}${cfg.detail ? " · "+esc(cfg.detail) : ""}</span></div></form>`;
   if(p==="spotify") return `<form class="platformForm" data-platform="${p}">${sel("enabled","Aktiv",cfg.enabled)}${sel("autoconnect","Autoconnect",cfg.autoconnect ?? true)}${field("client_id","Client ID",cfg.client_id)}${field("client_secret","Client Secret",cfg.client_secret,"password")}${redirectFieldOnly("Redirect URI",cfg.redirect_uri || "http://127.0.0.1:5173/callback")}<div class="hint">Spotify braucht keinen Accountnamen. Die Redirect URI ist manuell einstellbar und wird genau so für OAuth benutzt.</div><div class="btnLine"><button type="submit">Speichern</button><a class="btn login" data-platform="${p}" data-account="main" href="#">Spotify anmelden</a><button type="button" class="secondary disconnect" data-platform="${p}" data-account="main">Trennen</button>${devButton(p)}<span class="small">Status: ${esc(cfg.status||"nicht verbunden")}</span></div></form>`;
@@ -329,8 +329,12 @@ async function renderPlatforms(){
       if(pf === "tiktok"){
         settingsCache.platforms[pf].main_account = (settingsCache.platforms[pf].main || "").replace(/^@/, "");
         settingsCache.platforms[pf].bot_account = (settingsCache.platforms[pf].bot || "").replace(/^@/, "");
+        settingsCache.platforms[pf].test_channel = (settingsCache.platforms[pf].test_channel || "").replace(/^@/, "");
         settingsCache.platforms[pf].unique_id = settingsCache.platforms[pf].main_account;
-        settingsCache.platforms[pf].live_url = settingsCache.platforms[pf].main_account ? `https://www.tiktok.com/@${settingsCache.platforms[pf].main_account}/live` : "";
+        const testEnabled = settingsCache.platforms[pf].test_channel_enabled === "true" || settingsCache.platforms[pf].test_channel_enabled === true;
+        const readChannel = testEnabled && settingsCache.platforms[pf].test_channel ? settingsCache.platforms[pf].test_channel : settingsCache.platforms[pf].main_account;
+        settingsCache.platforms[pf].active_read_channel = readChannel || "";
+        settingsCache.platforms[pf].live_url = readChannel ? `https://www.tiktok.com/@${readChannel}/live` : "";
         settingsCache.platforms[pf].resolved_live_url = settingsCache.platforms[pf].live_url;
       }
       if(pf === "meld"){ delete settingsCache.platforms[pf].password; }
@@ -377,8 +381,12 @@ async function renderPlatforms(){
     applyFormValues(settingsCache.platforms.tiktok, form);
     settingsCache.platforms.tiktok.main_account = (settingsCache.platforms.tiktok.main || "").replace(/^@/, "");
     settingsCache.platforms.tiktok.bot_account = (settingsCache.platforms.tiktok.bot || "").replace(/^@/, "");
+    settingsCache.platforms.tiktok.test_channel = (settingsCache.platforms.tiktok.test_channel || "").replace(/^@/, "");
     settingsCache.platforms.tiktok.unique_id = settingsCache.platforms.tiktok.main_account;
-    settingsCache.platforms.tiktok.live_url = settingsCache.platforms.tiktok.main_account ? `https://www.tiktok.com/@${settingsCache.platforms.tiktok.main_account}/live` : "";
+    const testEnabled = settingsCache.platforms.tiktok.test_channel_enabled === "true" || settingsCache.platforms.tiktok.test_channel_enabled === true;
+    const readChannel = testEnabled && settingsCache.platforms.tiktok.test_channel ? settingsCache.platforms.tiktok.test_channel : settingsCache.platforms.tiktok.main_account;
+    settingsCache.platforms.tiktok.active_read_channel = readChannel || "";
+    settingsCache.platforms.tiktok.live_url = readChannel ? `https://www.tiktok.com/@${readChannel}/live` : "";
     settingsCache.platforms.tiktok.resolved_live_url = settingsCache.platforms.tiktok.live_url;
     await api("/api/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(settingsCache)});
     const res=await api(`/api/tiktok/open/${b.dataset.account || "main"}`);
@@ -412,14 +420,116 @@ async function renderPlatforms(){
 async function renderChat(){
   const [layout,state]=await Promise.all([api("/api/desktop-chat/layout"),api("/api/desktop-chat/state")]);
   const style=layout.style||{};
+  const alerts=layout.alerts||{}, alertPlatforms=alerts.platforms||{};
   queueMicrotask(()=>{const edit=$(".editDesktopChat");if(!edit||$(".closeDesktopChat"))return;const reset=document.createElement("button");reset.className="secondary resetDesktopChat";reset.textContent="Desktopfenster zuruecksetzen";reset.onclick=async()=>{if(!confirm("Desktopfenster auf Standardposition und -groesse zuruecksetzen?"))return;const r=await api("/api/desktop-chat/reset",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"});if(!r.ok)alert(r.error||"Desktopfenster konnte nicht zurueckgesetzt werden");};const close=document.createElement("button");close.className="secondary closeDesktopChat";close.textContent="Desktopfenster schliessen";close.onclick=async()=>{const r=await api("/api/desktop-chat/close",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"});if(!r.ok)alert(r.error||"Desktopfenster konnte nicht geschlossen werden");};edit.before(reset,close);});
   shell("chat","Chat","Gemeinsamer Chat für Dashboard, Browserquelle und Desktopfenster.",`<div class="btnLine"><button class="openDesktopChat">Desktopfenster öffnen</button><button class="secondary editDesktopChat">${state.editing?"Bearbeitung beenden":"Desktopfenster editieren"}</button><a class="btn secondary" href="/chat-browser" target="_blank">Browserfenster öffnen</a></div><section class="card desktopSettings"><h3>Desktopfenster Darstellung</h3><div class="platformForm"><label><div>Hintergrund</div><input name="background" type="color" value="${esc(style.background||"#0d101d")}"></label><label><div>Transparenz</div><input name="opacity" type="range" min="0" max="100" value="${esc(style.opacity??82)}"></label><label><div>Radien</div><input name="radius" type="range" min="0" max="100" value="${esc(style.radius??16)}"></label>${field("fontFamily","Schriftart",style.fontFamily||"Segoe UI")}${field("fontSize","Schriftgröße",style.fontSize||16,"number")}<label><div>Schriftfarbe</div><input name="textColor" type="color" value="${esc(style.textColor||"#ffffff")}"></label><label><div>Desktopfenster beim Toolstart öffnen</div><input class="desktopAutoStart" type="checkbox" ${layout.autoStart?"checked":""}></label></div></section><section class="card chatBox"><div class="messages" id="messages"></div><div class="sendRow"><input id="testmsg" placeholder="Testnachricht ins Overlay schicken"><button id="sendMsg">Senden</button></div></section>`);
+  const alertSettings=document.createElement("section");alertSettings.className="card desktopSettings";alertSettings.innerHTML=`<h3>Alertbereich im Desktopfenster</h3><div class="platformForm"><label><div>Alertbereich anzeigen</div><input class="alertEnabled" type="checkbox" ${alerts.enabled!==false?"checked":""}></label><label><div>Alerts gleichzeitig</div><input class="alertMaxItems" type="number" min="1" max="20" value="${esc(alerts.maxItems??5)}"></label><label><div>Uhrzeit anzeigen</div><input class="alertTimestamp" type="checkbox" ${alerts.showTimestamp!==false?"checked":""}></label><div class="hint">Im Bearbeitungsmodus ist „Alerts“ ein eigenes, frei verschiebbares Element. Welche Eventtypen entstehen, wird weiterhin im Alert-Plugin je Plattform gesteuert.</div><div class="alertPlatformToggles">${["twitch","tiktok","youtube","kick"].map(p=>`<label>${platformBadge(p)} <span>${platformLabel(p)}</span><input class="alertPlatform" data-platform="${p}" type="checkbox" ${alertPlatforms[p]!==false?"checked":""}></label>`).join("")}</div></div>`;$(".chatBox").before(alertSettings);
   $(".openDesktopChat").onclick=async()=>{const r=await api("/api/desktop-chat/open",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"});if(!r.ok)alert(r.error||"Desktopfenster konnte nicht geöffnet werden");};
   $(".editDesktopChat").onclick=async()=>{const next=!state.editing;await api("/api/desktop-chat/edit",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({editing:next})});state.editing=next;$(".editDesktopChat").textContent=next?"Bearbeitung beenden":"Desktopfenster editieren";};
   $$(".desktopSettings input[name]").forEach(input=>input.oninput=async()=>{const next=structuredClone(layout);next.style=next.style||{};next.style[input.name]=input.type==="range"||input.type==="number"?Number(input.value):input.value;await api("/api/desktop-chat/layout",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(next)});Object.assign(layout,next);});
   $(".desktopAutoStart").onchange=async e=>{const next=structuredClone(layout);next.autoStart=e.target.checked;await api("/api/desktop-chat/layout",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(next)});Object.assign(layout,next);};
+  const saveAlertSettings=async()=>{const next=structuredClone(layout);next.alerts={enabled:$(".alertEnabled").checked,maxItems:Number($(".alertMaxItems").value)||5,showTimestamp:$(".alertTimestamp").checked,platforms:Object.fromEntries($$(".alertPlatform").map(input=>[input.dataset.platform,input.checked]))};const r=await api("/api/desktop-chat/layout",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(next)});if(r.ok)Object.assign(layout,next);};
+  $$(".alertEnabled,.alertTimestamp,.alertPlatform").forEach(input=>input.onchange=saveAlertSettings);$(".alertMaxItems").onchange=saveAlertSettings;
   $("#sendMsg").onclick=async()=>{let v=$("#testmsg").value.trim(); if(!v)return; await api("/api/message",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({text:v})}); $("#testmsg").value=""; refreshMessages();};
   refreshMessages();
+}
+async function renderObsMeld(){
+  const [settings,targetData]=await Promise.all([api("/api/settings"),api("/api/automation/targets")]);
+  const rules=Array.isArray(settings.automation_rules)?settings.automation_rules:[];
+  const targets=targetData.targets||{};
+  const values={tiktok:[["latest_follow","Neuester Follow"],["top_liker","Top-Liker"],["top_gifter","Top-Gifter"],["latest_gift","Neuestes Gift"],["like_total","Like-Zähler"]],twitch:[["latest_follow","Neuester Follow"],["latest_subscribe","Neuester Sub"],["latest_raid","Letzter Raid"],["latest_donation","Letzte Donation"],["latest_bits","Letzte Bits"]],youtube:[["latest_member","Neuestes Mitglied"],["latest_superchat","Letzter Superchat"]],kick:[["latest_follow","Neuester Follow"],["latest_subscribe","Neuester Sub"]]};
+  const option=(items,selected="")=>items.map(([v,l])=>`<option value="${esc(v)}" ${v===selected?"selected":""}>${esc(l)}</option>`).join("");
+  const targetOptions=Object.entries(targets).map(([key,value])=>[key,`${key.toUpperCase()}${value.connected?"":" (nicht verbunden)"}`]);
+  const textActions=new Set(["text"]);
+  const isTextRule=r=>textActions.has(String(r?.action||"text").toLowerCase());
+  const isShowRule=r=>String(r?.action||"").toLowerCase()==="show";
+  const isLikeCounterRule=r=>String(r?.platform||"").toLowerCase()==="tiktok"&&String(r?.value||"").toLowerCase()==="like_total";
+  const savedLikeUsers=()=>[...new Set(rules.map(r=>String(r?.likeUser||r?.like_user||"").trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
+  const defaultPreview=r=>{
+    const label=(values[r.platform]||[]).find(x=>x[0]===r.value)?.[1]||r.value||"Wert";
+    if(isLikeCounterRule(r))return `Test: ${String(r.likeUser||"Chatter")} · Intervall ${Number(r.likeThreshold||0)||1} Likes`;
+    return `Test: ${label}`;
+  };
+  const persistRules=async()=>{
+    settings.automation_rules=rules;
+    return await api("/api/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(settings)});
+  };
+
+  shell("obs_meld","OBS/Meld Integration","Dauerhafte Live-Werte gezielt in eine OBS- oder Meld-Quelle schreiben.",`<section class="card integrationBuilder"><h3>Neuen Eintrag anlegen</h3><div class="integrationFlow"><label><div>1 · Plattform</div><select id="rulePlatform">${option([["tiktok","TikTok"],["twitch","Twitch"],["youtube","YouTube"],["kick","Kick"]])}</select></label><label><div>2 · Live-Wert</div><select id="ruleValue"></select></label><label><div>3 · Ausgabe</div><select id="ruleTarget">${option(targetOptions)}</select></label><label><div>4 · Szene</div><select id="ruleScene"></select></label><label><div>5 · Quelle</div><select id="ruleSource"></select></label></div><div class="integrationName"><label><div>Name dieses Eintrags</div><input id="ruleName" placeholder="z. B. TikTok Like-Zähler Aktion"></label><div class="btnLine"><button id="saveRule">Speichern</button><button class="secondary" id="clearRule">Ändern abbrechen</button></div></div></section><section class="card"><h3>Gespeicherte Einträge</h3><div id="ruleList" class="ruleList"></div></section>`);
+  const reloadButton=document.createElement("button");
+  reloadButton.className="secondary targetReload";
+  reloadButton.textContent="Szenen & Quellen neu laden";
+  reloadButton.onclick=async()=>{await api("/api/automation/reload-targets",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"});setTimeout(renderObsMeld,900);};
+  $(".integrationBuilder").append(reloadButton);
+
+  const actionField=document.createElement("label");
+  actionField.innerHTML=`<div>6 · Aktion</div><select id="ruleAction"><option value="text">Live-Wert als Text schreiben</option><option value="show">Quelle einblenden</option><option value="hide">Quelle ausblenden</option><option value="play">Quelle einmal abspielen</option><option value="scene">Szene aktivieren</option></select>`;
+  $(".integrationFlow").append(actionField);
+  const likeCounterField=document.createElement("div");
+  likeCounterField.className="likeCounterFields";
+  likeCounterField.innerHTML=`<label><div>Chatter</div><input id="ruleLikeUser" list="ruleLikeUserList" placeholder="TikTok-Name exakt eingeben"></label><label><div>Auslösen alle X Likes</div><input id="ruleLikeThreshold" type="number" min="1" step="1" value="10"></label><datalist id="ruleLikeUserList"></datalist><div class="hint">Gilt nur für TikTok Like-Zähler: Die Aktion läuft wiederkehrend bei jedem Intervall dieses Users, z. B. 50, 100, 150 Likes.</div>`;
+  $(".integrationFlow").append(likeCounterField);
+  const hideSecondsField=document.createElement("label");
+  hideSecondsField.className="hideSecondsField";
+  hideSecondsField.innerHTML=`<div>Nach X Sekunden ausblenden</div><input id="ruleHideSeconds" type="number" min="0" max="3600" step="0.1" value="4"><div class="hint">0 = nicht automatisch ausblenden.</div>`;
+  $(".integrationFlow").append(hideSecondsField);
+  const startupField=document.createElement("label");
+  startupField.className="textStartupField";
+  startupField.innerHTML=`<div>Text beim Toolstart</div><select id="ruleStartup"><option value="keep">Letzten Wert behalten</option><option value="placeholder">Platzhalter anzeigen</option></select>`;
+  $(".integrationFlow").append(startupField);
+  const placeholderField=document.createElement("label");
+  placeholderField.className="textPlaceholderField";
+  placeholderField.innerHTML=`<div>Platzhalter</div><input id="rulePlaceholder" value="---" placeholder="z. B. Noch keine Daten">`;
+  $(".integrationFlow").append(placeholderField);
+
+  const fillLikeUserList=()=>{$("#ruleLikeUserList").innerHTML=savedLikeUsers().map(x=>`<option value="${esc(x)}"></option>`).join("");};
+  const selectedIsLikeCounter=()=>$("#rulePlatform").value==="tiktok"&&$("#ruleValue").value==="like_total";
+  const toggleTextOptions=()=>{const action=$("#ruleAction").value,text=action==="text",placeholder=$("#ruleStartup").value==="placeholder";startupField.hidden=!text;placeholderField.hidden=!text||!placeholder;likeCounterField.hidden=!selectedIsLikeCounter();hideSecondsField.hidden=action!=="show";};
+  $("#ruleAction").onchange=toggleTextOptions;$("#ruleStartup").onchange=toggleTextOptions;
+
+  let editIndex=-1;
+  const refreshSources=()=>{const target=targets[$("#ruleTarget").value]||{},scene=$("#ruleScene").value,sources=(target.sources_by_scene||{})[scene]||[];$("#ruleSource").innerHTML=option(sources.length?sources.map(x=>[x,x]):[["","Keine Quelle in dieser Szene"]]);};
+  const refreshTargets=()=>{const key=$("#ruleTarget").value,target=targets[key]||{},scenes=target.scenes||[];$("#ruleScene").innerHTML=option(scenes.length?scenes.map(x=>[x,x]):[["","Zuerst OBS/Meld verbinden"]]);refreshSources();};
+  const refreshValues=()=>{$("#ruleValue").innerHTML=option(values[$("#rulePlatform").value]||[]);toggleTextOptions();};
+  const readRule=()=>{
+    const r={name:$("#ruleName").value.trim()||`${platformLabel($("#rulePlatform").value)} ${$("#ruleValue").selectedOptions[0]?.textContent||"Wert"}`,platform:$("#rulePlatform").value,value:$("#ruleValue").value,target:$("#ruleTarget").value,scene:$("#ruleScene").value,source:$("#ruleSource").value,action:$("#ruleAction").value,startup:$("#ruleStartup").value,placeholder:$("#rulePlaceholder").value.trim()||"---"};
+    if(r.action==="show")r.hideSeconds=Math.max(0,Number($("#ruleHideSeconds").value)||0);
+    if(isLikeCounterRule(r)){r.likeUser=$("#ruleLikeUser").value.trim();r.likeThreshold=Math.max(1,Number($("#ruleLikeThreshold").value)||1);}
+    return r;
+  };
+  const runRuleTest=async (r,previewText)=>{
+    const body={...r};
+    if(isTextRule(r))body.preview=String(previewText||r.testText||defaultPreview(r));
+    const out=await api("/api/automation/test",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+    if(!out.ok)console.warn("Regeltest fehlgeschlagen",out.error);
+  };
+  const renderRules=()=>{
+    fillLikeUserList();
+    $("#ruleList").innerHTML=rules.length?rules.map((r,i)=>{
+      const textRule=isTextRule(r);
+      const testText=String(r.testText||defaultPreview(r));
+      const valueLabel=(values[r.platform]||[]).find(x=>x[0]===r.value)?.[1]||r.value;
+      const condition=isLikeCounterRule(r)?` · User: ${esc(r.likeUser||"-")} · alle ${esc(r.likeThreshold||"-")} Likes`:"";
+      const showInfo=isShowRule(r)?` · ausblenden nach ${esc(r.hideSeconds??4)}s`:"";
+      const testControls=textRule
+        ? `<input class="savedRuleTestText" data-i="${i}" value="${esc(testText)}" placeholder="Testtext"><button class="secondary testSavedRule" data-i="${i}">Testen</button>`
+        : `<button class="secondary testSavedRule" data-i="${i}">Testen</button>`;
+      return `<div class="ruleRow"><div><b>${esc(r.name)}</b><div class="small">${esc(platformLabel(r.platform))} · ${esc(valueLabel)}${condition} → ${esc((r.target||"").toUpperCase())} · ${esc(r.scene||"-")} · ${esc(r.source||"-")} · ${esc(r.action||"text")}${showInfo}</div></div><div class="btnLine">${testControls}<button class="secondary editRule" data-i="${i}">Ändern</button><button class="secondary deleteRule" data-i="${i}">Löschen</button></div></div>`;
+    }).join(""):`<div class="hint">Noch keine Einträge. Lege oben gezielt einen dauerhaften Live-Wert an.</div>`;
+    let testTextSaveTimer=null;
+    const queueTestTextSave=()=>{clearTimeout(testTextSaveTimer);testTextSaveTimer=setTimeout(()=>persistRules(),450);};
+    $$('.savedRuleTestText').forEach(input=>{
+      input.oninput=()=>{const i=Number(input.dataset.i);if(!rules[i])return;rules[i].testText=input.value;queueTestTextSave();};
+      input.onchange=async()=>{const i=Number(input.dataset.i);if(!rules[i])return;rules[i].testText=input.value;await persistRules();};
+    });
+    $$('.testSavedRule').forEach(b=>b.onclick=async()=>{const i=Number(b.dataset.i);const r=rules[i];if(!r)return;const input=$(`.savedRuleTestText[data-i="${i}"]`);if(input){r.testText=input.value;await persistRules();await runRuleTest(r,input.value);}else{await runRuleTest(r);}});
+    $$('.editRule').forEach(b=>b.onclick=()=>{const r=rules[Number(b.dataset.i)];editIndex=Number(b.dataset.i);$("#rulePlatform").value=r.platform;refreshValues();$("#ruleValue").value=r.value;toggleTextOptions();$("#ruleTarget").value=r.target;refreshTargets();$("#ruleScene").value=r.scene||"";refreshSources();$("#ruleSource").value=r.source||"";$("#ruleAction").value=r.action||"text";$("#ruleStartup").value=r.startup||"keep";$("#rulePlaceholder").value=r.placeholder||"---";$("#ruleHideSeconds").value=r.hideSeconds??r.hide_seconds??4;$("#ruleLikeUser").value=r.likeUser||r.like_user||"";$("#ruleLikeThreshold").value=r.likeThreshold||r.like_threshold||10;toggleTextOptions();$("#ruleName").value=r.name;$("#saveRule").textContent="Änderung speichern";});
+    $$('.deleteRule').forEach(b=>b.onclick=async()=>{rules.splice(Number(b.dataset.i),1);await persistRules();renderRules();});
+  };
+  $("#rulePlatform").onchange=()=>{refreshValues();};$("#ruleValue").onchange=toggleTextOptions;$("#ruleTarget").onchange=refreshTargets;$("#ruleScene").onchange=refreshSources;
+  $("#clearRule").onclick=()=>{editIndex=-1;$("#ruleName").value="";$("#ruleLikeUser").value="";$("#ruleLikeThreshold").value=10;$("#ruleHideSeconds").value=4;$("#saveRule").textContent="Speichern";};
+  $("#saveRule").onclick=async()=>{const r=readRule();if(isLikeCounterRule(r)&&!r.likeUser){alert("Bitte einen Chatter für den Like-Zähler eintragen.");return;}if(editIndex>=0){r.testText=rules[editIndex]?.testText||defaultPreview(r);rules[editIndex]=r;}else{r.testText=defaultPreview(r);rules.push(r);}const out=await persistRules();if(!out.ok){console.warn("Regel speichern fehlgeschlagen",out.error);return;}editIndex=-1;$("#ruleName").value="";$("#ruleLikeUser").value="";$("#ruleLikeThreshold").value=10;$("#ruleHideSeconds").value=4;$("#saveRule").textContent="Speichern";renderRules();};
+  fillLikeUserList();refreshValues();refreshTargets();toggleTextOptions();renderRules();
 }
 async function renderSpotify(){
   const data=await api("/api/overlay-urls");
@@ -868,7 +978,7 @@ async function renderDev(){
 }
 async function bootPage(){
   try{
-    await (({dashboard:renderDashboard,platforms:renderPlatforms,chat:renderChat,spotify:renderSpotify,overlays:renderOverlays,plugins:renderPlugins,dev:renderDev}[page]||renderDashboard)());
+    await (({dashboard:renderDashboard,platforms:renderPlatforms,chat:renderChat,obs_meld:renderObsMeld,spotify:renderSpotify,overlays:renderOverlays,plugins:renderPlugins,dev:renderDev}[page]||renderDashboard)());
   }catch(e){
     try{
       await api("/api/client-error",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({level:"error",message:String(e&&e.stack||e)})});

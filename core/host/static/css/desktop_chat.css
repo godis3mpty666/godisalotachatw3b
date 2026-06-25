@@ -1,4 +1,4 @@
-:root{--box-bg:rgba(13,16,29,.82);--box-radius:16px;--chat-font:Segoe UI;--chat-size:16px;--chat-color:#fff}
+:root{--box-bg:rgba(13,16,29,.82);--box-radius:16px;--chat-font:Segoe UI;--chat-size:16px;--chat-color:#fff;--chat-live-width:100%}
 *{box-sizing:border-box}
 html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent;color:var(--chat-color);font-family:var(--chat-font),Arial,sans-serif}
 .desktopBox{position:absolute;background:var(--box-bg);border:1px solid rgba(255,255,255,.16);border-radius:var(--box-radius);box-shadow:0 14px 40px rgba(0,0,0,.35);overflow:hidden}
@@ -6,16 +6,16 @@ html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent
 #viewerBar{display:flex;gap:10px;align-items:center;padding:10px;overflow:hidden}
 .viewer{display:flex;align-items:center;gap:7px;min-width:72px;background:transparent;border-radius:10px;padding:7px 10px}
 .viewer.blocked{opacity:1;background:rgba(92,20,30,.78);border:1px solid rgba(255,75,96,.6)}
-.platformIcon{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;flex:none}
+.platformIcon{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;flex:none;vertical-align:-3px;margin-right:6px}
 .platformIcon img,.statusIcon{width:18px;height:18px;object-fit:contain;display:block}
-#chatPanel{padding:12px;overflow:hidden}
-#desktopMessages{height:100%;display:flex;flex-direction:column;justify-content:flex-end;overflow:hidden}
-.desktopMsg{flex:none;display:block;width:100%;max-width:100%;padding:7px 9px;margin:8px 0;border-radius:8px;background:rgba(255,255,255,.045);font-size:var(--chat-size);line-height:1.35;overflow-wrap:anywhere;word-break:break-word;white-space:normal}
-.desktopMsgMeta{display:inline-flex;align-items:center;gap:6px;min-width:0;max-width:100%;margin-right:8px;vertical-align:baseline}
-.desktopMsgMeta b{min-width:0;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.desktopMsgText{display:inline;min-width:0;padding-left:0}
-.desktopMsgText span{display:inline}
+#chatPanel{padding:12px 42px 12px 12px;overflow:hidden;contain:layout paint}
+#desktopMessages{height:100%;width:var(--chat-live-width);max-width:var(--chat-live-width);min-width:0;display:flex;flex-direction:column;justify-content:flex-end;overflow:hidden}
+.desktopMsg{flex:none;display:block;width:100%;max-width:100%;min-width:0;padding:7px 9px;margin:8px 0;border-radius:8px;background:rgba(255,255,255,.045);font-size:var(--chat-size);line-height:1.35;overflow:hidden;white-space:normal;overflow-wrap:normal;word-break:normal;word-wrap:normal;text-wrap:wrap}
+.desktopMsgUser{font-weight:700;white-space:nowrap;margin-right:6px}
+.desktopMsgText{display:inline;white-space:pre-wrap;overflow-wrap:normal;word-break:normal;word-wrap:normal;hyphens:none}
+.desktopMsgText span{display:inline;white-space:inherit;overflow-wrap:inherit;word-break:inherit}
 .desktopMsg img{max-height:1.4em;width:auto;vertical-align:middle}
 .desktopMsg .platformIcon img{width:18px;height:18px;max-height:none}
+.desktopMsgLongToken{overflow-wrap:anywhere;word-break:break-word}
 #desktopHint{display:none;position:fixed;left:12px;bottom:12px;color:#b9c2e2}
 .editing #desktopHint{display:block}
