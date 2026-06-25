@@ -10,7 +10,7 @@ let shutdownInProgress = false;
 function nav(active){
   const items = [
     ["dashboard","Dashboard","/"],["platforms","Plattformen","/plattformen"],["chat","Chat","/chat"],["obs_meld","OBS/Meld Integration","/obs-meld-integration"],
-    ["spotify","Spotis3mptify","/spotis3mptify"],["overlays","Overlay URLs","/overlays"],["plugins","Plugins","/plugins"],["dev","DEV","/dev"]
+    ["spotify","Spotis3mptify","/spotis3mptify"],["easyslider","3asyslid3r","/3asyslid3r"],["overlays","Overlay URLs","/overlays"],["plugins","Plugins","/plugins"],["dev","DEV","/dev"]
   ];
   return `<aside class="sidebar"><div class="brand"><div class="logo"></div><div><h1>godisalotachat</h1><div class="ver">Ver. ${window.WEB_VERSION}</div></div><div class="webbased">webbased</div></div><nav class="nav">${items.map(i=>`<a class="${active===i[0]?'active':''}" href="${i[2]}">${i[1]}</a>`).join("")}</nav></aside>`;
 }
@@ -84,6 +84,54 @@ function userColor(platform,user){let h=2166136261;for(const c of `${platform}:$
 function platformMark(p){return ({twitch:"Twitch",tiktok:"TikTok",youtube:"YouTube",kick:"Kick"}[p]||p);}
 function platformBadge(p){return `<span class="chatPlatform"><img src="/platform-icon/${esc(p)}" alt="${esc(platformMark(p))}"></span>`;}
 function platformLabel(p){return ({twitch:"Twitch",tiktok:"TikTok",youtube:"YouTube",kick:"Kick",spotify:"Spotify",openai:"ChatGPT / OpenAI",meld:"Meld",obs:"OBS"}[p]||p);}
+function defaultEasysliderSettings(){return {enabled:true,edge:"left",delaySeconds:2,opacity:82,buttons:[
+  {id:"dashboard",label:"Dashboard",path:"/",enabled:true},
+  {id:"platforms",label:"Plattformen",path:"/plattformen",enabled:true},
+  {id:"chat",label:"Chat",path:"/chat",enabled:true},
+  {id:"obs_meld",label:"OBS/Meld Integration",path:"/obs-meld-integration",enabled:false},
+  {id:"spotify",label:"Spotis3mptify",path:"/spotis3mptify",enabled:false},
+  {id:"modalot",label:"Modalot",path:"/plugins?plugin=modalot",enabled:true},
+  {id:"plugins",label:"Plugins",path:"/plugins",enabled:true},
+  {id:"dev",label:"DEV",path:"/dev",enabled:true}
+]};}
+function normalizeEasysliderClient(cfg){
+  const d=defaultEasysliderSettings();
+  cfg=cfg&&typeof cfg==="object"?cfg:{};
+  const edge=["left","right","top","bottom"].includes(cfg.edge)?cfg.edge:d.edge;
+  const delay=Math.max(0,Math.min(120,Number(cfg.delaySeconds??d.delaySeconds)||0));
+  const opacity=Math.max(0,Math.min(100,Number(cfg.opacity??d.opacity)||0));
+  const buttons=Array.isArray(cfg.buttons)&&cfg.buttons.length?cfg.buttons:d.buttons;
+  return {enabled:cfg.enabled!==false,edge,delaySeconds:delay,opacity,buttons:buttons.map(b=>({id:String(b.id||"").trim()||"dashboard",label:String(b.label||b.id||"Dashboard").trim(),path:String(b.path||"/").trim()||"/",enabled:b.enabled!==false}))};
+}
+async function mountEasysliderRail(){
+  const old=$("#easysliderRail");
+  if(old) old.remove();
+  const settings=normalizeEasysliderClient((settingsCache&&settingsCache.ui&&settingsCache.ui["3asyslid3r"])||((await api("/api/settings")).ui||{})["3asyslid3r"]);
+  const activeButtons=(settings.buttons||[]).filter(b=>b.enabled!==false);
+  if(!settings.enabled || page==="easyslider" || !activeButtons.length) return;
+  const rail=document.createElement("div");
+  rail.id="easysliderRail";
+  rail.className=`easysliderRail edge-${settings.edge}`;
+  rail.style.setProperty("--easyslider-opacity",String(settings.opacity/100));
+  rail.innerHTML=`<div class="easysliderInner">${activeButtons.map(b=>`<button type="button" class="easysliderButton" data-path="${esc(b.path)}" title="${esc(b.label)}"><img src="/slider-asset/${encodeURIComponent(b.id)}.png?v=${encodeURIComponent(window.WEB_VERSION||"")}" alt="" onerror="this.remove()"><span>${esc(b.label)}</span></button>`).join("")}</div>`;
+  document.body.appendChild(rail);
+  let opened=false;
+  const open=()=>{if(opened)return;opened=true;rail.classList.add("open");};
+  const delayMs=Math.round(settings.delaySeconds*1000);
+  const timer=setTimeout(open,delayMs);
+  rail.addEventListener("mouseenter",open);
+  rail.addEventListener("focusin",open);
+  rail.addEventListener("click",async ev=>{
+    const btn=ev.target.closest(".easysliderButton");
+    if(!btn)return;
+    clearTimeout(timer);
+    rail.classList.remove("open");
+    const target=btn.dataset.path||"/";
+    await api("/api/3asyslid3r/activate",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({path:target}),timeoutMs:2500});
+    const here=location.pathname+location.search;
+    if(here!==target) location.href=target;
+  });
+}
 function statusLabel(cfg){
   const raw = String(cfg.status || (cfg.enabled ? "bereit" : "inaktiv")).toLowerCase();
   if(raw === "verbunden") return "Verbunden";
@@ -836,6 +884,47 @@ async function togglePluginEnabled(pluginId, enabled){
   if(!out.ok){alert(out.error||"Plugin konnte nicht umgeschaltet werden");return;}
   setTimeout(renderPlugins,500);
 }
+async function renderEasyslider(){
+  const settings=normalizeEasysliderClient(((await api("/api/settings")).ui||{})["3asyslid3r"]);
+  shell("easyslider","3asyslid3r","Schnellleiste am Fensterrand.",`
+    <section class="card easysliderSettings">
+      <form id="easysliderForm" class="platformForm">
+        <label><div>Aktiv</div><select name="enabled"><option value="true" ${settings.enabled?"selected":""}>Ja</option><option value="false" ${!settings.enabled?"selected":""}>Nein</option></select></label>
+        <label><div>Bildschirmrand</div><select name="edge">${[["left","Links"],["right","Rechts"],["top","Oben"],["bottom","Unten"]].map(([v,l])=>`<option value="${v}" ${settings.edge===v?"selected":""}>${l}</option>`).join("")}</select></label>
+        <label><div>Sekunden bis offen</div><input name="delaySeconds" type="number" min="0" max="120" step="0.5" value="${esc(settings.delaySeconds)}"></label>
+        <label><div>Transparenz</div><input name="opacity" type="range" min="0" max="100" value="${esc(settings.opacity)}"></label>
+        <div class="hint">PNG-Ordner: assets\\pics\\3asyslid3r</div>
+      </form>
+    </section>
+    <section class="card easysliderSettings">
+      <h3>Buttons</h3>
+      <div id="easysliderButtons" class="easysliderButtonList"></div>
+      <div class="btnLine"><button id="easysliderSave" type="button">Speichern</button><button id="easysliderTest" type="button" class="secondary">Dashboard testen</button><span id="easysliderResult" class="small"></span></div>
+    </section>`);
+  const form=$("#easysliderForm");
+  const defaults=defaultEasysliderSettings().buttons;
+  const byId=new Map((settings.buttons||[]).map(b=>[b.id,b]));
+  const buttons=defaults.map(d=>({...d,...(byId.get(d.id)||{})}));
+  $("#easysliderButtons").innerHTML=buttons.map((b,i)=>`<label class="easysliderButtonRow"><input type="checkbox" data-index="${i}" ${b.enabled!==false?"checked":""}><div><b>${esc(b.label)}</b><span>${esc(b.path)}</span></div><img src="/slider-asset/${encodeURIComponent(b.id)}.png?v=${encodeURIComponent(window.WEB_VERSION||"")}" alt="" onerror="this.remove()"></label>`).join("");
+  const collect=()=>normalizeEasysliderClient({
+    enabled:form.elements.enabled.value==="true",
+    edge:form.elements.edge.value,
+    delaySeconds:Number(form.elements.delaySeconds.value)||0,
+    opacity:Number(form.elements.opacity.value)||0,
+    buttons:buttons.map((b,i)=>({...b,enabled:$(`input[data-index="${i}"]`,$("#easysliderButtons")).checked}))
+  });
+  $("#easysliderSave").onclick=async()=>{
+    const result=$("#easysliderResult");
+    result.textContent="Speichere...";
+    const out=await api("/api/3asyslid3r/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(collect())});
+    result.textContent=out.ok?"Gespeichert.":`Fehler: ${out.error||"unbekannt"}`;
+    if(out.ok){settingsCache=null;}
+  };
+  $("#easysliderTest").onclick=async()=>{
+    await api("/api/3asyslid3r/activate",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({path:"/"}),timeoutMs:2500});
+    location.href="/";
+  };
+}
 async function renderPlugins(){
   const s=await api("/api/status");
   const cards=(s.plugins||[]).map(p=>`<section class="card pluginCard"><div class="pluginHead"><h3>${esc(p.name)}</h3><span class="pluginState ${pluginStateClass(p.state)}">${esc(p.state||"ready")}</span></div><div class="small">${esc(p.description||"")}</div><div class="small pluginStatusText">${esc(p.status||p.message||"Bereit")}</div><div class="btnLine"><button type="button" class="pluginSettingsBtn" data-plugin="${esc(p.id)}">Settings</button><a class="btn secondary" href="/dev" title="Logs im DEV-Bereich prüfen">Logs</a></div></section>`).join("");
@@ -859,6 +948,10 @@ renderPlugins=async function(){
   await renderPluginsWithoutToggle();
   const s=await api("/api/status");
   addPluginToggleButtons(s.plugins||[]);
+  try{
+    const wanted=new URLSearchParams(location.search).get("plugin");
+    if(wanted) setTimeout(()=>openPluginSettings(wanted),150);
+  }catch(_){}
 };
 function formatBytes(value){
   let n=Number(value||0); const units=["B","KB","MB","GB"];
@@ -978,7 +1071,7 @@ async function renderDev(){
 }
 async function bootPage(){
   try{
-    await (({dashboard:renderDashboard,platforms:renderPlatforms,chat:renderChat,obs_meld:renderObsMeld,spotify:renderSpotify,overlays:renderOverlays,plugins:renderPlugins,dev:renderDev}[page]||renderDashboard)());
+    await (({dashboard:renderDashboard,platforms:renderPlatforms,chat:renderChat,obs_meld:renderObsMeld,spotify:renderSpotify,easyslider:renderEasyslider,overlays:renderOverlays,plugins:renderPlugins,dev:renderDev}[page]||renderDashboard)());
   }catch(e){
     try{
       await api("/api/client-error",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({level:"error",message:String(e&&e.stack||e)})});
@@ -1016,6 +1109,12 @@ async function webbasedUiHeartbeat(){
     if(!r.ok) throw new Error('heartbeat '+r.status);
     const data = await r.json().catch(()=>({}));
     webbasedHeartbeatMisses = 0;
+    if(data && data.navigate && data.navigate_path){
+      const target = String(data.navigate_path || "/");
+      const here = location.pathname + location.search;
+      if(here !== target) location.href = target;
+      return;
+    }
     if(data && data.reload){
       webbasedReloadSameTab(data.reload_nonce);
       return;

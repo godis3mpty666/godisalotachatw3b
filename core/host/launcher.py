@@ -11,6 +11,23 @@ def base_dir() -> str:
 
 
 def main() -> None:
+    if "--easyslider" in sys.argv:
+        try:
+            from core.host.easyslider_window import run_easyslider
+            index = sys.argv.index("--easyslider")
+            url = sys.argv[index + 1] if len(sys.argv) > index + 1 else "http://127.0.0.1:17890"
+            raise SystemExit(run_easyslider(url))
+        except SystemExit:
+            raise
+        except Exception:
+            try:
+                import traceback
+                log_dir = Path(sys.executable).resolve().parent / "data" / "logs"
+                log_dir.mkdir(parents=True, exist_ok=True)
+                (log_dir / "easyslider_error.log").write_text(traceback.format_exc(), encoding="utf-8")
+            except Exception:
+                pass
+            raise
     if "--desktop-chat" in sys.argv:
         try:
             from core.host.desktop_window import run_desktop_chat

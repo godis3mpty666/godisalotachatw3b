@@ -209,6 +209,7 @@ def prune_ui_browser_profile_data(data_dir: Path | str) -> int:
 
 def default_desktop_chat_layout() -> dict:
     return {
+        "layoutVersion": 2,
         "viewerBar": {"x": 16, "y": 16, "w": 720, "h": 64},
         "chatPanel": {"x": 16, "y": 92, "w": 720, "h": 420},
         "alertPanel": {"x": 16, "y": 524, "w": 720, "h": 188},
@@ -234,6 +235,7 @@ def default_desktop_chat_layout() -> dict:
 def normalize_desktop_chat_layout(raw_layout) -> dict:
     default = default_desktop_chat_layout()
     raw_layout = raw_layout if isinstance(raw_layout, dict) else {}
+    legacy_layout = int(raw_layout.get("layoutVersion", 0) or 0) < 2
     merged = {
         key: ({**value, **(raw_layout.get(key, {}) if isinstance(raw_layout.get(key), dict) else {})} if isinstance(value, dict) else raw_layout.get(key, value))
         for key, value in default.items()
@@ -242,6 +244,8 @@ def normalize_desktop_chat_layout(raw_layout) -> dict:
     window = merged.get("window") if isinstance(merged.get("window"), dict) else {}
     win_w = max(320, min(4000, int(window.get("w", 780) or 780)))
     win_h = max(240, min(4000, int(window.get("h", 820) or 820)))
+    if legacy_layout and (win_w < 700 or win_h < 760):
+        win_w, win_h = 780, 820
     merged["window"] = {
         "x": max(-4000, min(4000, int(window.get("x", 80) or 80))),
         "y": max(-4000, min(4000, int(window.get("y", 80) or 80))),
@@ -266,6 +270,8 @@ def normalize_desktop_chat_layout(raw_layout) -> dict:
         return box
 
     def clean_box(key: str) -> dict:
+        if legacy_layout:
+            return default_box(key)
         raw = merged.get(key) if isinstance(merged.get(key), dict) else {}
         fallback = default_box(key)
         min_w, min_h = min_sizes[key]
@@ -287,7 +293,7 @@ def normalize_desktop_chat_layout(raw_layout) -> dict:
     for key in ("viewerBar", "chatPanel", "alertPanel"):
         merged[key] = clean_box(key)
 
-    if not isinstance(raw_layout.get("alertPanel"), dict):
+    if not isinstance(raw_layout.get("alertPanel"), dict) or legacy_layout:
         merged["chatPanel"]["h"] = min(int(merged["chatPanel"].get("h", 420)), max(100, merged["alertPanel"]["y"] - merged["chatPanel"]["y"] - 12))
 
     style = merged.get("style") if isinstance(merged.get("style"), dict) else {}
@@ -308,7 +314,66 @@ def normalize_desktop_chat_layout(raw_layout) -> dict:
         "platforms": {name: bool(platforms.get(name, True)) for name in ("twitch", "tiktok", "youtube", "kick")},
     }
     merged["autoStart"] = bool(merged.get("autoStart", False))
+    merged["layoutVersion"] = 2
     return merged
+
+
+def default_easyslider_settings() -> dict:
+    return {
+        "enabled": True,
+        "edge": "left",
+        "delaySeconds": 2,
+        "opacity": 82,
+        "buttons": [
+            {"id": "dashboard", "label": "Dashboard", "path": "/", "enabled": True},
+            {"id": "platforms", "label": "Plattformen", "path": "/plattformen", "enabled": True},
+            {"id": "chat", "label": "Chat", "path": "/chat", "enabled": True},
+            {"id": "obs_meld", "label": "OBS/Meld Integration", "path": "/obs-meld-integration", "enabled": False},
+            {"id": "spotify", "label": "Spotis3mptify", "path": "/spotis3mptify", "enabled": False},
+            {"id": "modalot", "label": "Modalot", "path": "/plugins?plugin=modalot", "enabled": True},
+            {"id": "plugins", "label": "Plugins", "path": "/plugins", "enabled": True},
+            {"id": "dev", "label": "DEV", "path": "/dev", "enabled": True},
+        ],
+    }
+
+
+def normalize_easyslider_settings(raw_settings) -> dict:
+    default = default_easyslider_settings()
+    raw_settings = raw_settings if isinstance(raw_settings, dict) else {}
+    edge = str(raw_settings.get("edge") or default["edge"]).strip().lower()
+    if edge not in {"left", "right", "top", "bottom"}:
+        edge = default["edge"]
+    try:
+        delay = float(str(raw_settings.get("delaySeconds", default["delaySeconds"])).replace(",", "."))
+    except Exception:
+        delay = default["delaySeconds"]
+    try:
+        opacity = int(float(str(raw_settings.get("opacity", default["opacity"])).replace(",", ".")))
+    except Exception:
+        opacity = default["opacity"]
+    raw_buttons = raw_settings.get("buttons")
+    if not isinstance(raw_buttons, list):
+        raw_buttons = default["buttons"]
+    buttons = []
+    for item in raw_buttons:
+        if not isinstance(item, dict):
+            continue
+        button_id = re.sub(r"[^a-z0-9_-]+", "", str(item.get("id") or "").strip().lower())[:40]
+        label = str(item.get("label") or button_id or "Button").strip()[:80]
+        path = str(item.get("path") or "/").strip()
+        if not path.startswith("/"):
+            path = "/" + path
+        if button_id:
+            buttons.append({"id": button_id, "label": label, "path": path[:180], "enabled": bool(item.get("enabled", True))})
+    if not buttons:
+        buttons = list(default["buttons"])
+    return {
+        "enabled": bool(raw_settings.get("enabled", default["enabled"])),
+        "edge": edge,
+        "delaySeconds": max(0.0, min(120.0, delay)),
+        "opacity": max(0, min(100, opacity)),
+        "buttons": buttons[:40],
+    }
 
 
 def _open_text_file(path: Path) -> None:
@@ -984,11 +1049,16 @@ class AppState:
         self.last_ui_reopen = 0.0
         self.ui_reload_requested = False
         self.ui_reload_nonce = 0
+        self.ui_nav_requested = False
+        self.ui_nav_path = ""
         self.last_ui_reload_request = 0.0
         self.ui_browser_pid = 0
         self.desktop_chat_pids = set()
         self.desktop_chat_process = None
         self._desktop_chat_lock = threading.RLock()
+        self.easyslider_pids = set()
+        self.easyslider_process = None
+        self._easyslider_lock = threading.RLock()
         # Errors can be emitted by more than one poller/plugin at once. Keep
         # one instance of an identical error per runtime session in the DEV log.
         self._log_lock = threading.RLock()
@@ -1270,11 +1340,16 @@ class AppState:
             "version": VERSION,
             "platforms": {p: {"enabled": False, "status": "nicht verbunden"} for p in PLATFORM_ORDER},
             "plugins": {},
-            "automation_rules": []
+            "automation_rules": [],
+            "ui": {"3asyslid3r": default_easyslider_settings()},
         }
         s = _json_load(self.settings_path, default)
         s["version"] = VERSION
         s.setdefault("platforms", {})
+        s.setdefault("ui", {})
+        if not isinstance(s.get("ui"), dict):
+            s["ui"] = {}
+        s["ui"]["3asyslid3r"] = normalize_easyslider_settings(s["ui"].get("3asyslid3r"))
         if not isinstance(s.get("automation_rules"), list):
             s["automation_rules"] = []
         for p in PLATFORM_ORDER:
@@ -1807,6 +1882,10 @@ class AppState:
             pass
         try:
             self._close_tiktok_browser_windows()
+        except Exception:
+            pass
+        try:
+            _close_easyslider(self)
         except Exception:
             pass
         for pid in list(getattr(self, "desktop_chat_pids", set()) or set()):
@@ -3952,9 +4031,20 @@ class Handler(BaseHTTPRequestHandler):
                 if icon.is_file():
                     return self._send(200, icon.read_bytes(), _content_type(icon))
             return self._send(404, "Icon missing", "text/plain")
+        if path.startswith("/slider-asset/"):
+            rel = urllib.parse.unquote(path[len("/slider-asset/"):]).replace("\\", "/").lstrip("/")
+            name = Path(rel).name
+            if not name.lower().endswith(".png"):
+                return self._send(404, "Slider asset missing", "text/plain")
+            asset = st.asset_pics / "3asyslid3r" / name
+            if asset.is_file():
+                return self._send(200, asset.read_bytes(), _content_type(asset))
+            return self._send(404, "Slider asset missing", "text/plain")
 
         if path in ("/", "/dashboard"):
             return self._page("index.html")
+        if path == "/3asyslid3r":
+            return self._page("3asyslid3r.html")
         if path in ("/plattformen", "/platforms"):
             return self._page("platforms.html")
         if path == "/chat":
@@ -4552,6 +4642,10 @@ class Handler(BaseHTTPRequestHandler):
                 current["platforms"] = incoming["platforms"]
             if "plugins" in incoming and isinstance(incoming["plugins"], dict):
                 current["plugins"] = incoming["plugins"]
+            if "ui" in incoming and isinstance(incoming["ui"], dict):
+                current.setdefault("ui", {})
+                current["ui"].update(incoming["ui"])
+                current["ui"]["3asyslid3r"] = normalize_easyslider_settings(current["ui"].get("3asyslid3r"))
             if "automation_rules" in incoming:
                 current["automation_rules"] = _sanitize_automation_rules(incoming.get("automation_rules"))
             old_key = getattr(st, "_obs_conn_key", None)
@@ -4617,6 +4711,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/ui-heartbeat":
             reload_requested = bool(getattr(st, "ui_reload_requested", False))
             reload_nonce = int(getattr(st, "ui_reload_nonce", 0) or 0)
+            nav_requested = bool(getattr(st, "ui_nav_requested", False))
+            nav_path = str(getattr(st, "ui_nav_path", "") or "")
             if st.ui_heartbeat_lost:
                 try: st.log("ui", "main ui heartbeat recovered")
                 except Exception: pass
@@ -4625,7 +4721,10 @@ class Handler(BaseHTTPRequestHandler):
             st.ui_heartbeat_lost = False
             if reload_requested:
                 st.ui_reload_requested = False
-            return self._json({"ok": True, "version": VERSION, "reload": reload_requested, "reload_nonce": reload_nonce})
+            if nav_requested:
+                st.ui_nav_requested = False
+                st.ui_nav_path = ""
+            return self._json({"ok": True, "version": VERSION, "reload": reload_requested, "reload_nonce": reload_nonce, "navigate": nav_requested, "navigate_path": nav_path})
 
         if path == "/api/shutdown":
             st.request_shutdown("exe close requested by ui")
@@ -4638,6 +4737,47 @@ class Handler(BaseHTTPRequestHandler):
                 pass
             return self._json({"ok": True, "shutdown": False, "mode": "keep_running"})
 
+        if path == "/api/3asyslid3r/settings":
+            try:
+                current = st.settings()
+                current.setdefault("ui", {})
+                clean = normalize_easyslider_settings(data if isinstance(data, dict) else {})
+                current["ui"]["3asyslid3r"] = clean
+                st.save_settings(current)
+                try:
+                    _close_easyslider(st)
+                    if clean.get("enabled", True):
+                        _open_easyslider(st)
+                except Exception as exc:
+                    st.log("3asyslid3r", "restart failed", exc)
+                return self._json({"ok": True, "settings": clean})
+            except Exception as exc:
+                return self._json({"ok": False, "error": str(exc)}, 500)
+
+        if path == "/api/3asyslid3r/activate":
+            target = "/"
+            if isinstance(data, dict):
+                target = str(data.get("path") or "/").strip() or "/"
+            if not target.startswith("/"):
+                target = "/" + target
+            st.ui_nav_requested = True
+            st.ui_nav_path = target
+            try:
+                threading.Thread(
+                    target=st._bring_windows_to_front,
+                    kwargs={
+                        "pid": int(getattr(st, "ui_browser_pid", 0) or 0),
+                        "profile_dir": st._ui_browser_profile_dir(),
+                        "title_hint": APP_NAME,
+                    },
+                    daemon=True,
+                    name="easyslider-bring-ui-front",
+                ).start()
+            except Exception as exc:
+                try: st.log("3asyslid3r", "bring ui front failed", exc)
+                except Exception: pass
+            return self._json({"ok": True, "path": target})
+
         if path == "/api/spotis3mptify/overlay-state":
             try:
                 clean = self._clean_overlay_settings(data)
@@ -4648,9 +4788,16 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/desktop-chat/layout":
             try:
                 clean = {}
+                defaults = default_desktop_chat_layout()
+                clean["layoutVersion"] = 2
                 for key in ("viewerBar", "chatPanel", "alertPanel"):
                     raw = data.get(key) if isinstance(data, dict) else {}
-                    clean[key] = {name: max(0, min(4000, int(raw.get(name, fallback)))) for name, fallback in (("x", 16), ("y", 16), ("w", 720), ("h", 100))}
+                    raw = raw if isinstance(raw, dict) else {}
+                    fallback_box = defaults.get(key, {})
+                    clean[key] = {
+                        name: max(0, min(4000, int(raw.get(name, fallback_box.get(name, fallback)))))
+                        for name, fallback in (("x", 16), ("y", 16), ("w", 720), ("h", 100))
+                    }
                 raw_window = data.get("window") if isinstance(data, dict) else {}
                 raw_window = raw_window if isinstance(raw_window, dict) else {}
                 clean["window"] = {
@@ -5764,6 +5911,44 @@ def _open_desktop_chat(state):
         state.desktop_chat_process = proc
         return proc, True
 
+
+def _easyslider_is_open(state) -> bool:
+    with state._easyslider_lock:
+        proc = getattr(state, "easyslider_process", None)
+        if proc is not None:
+            try:
+                if proc.poll() is None:
+                    return True
+            except Exception:
+                pass
+        state.easyslider_process = None
+        state.easyslider_pids.clear()
+        return False
+
+
+def _close_easyslider(state) -> None:
+    with state._easyslider_lock:
+        for pid in list(getattr(state, "easyslider_pids", set()) or set()):
+            _taskkill_pid(int(pid))
+        state.easyslider_pids.clear()
+        state.easyslider_process = None
+
+
+def _open_easyslider(state):
+    with state._easyslider_lock:
+        if _easyslider_is_open(state):
+            return None, False
+        base_url = f"http://127.0.0.1:{state.port}"
+        if getattr(sys, "frozen", False):
+            cmd = [sys.executable, "--easyslider", base_url]
+        else:
+            cmd = [sys.executable, str(state.base / "run_webbased.py"), "--easyslider", base_url]
+        proc = subprocess.Popen(cmd, cwd=str(state.base), creationflags=_win_hidden_flags())
+        state.easyslider_pids.add(int(getattr(proc, "pid", 0) or 0))
+        state.easyslider_process = proc
+        return proc, True
+
+
 def run(base_dir: str, open_browser: bool = True):
     global STATE
     _free_callback_ports_before_start()
@@ -5792,6 +5977,15 @@ def run(base_dir: str, open_browser: bool = True):
     except Exception as exc:
         try:
             STATE.log("desktop-chat", "Autostart fehlgeschlagen", exc)
+        except Exception:
+            pass
+    try:
+        slider_cfg = STATE.settings().get("ui", {}).get("3asyslid3r", {})
+        if bool(slider_cfg.get("enabled", True)):
+            threading.Timer(1.0, lambda: _open_easyslider(STATE)).start()
+    except Exception as exc:
+        try:
+            STATE.log("3asyslid3r", "Autostart fehlgeschlagen", exc)
         except Exception:
             pass
     try:

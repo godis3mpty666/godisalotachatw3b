@@ -387,9 +387,10 @@ class DesktopTkOverlay:
                 self.layout = data
         except Exception as exc:
             _log(f"layout konnte nicht geladen werden: {exc}")
-        self.layout.setdefault("viewerBar", {"x": 20, "y": 20, "w": 700, "h": 58})
-        self.layout.setdefault("chatPanel", {"x": 20, "y": 90, "w": 700, "h": 590})
-        self.layout.setdefault("alertPanel", {"x": 20, "y": 694, "w": 700, "h": 170})
+        self.layout.setdefault("layoutVersion", 2)
+        self.layout.setdefault("viewerBar", {"x": 16, "y": 16, "w": 720, "h": 64})
+        self.layout.setdefault("chatPanel", {"x": 16, "y": 92, "w": 720, "h": 420})
+        self.layout.setdefault("alertPanel", {"x": 16, "y": 524, "w": 720, "h": 188})
         self.layout.setdefault("alerts", {"enabled": True, "maxItems": 5, "showTimestamp": True, "platforms": {"twitch": True, "tiktok": True, "youtube": True, "kick": True}})
         self.layout.setdefault(
             "style",
