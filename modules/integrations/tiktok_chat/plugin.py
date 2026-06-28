@@ -11,6 +11,7 @@ import socket
 import struct
 import subprocess
 import sys
+import threading
 import time
 import webbrowser
 import urllib.request
@@ -659,6 +660,7 @@ class TikTokChatPlugin(ThreadedPlugin):
         self._live_window_opened = False
         self._live_reload_done = False
         self._live_window_last_url = ''
+        self._live_window_title_monitors: set[int] = set()
         self.ui_language = 'de'
 
     def _close_browser_profile_windows(self, profile_dir: str = '', port: int = 0) -> None:
@@ -1123,6 +1125,85 @@ class TikTokChatPlugin(ThreadedPlugin):
         settings = self._settings if isinstance(self._settings, dict) else {}
         return self._preferred_viewer_account(settings)
 
+    def _live_window_title(self, settings: dict[str, Any], viewer_account: str) -> str:
+        main_name = self._normalize_unique_id(
+            settings.get('main_unique_id')
+            or settings.get('main_account')
+            or settings.get('unique_id')
+            or settings.get('creator_unique_id')
+            or 'Main'
+        ) or 'Main'
+        if str(viewer_account or '').lower() == 'bot':
+            viewer_name = self._normalize_unique_id(
+                settings.get('bot_account') or settings.get('bot_username') or 'Bot'
+            ) or 'Bot'
+        else:
+            viewer_name = main_name
+        return f'{main_name} @ {viewer_name}'
+
+    def _set_live_window_title(self, ws_url: str, title: str) -> None:
+        """Set and retain the app-window title even when TikTok updates its page title."""
+        wanted = json.dumps(str(title), ensure_ascii=False)
+        script = (
+            "(()=>{const wanted=" + wanted + ";"
+            "const apply=()=>{if(document.title!==wanted)document.title=wanted};"
+            "const install=()=>{apply();const root=document.documentElement;"
+            "if(root)new MutationObserver(apply).observe(root,"
+            "{subtree:true,childList:true,characterData:true})};"
+            "addEventListener('DOMContentLoaded',install);"
+            "if(document.documentElement)install();setInterval(apply,1000)})()"
+        )
+        # Install it for later navigations and apply it to the current document.
+        self._cdp_call(ws_url, 'Page.addScriptToEvaluateOnNewDocument', {'source': script}, timeout=3.0)
+        self._cdp_call(ws_url, 'Runtime.evaluate', {'expression': script}, timeout=3.0)
+
+    def _monitor_live_window_title(
+        self,
+        port: int,
+        channel: str,
+        title: str,
+    ) -> None:
+        missing_since = time.time()
+        current_target = ''
+        try:
+            while True:
+                tab = self._find_tiktok_browser_tab(port, channel)
+                ws_url = str((tab or {}).get('webSocketDebuggerUrl') or '').strip()
+                if ws_url:
+                    missing_since = time.time()
+                    try:
+                        if ws_url != current_target:
+                            # A full TikTok load can replace the CDP target. Set
+                            # up the new page again whenever that happens.
+                            self._set_live_window_title(ws_url, title)
+                            current_target = ws_url
+                        else:
+                            wanted = json.dumps(str(title), ensure_ascii=False)
+                            self._cdp_call(
+                                ws_url,
+                                'Runtime.evaluate',
+                                {'expression': f'document.title={wanted}'},
+                                timeout=2.0,
+                            )
+                    except Exception:
+                        current_target = ''
+                elif time.time() - missing_since > 30.0:
+                    return
+                time.sleep(0.75)
+        finally:
+            self._live_window_title_monitors.discard(port)
+
+    def _start_live_window_title_monitor(self, port: int, channel: str, title: str) -> None:
+        if port in self._live_window_title_monitors:
+            return
+        self._live_window_title_monitors.add(port)
+        threading.Thread(
+            target=self._monitor_live_window_title,
+            args=(port, channel, title),
+            name='tiktok-live-window-title',
+            daemon=True,
+        ).start()
+
     def _live_window_lock_path(self, account: str) -> Path:
         try:
             return app_root() / 'data' / 'tiktok' / f'live_window_{account}.lock'
@@ -1187,6 +1268,7 @@ class TikTokChatPlugin(ThreadedPlugin):
             return False
         url = self._live_url_for(settings, channel)
         viewer_account = self._preferred_viewer_account(settings)
+        window_title = self._live_window_title(settings, viewer_account)
         profile_dir = self._account_profile_dir(settings, viewer_account)
         browser = self._find_browser_exe(settings)
         try:
@@ -1196,6 +1278,11 @@ class TikTokChatPlugin(ThreadedPlugin):
                 if tab is not None:
                     ws_url = str(tab.get('webSocketDebuggerUrl') or '').strip()
                     if ws_url:
+                        with contextlib.suppress(Exception):
+                            self._set_live_window_title(ws_url, window_title)
+                        self._start_live_window_title_monitor(
+                            port, channel or settings.get('unique_id') or '', window_title
+                        )
                         if reason == 'live detected':
                             # A reload only works when the app window already
                             # happens to be on this creator's live page. During
@@ -1241,6 +1328,9 @@ class TikTokChatPlugin(ThreadedPlugin):
                     si.wShowWindow = 1
                     popen_kwargs['startupinfo'] = si
                 subprocess.Popen(args, **popen_kwargs)
+                self._start_live_window_title_monitor(
+                    port, channel or settings.get('unique_id') or '', window_title
+                )
             else:
                 webbrowser.open(url, new=1)
             self._live_window_opened = True
