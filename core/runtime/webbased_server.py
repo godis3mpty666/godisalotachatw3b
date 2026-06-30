@@ -3904,6 +3904,8 @@ CHAT_PLATFORM_PLUGINS = {
 }
 CHAT_PLATFORM_ICON_PATHS = {
     "twitch": "twitch.png",
+    "discord": "discord.png",
+    "ko-fi": "ko-fi.png",
     "tiktok": "tiktok.png",
     "youtube": "youtube.png",
     "kick": "kick.png",

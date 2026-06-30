@@ -128,6 +128,64 @@ html,body{
   background:linear-gradient(90deg,rgba(134,92,255,.35),rgba(134,92,255,.12));
   color:white;
 }
+.credits{
+  margin-top:auto;
+  padding-top:16px;
+  border-top:1px solid rgba(255,255,255,.09);
+}
+.creditsLabel{
+  margin:0 4px 9px;
+  color:#7f89ad;
+  font-size:10px;
+  font-weight:900;
+  letter-spacing:.14em;
+  text-transform:uppercase;
+}
+.creditsLinks{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px}
+.creditsLinks a{
+  min-width:0;
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  gap:6px;
+  padding:10px 5px 8px;
+  border:1px solid rgba(255,255,255,.09);
+  border-radius:11px;
+  background:rgba(255,255,255,.035);
+  color:#cbd2ef;
+  font-size:10px;
+  font-weight:800;
+  text-decoration:none;
+  transition:transform .18s ease,border-color .18s ease,background .18s ease;
+}
+.creditsLinks a:hover{transform:translateY(-2px);border-color:rgba(134,92,255,.55);background:rgba(134,92,255,.12);color:#fff}
+.creditsLinks img{width:22px;height:22px;object-fit:contain;filter:drop-shadow(0 4px 7px rgba(0,0,0,.3))}
+.creditsLinks .externalArrow{display:none}
+.feedbackLink{
+  display:grid;
+  grid-template-columns:28px minmax(0,1fr) auto;
+  align-items:center;
+  gap:9px;
+  margin-top:8px;
+  padding:10px;
+  border:1px solid rgba(95,215,255,.2);
+  border-radius:12px;
+  background:linear-gradient(135deg,rgba(95,215,255,.09),rgba(134,92,255,.1));
+  color:#eff3ff;
+  text-decoration:none;
+  transition:border-color .18s ease,transform .18s ease;
+}
+.feedbackLink:hover{transform:translateY(-1px);border-color:rgba(95,215,255,.5)}
+.feedbackIcon{display:grid;place-items:center;width:28px;height:28px;border-radius:9px;background:linear-gradient(135deg,var(--cyan),var(--purple));color:#07101b;font-weight:950;box-shadow:0 5px 14px rgba(95,215,255,.16)}
+.feedbackLink b,.feedbackLink small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.feedbackLink b{font-size:11px}.feedbackLink small{margin-top:2px;color:#9ca6c9;font-size:9px}
+.externalArrow{color:#7985ad;font-size:12px}
+@media(max-width:768px){
+  .credits{width:100%;margin-top:2px;padding-top:12px}
+  .creditsLinks{grid-template-columns:repeat(3,1fr)}
+  .creditsLinks a{flex-direction:row;justify-content:center}
+  .feedbackLink{max-width:360px}
+}
 .content{
   overflow:auto;
   padding:clamp(14px,2vw,28px);
