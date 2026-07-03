@@ -6,6 +6,11 @@ let settingsCache = null;
 let statusCache = null;
 let internalNavigation = false;
 let shutdownInProgress = false;
+const TESTER_CREDITS = [
+  {name:"JunesGo",links:[
+    {label:"Twitch",url:"https://www.twitch.tv/junesgo",icon:"twitch"}
+  ]}
+];
 
 function nav(active){
   const items = [
@@ -18,7 +23,8 @@ function nav(active){
     ["Discord","https://discord.gg/vtBuyrNtE","discord"],
     ["Ko-fi","https://ko-fi.com/godis3mpty","ko-fi"]
   ];
-  return `<aside class="sidebar"><div class="brand"><div class="logo"></div><div><h1>godisalotachat</h1><div class="ver">Ver. ${window.WEB_VERSION}</div></div><div class="webbased">webbased</div></div><nav class="nav">${items.map(i=>`<a class="${active===i[0]?'active':''}" href="${i[2]}">${i[1]}</a>`).join("")}</nav><section class="credits" aria-label="Credits und Community"><div class="creditsLabel">Credits & Community</div><div class="creditsLinks">${credits.map(i=>`<a class="externalBrowserLink" href="${i[1]}" target="_blank" rel="noopener noreferrer"><img src="/platform-icon/${i[2]}" alt=""><span>${i[0]}</span><span class="externalArrow" aria-hidden="true">↗</span></a>`).join("")}</div><a class="feedbackLink externalBrowserLink" href="${issueUrl}" target="_blank" rel="noopener noreferrer"><span class="feedbackIcon" aria-hidden="true">!</span><span><b>Feedback senden</b><small>Bug oder Idee auf GitHub</small></span><span class="externalArrow" aria-hidden="true">↗</span></a></section></aside>`;
+  const testers = TESTER_CREDITS.map(tester=>[tester.name,tester.links[0]?.url||"#",tester.links[0]?.icon||""]);
+  return `<aside class="sidebar"><div class="brand"><div class="logo"></div><div><h1>godisalotachat</h1><div class="ver">Ver. ${window.WEB_VERSION}</div></div><div class="webbased">webbased</div></div><nav class="nav">${items.map(i=>`<a class="${active===i[0]?'active':''}" href="${i[2]}">${i[1]}</a>`).join("")}</nav><section class="credits" aria-label="Credits und Community"><div class="creditsLabel">Credits & Community</div><div class="creditsLinks">${credits.map(i=>`<a class="externalBrowserLink" href="${i[1]}" target="_blank" rel="noopener noreferrer"><img src="/platform-icon/${i[2]}" alt=""><span>${i[0]}</span><span class="externalArrow" aria-hidden="true">↗</span></a>`).join("")}</div><button type="button" class="testersButton" id="openTesters"><img src="/platform-icon/twitch" alt=""><span>${L("Tester","Testers")}</span></button><a class="feedbackLink externalBrowserLink" href="${issueUrl}" target="_blank" rel="noopener noreferrer"><span class="feedbackIcon" aria-hidden="true">!</span><span><b>Feedback senden</b><small>Bug oder Idee auf GitHub</small></span><span class="externalArrow" aria-hidden="true">↗</span></a></section></aside><div class="testersModal" id="testersModal" hidden><div class="testersBackdrop" data-close-testers></div><section class="testersDialog" role="dialog" aria-modal="true" aria-labelledby="testersTitle"><div class="testersHead"><div><div class="creditsLabel">Credits</div><h2 id="testersTitle">${L("Tester","Testers")}</h2></div><button type="button" class="secondary" data-close-testers>${L("SchlieÃŸen","Close")}</button></div><div class="testersList">${testers.map(i=>`<a class="testerEntry externalBrowserLink" href="${i[1]}" target="_blank" rel="noopener noreferrer"><img src="/platform-icon/${i[2]}" alt="Twitch"><span><b>${i[0]}</b><small>twitch.tv/${i[0].toLowerCase()}</small></span><span class="externalArrow" aria-hidden="true">↗</span></a>`).join("")}</div></section></div>`;
 }
 function shell(active, title, sub, body){
   $("#app").innerHTML = `<div class="layout">${nav(active)}<main class="content"><div class="top"><div><h2>${title}</h2><div class="sub">${sub||""}</div></div><div class="topActions"><label class="languagePicker"><span>Sprache</span><select id="appLanguage" aria-label="Sprache"><option value="de" data-i18n-skip>Deutsch</option><option value="en" data-i18n-skip>English</option></select></label><button type="button" id="shutdownApp" class="shutdownBtn" title="EXE schließen">Beenden</button></div></div>${body}</main></div>`;
@@ -32,6 +38,18 @@ function shell(active, title, sub, body){
     };
   }
   wireShutdownButton();
+  wireTestersModal();
+}
+function wireTestersModal(){
+  const modal=$("#testersModal"),open=$("#openTesters");
+  if(!modal||!open)return;
+  const buttonIcon=$("img",open);if(buttonIcon)buttonIcon.remove();
+  const list=$(".testersList",modal);
+  if(list)list.innerHTML=TESTER_CREDITS.map(tester=>`<div class="testerEntry"><b>${esc(tester.name)}</b><div class="testerLinks">${tester.links.map(link=>`<a class="testerPlatformLink externalBrowserLink" href="${esc(link.url)}" target="_blank" rel="noopener noreferrer" title="${esc(link.label)}" aria-label="${esc(tester.name)} auf ${esc(link.label)}"><img src="/platform-icon/${encodeURIComponent(link.icon)}" alt="${esc(link.label)}"></a>`).join("")}</div></div>`).join("");
+  const close=()=>{modal.hidden=true;document.body.classList.remove("modalOpen");open.focus();};
+  open.onclick=()=>{modal.hidden=false;document.body.classList.add("modalOpen");const button=$("button[data-close-testers]",modal);if(button)button.focus();};
+  $$('[data-close-testers]',modal).forEach(button=>button.onclick=close);
+  modal.onkeydown=event=>{if(event.key==="Escape")close();};
 }
 async function shutdownApp(){
   const btn = $("#shutdownApp");

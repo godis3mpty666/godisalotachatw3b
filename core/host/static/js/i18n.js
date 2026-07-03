@@ -56,7 +56,7 @@
     ["Erfolgreich","Successful"],["Fehlgeschlagen","Failed"],["fehlgeschlagen","failed"],["gestartet","started"],["beendet","stopped"],
     ["gespeichert","saved"],["geladen","loaded"],["gefunden","found"],["fehlt","missing"],["ungültig","invalid"],
     ["Elemente mit der Maus verschieben. Unten rechts skalieren. Bearbeitung im Chat-Reiter beenden.","Move elements with the mouse. Resize at the bottom right. Finish editing in the Chat tab."],
-    ["WARNUNGEN","ALERTS"],["Aktueller Song","Current song"],["Neustart","Restart"],["Einstellungen-JSON (bereinigt)","Settings JSON (sanitized)"],
+    ["ALERTS","ALERTS"],["Aktueller Song","Current song"],["Neustart","Restart"],["Einstellungen-JSON (bereinigt)","Settings JSON (sanitized)"],
     ["Raw-Debug","Raw debug"],["Quellcode","Source"],["getrennt","disconnected"],["Warnung","warning"],["gesendet","sent"],
     ["Nachricht","Message"],["Nachrichten","Messages"],["Benutzer","User"],["Grund","Reason"],["Regeln","Rules"],
     ["Wort/Phrase","Word/phrase"],["nur löschen","delete only"],["löschen + Zeitüberschreitung","delete + timeout"],
@@ -80,7 +80,7 @@
     ["Warte auf","Waiting for"],["leer","empty"],["Nächster","Next"],["Überspringen","Skip"],["Leeren","Clear"]
     ,["Allgemein","General"],["Anfragen","Requests"],["Wiedergabe","Playback"],["Verbindung","Connection"],
     ["Protokollierung","Logging"],["Moderation","Moderation"],["Erweitert","Advanced"],["Darstellung","Appearance"],
-    ["Warnungen","Alerts"],["Befehle","Commands"],["Vorlagen","Templates"],["Beschreibung","Description"],
+    ["Warnungen","Warnings"],["Befehle","Commands"],["Vorlagen","Templates"],["Beschreibung","Description"],
     ["Titel","Title"],["Kategorie","Category"],["Schlagwörter","Tags"],["Zielplattformen","Target platforms"],
     ["Automatisch verbinden","Connect automatically"],["Automatische Verbindung","Automatic connection"],
     ["Beim Start","On startup"],["Nur wenn live","Only while live"],["Alle Plattformen","All platforms"],

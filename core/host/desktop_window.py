@@ -958,7 +958,7 @@ class DesktopTkOverlay:
         ][-max(1, min(20, int(cfg.get("maxItems", 5) or 5))):]
         title_font = self.tkfont.Font(family=font_family, size=max(10, int(font_size * .9)), weight="bold")
         text_font = self.tkfont.Font(family=font_family, size=max(10, int(font_size * .9)))
-        self.canvas.create_text(x + 12, y + 12, text=("ALERTS" if self.language == "en" else "WARNUNGEN"), fill="#b9c2e2", font=title_font, anchor="w")
+        self.canvas.create_text(x + 12, y + 12, text="ALERTS", fill="#b9c2e2", font=title_font, anchor="w")
         if not alerts:
             if self.editing:
                 self.canvas.create_text(x + 12, y + 36, text=("New live events appear here." if self.language == "en" else "Neue Live-Ereignisse erscheinen hier."), fill="#8f9abe", font=text_font, anchor="w")
