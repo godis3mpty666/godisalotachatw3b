@@ -234,6 +234,8 @@ OVERLAY_MARQUEE_SPEED_DEFAULT   = 45        # px/sec
 CLIENT_ID       = CLIENT_ID_DEFAULT
 CLIENT_SECRET   = CLIENT_SECRET_DEFAULT
 PORT            = PORT_DEFAULT
+UI_LANGUAGE     = "de"
+MAIN_UI_BASE    = ""
 SHARED_SECRET   = SHARED_SECRET_DEFAULT
 TOKENS_DIR      = TOKENS_DIR_DEFAULT
 REDIRECT_URI_OV = REDIRECT_URI_DEFAULT
@@ -3132,6 +3134,13 @@ loadLayout();refreshData();
 </script></body></html>"""
     return html.replace('__STATE__', initial_state)
 
+def _with_main_i18n(html: str) -> str:
+    if not MAIN_UI_BASE or "i18n.js" in html or "</head>" not in html:
+        return html
+    base = MAIN_UI_BASE.rstrip("/")
+    head = f'<script>window.APP_LANGUAGE={json.dumps(UI_LANGUAGE)};</script><script src="{base}/static/js/i18n.js"></script>'
+    return html.replace("</head>", head + "</head>", 1)
+
 # ======================= HTTP SERVER =======================
 
 # Meld Elements links are user-configurable.
@@ -3292,7 +3301,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             qd = urllib.parse.parse_qs(qs)
 
             if path == "/customoverlay":
-                return self._html(200, _custom_overlay_html())
+                return self._html(200, _with_main_i18n(_custom_overlay_html()))
             if path == "/customoverlay/state":
                 if ((qd.get("default") or ["0"])[0] in ("1", "true", "yes")):
                     return self._ok(_custom_overlay_default_state())
@@ -3728,7 +3737,7 @@ def stop_server():
 
 # ============== PUBLIC SETTERS (fÃ¼r UI) ==============
 def apply_settings(cfg: Dict[str, Any]):
-    global CLIENT_ID, CLIENT_SECRET, PORT, SHARED_SECRET, DATA_DIR, AUTH_DIR, CONFIG_DIR, NOWPLAYING_DIR, COVERS_DIR, PLAYLISTS_DIR, STATE_DIR, EXPORT_DIR, CERTS_DIR, YOUTUBE_DIR, TOKENS_DIR, CENTRAL_SPOTIFY_TOKEN_FILE, REDIRECT_URI_OV, CENTRAL_SPOTIFY_TOKENS, CUSTOM_OVERLAY_JSON, _LOCAL_CA_CERT, _LOCAL_CA_KEY, _LOCAL_TLS_CERT, _LOCAL_TLS_KEY
+    global CLIENT_ID, CLIENT_SECRET, PORT, UI_LANGUAGE, MAIN_UI_BASE, SHARED_SECRET, DATA_DIR, AUTH_DIR, CONFIG_DIR, NOWPLAYING_DIR, COVERS_DIR, PLAYLISTS_DIR, STATE_DIR, EXPORT_DIR, CERTS_DIR, YOUTUBE_DIR, TOKENS_DIR, CENTRAL_SPOTIFY_TOKEN_FILE, REDIRECT_URI_OV, CENTRAL_SPOTIFY_TOKENS, CUSTOM_OVERLAY_JSON, _LOCAL_CA_CERT, _LOCAL_CA_KEY, _LOCAL_TLS_CERT, _LOCAL_TLS_KEY
     global COOLDOWN_MINUTES, PLAYLIST_PREFIX, PLAYLIST_COVER_ENABLED, PLAYLIST_COVER_FILE, SRPLUS_DURATION_MIN, SRPLUS_ONCE_PER_STREAM, SRPLUS_SHUFFLE, SRPLUS_SUBSCRIBERS_ONLY
     global ENABLED, AUTO_STOP_ON_DISABLE, REPEAT_GUARD, PLAY_NOW, QUEUE_THEN_SKIP, ASYNC_PLAYLIST_ADD, ASYNC_COVER_FETCH
     global LOG_VERBOSE, LOG_SLOW_MS, LOG_DEDUP_SEC, LOG_NP_ON_CHANGE, NOWPLAYING_ENABLE_FILES, NOWPLAYING_POLL_MS
@@ -3751,6 +3760,8 @@ def apply_settings(cfg: Dict[str, Any]):
     CLIENT_ID       = cfg.get("client_id", CLIENT_ID)
     CLIENT_SECRET   = cfg.get("client_secret", CLIENT_SECRET)
     PORT            = int(cfg.get("port", PORT))
+    UI_LANGUAGE     = "en" if str(cfg.get("ui_language") or "de").lower().startswith("en") else "de"
+    MAIN_UI_BASE    = str(cfg.get("main_ui_base") or MAIN_UI_BASE).strip()
     SHARED_SECRET   = cfg.get("shared_secret", SHARED_SECRET)
     DATA_DIR        = _normalize_tokens_dir(cfg.get("data_dir", DATA_DIR) or DATA_DIR)
     AUTH_DIR        = _normalize_tokens_dir(cfg.get("auth_dir", os.path.join(DATA_DIR, "auth")))

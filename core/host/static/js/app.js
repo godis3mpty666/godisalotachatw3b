@@ -10,7 +10,7 @@ let shutdownInProgress = false;
 function nav(active){
   const items = [
     ["dashboard","Dashboard","/"],["platforms","Plattformen","/plattformen"],["chat","Chat","/chat"],["obs_meld","OBS/Meld Integration","/obs-meld-integration"],
-    ["spotify","Spotis3mptify","/spotis3mptify"],["easyslider","3asyslid3r","/3asyslid3r"],["overlays","Overlay URLs","/overlays"],["plugins","Plugins","/plugins"],["dev","DEV","/dev"]
+    ["spotify","Spotis3mptify","/spotis3mptify"],["easyslider","3asyslid3r","/3asyslid3r"],["overlays","Overlay URLs","/overlays"],["plugins","Plugins","/plugins"],["chattim3r","Chattim3r","/chattim3r"],["dev","DEV","/dev"]
   ];
   const issueUrl = "https://github.com/godis3mpty666/godisalotachatw3b/issues/new?title=" + encodeURIComponent("[Feedback] ") + "&body=" + encodeURIComponent("**Was ist passiert oder was soll verbessert werden?**\n\n\n**So kann man es nachstellen (bei einem Bug):**\n1. \n2. \n\n**Version:** " + (window.WEB_VERSION || "unbekannt") + "\n\n**Zusätzliche Infos / Screenshots:**\n");
   const credits = [
@@ -21,7 +21,16 @@ function nav(active){
   return `<aside class="sidebar"><div class="brand"><div class="logo"></div><div><h1>godisalotachat</h1><div class="ver">Ver. ${window.WEB_VERSION}</div></div><div class="webbased">webbased</div></div><nav class="nav">${items.map(i=>`<a class="${active===i[0]?'active':''}" href="${i[2]}">${i[1]}</a>`).join("")}</nav><section class="credits" aria-label="Credits und Community"><div class="creditsLabel">Credits & Community</div><div class="creditsLinks">${credits.map(i=>`<a class="externalBrowserLink" href="${i[1]}" target="_blank" rel="noopener noreferrer"><img src="/platform-icon/${i[2]}" alt=""><span>${i[0]}</span><span class="externalArrow" aria-hidden="true">↗</span></a>`).join("")}</div><a class="feedbackLink externalBrowserLink" href="${issueUrl}" target="_blank" rel="noopener noreferrer"><span class="feedbackIcon" aria-hidden="true">!</span><span><b>Feedback senden</b><small>Bug oder Idee auf GitHub</small></span><span class="externalArrow" aria-hidden="true">↗</span></a></section></aside>`;
 }
 function shell(active, title, sub, body){
-  $("#app").innerHTML = `<div class="layout">${nav(active)}<main class="content"><div class="top"><div><h2>${title}</h2><div class="sub">${sub||""}</div></div><button type="button" id="shutdownApp" class="shutdownBtn" title="EXE schließen">Beenden</button></div>${body}</main></div>`;
+  $("#app").innerHTML = `<div class="layout">${nav(active)}<main class="content"><div class="top"><div><h2>${title}</h2><div class="sub">${sub||""}</div></div><div class="topActions"><label class="languagePicker"><span>Sprache</span><select id="appLanguage" aria-label="Sprache"><option value="de" data-i18n-skip>Deutsch</option><option value="en" data-i18n-skip>English</option></select></label><button type="button" id="shutdownApp" class="shutdownBtn" title="EXE schließen">Beenden</button></div></div>${body}</main></div>`;
+  const languageSelect=$("#appLanguage");
+  if(languageSelect){
+    languageSelect.value=window.APP_LANGUAGE==="en"?"en":"de";
+    languageSelect.onchange=async()=>{
+      languageSelect.disabled=true;
+      const result=await api("/api/language",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({language:languageSelect.value})});
+      if(result.ok) location.reload(); else {languageSelect.disabled=false;alert(result.error||"Sprache konnte nicht gespeichert werden.");}
+    };
+  }
   wireShutdownButton();
 }
 async function shutdownApp(){
@@ -91,6 +100,7 @@ async function openExternal(url){
 }
 async function loadAll(){ settingsCache=await api("/api/settings"); statusCache=await api("/api/status"); return {settings:settingsCache,status:statusCache};}
 function esc(s){return String(s??"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[m]));}
+function L(de,en){return window.APP_LANGUAGE==="en"?en:de;}
 function userColor(platform,user){let h=2166136261;for(const c of `${platform}:${user}`){h^=c.charCodeAt(0);h=Math.imul(h,16777619)}return `hsl(${Math.abs(h)%360} 78% 68%)`;}
 function platformMark(p){return ({twitch:"Twitch",tiktok:"TikTok",youtube:"YouTube",kick:"Kick"}[p]||p);}
 function platformBadge(p){return `<span class="chatPlatform"><img src="/platform-icon/${esc(p)}" alt="${esc(platformMark(p))}"></span>`;}
@@ -301,9 +311,9 @@ async function refreshMessages(){
   const m=await api("/api/messages");
   const el=$("#messages"); if(!el)return;
   const showModeration=page==="dashboard"||page==="chat";
-  const moderation=(x)=>!showModeration||!["twitch","kick","youtube"].includes(x.platform)||x.source_plugin_id==="modalot"?"":`<span class="dashboardModActions"><button type="button" class="dashboardModAction ban" data-action="ban" data-platform="${esc(x.platform)}" data-user="${esc(x.user)}" data-author-channel-id="${esc(x.author_channel_id||"")}" data-live-chat-id="${esc(x.live_chat_id||"")}" title="${esc(x.user)} auf ${esc(x.platform)} bannen" aria-label="${esc(x.user)} bannen"><img src="/platform-icon/banhammer" alt=""></button><button type="button" class="dashboardModAction unban" data-action="unban" data-platform="${esc(x.platform)}" data-user="${esc(x.user)}" data-author-channel-id="${esc(x.author_channel_id||"")}" data-live-chat-id="${esc(x.live_chat_id||"")}" title="${esc(x.user)} auf ${esc(x.platform)} freigeben" aria-label="${esc(x.user)} freigeben"><img src="/platform-icon/unban" alt=""></button></span>`;
+  const moderation=(x)=>!showModeration||!["twitch","kick","youtube"].includes(x.platform)||x.source_plugin_id==="modalot"?"":`<span class="dashboardModActions"><button type="button" class="dashboardModAction ban" data-action="ban" data-platform="${esc(x.platform)}" data-user="${esc(x.user)}" data-author-channel-id="${esc(x.author_channel_id||"")}" data-live-chat-id="${esc(x.live_chat_id||"")}" title="${L(`${esc(x.user)} auf ${esc(x.platform)} bannen`,`Ban ${esc(x.user)} on ${esc(x.platform)}`)}" aria-label="${L(`${esc(x.user)} bannen`,`Ban ${esc(x.user)}`)}"><img src="/platform-icon/banhammer" alt=""></button><button type="button" class="dashboardModAction unban" data-action="unban" data-platform="${esc(x.platform)}" data-user="${esc(x.user)}" data-author-channel-id="${esc(x.author_channel_id||"")}" data-live-chat-id="${esc(x.live_chat_id||"")}" title="${L(`${esc(x.user)} auf ${esc(x.platform)} freigeben`,`Unban ${esc(x.user)} on ${esc(x.platform)}`)}" aria-label="${L(`${esc(x.user)} freigeben`,`Unban ${esc(x.user)}`)}"><img src="/platform-icon/unban" alt=""></button></span>`;
   el.innerHTML=(m.messages||[]).filter(x=>x.message_type==="chat"||x.message_type==="moderation_notice").map(x=>showModeration?`<div class="msg dashboardChatMsg">${platformBadge(x.platform)}${moderation(x)} <b style="color:${userColor(x.platform,x.user)}">${esc(x.user)}</b>: <span class="dashboardChatText">${x.html||esc(x.text)}</span></div>`:`<div class="msg">${platformBadge(x.platform)} <span class="small">${esc(x.time)}</span> · <b style="color:${userColor(x.platform,x.user)}">${esc(x.user)}</b>: ${x.html||esc(x.text)}</div>`).join("");
-  el.onclick=async ev=>{const button=ev.target.closest?.(".dashboardModAction");if(!button||button.disabled)return;const action=button.dataset.action,platform=button.dataset.platform,user=button.dataset.user;button.disabled=true;const out=await api("/api/dashboard/moderation",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action,platform,user,author_channel_id:button.dataset.authorChannelId||"",live_chat_id:button.dataset.liveChatId||""})});button.disabled=false;if(!out.ok)alert(out.error||out.detail||"Moderationsaktion fehlgeschlagen");};
+  el.onclick=async ev=>{const button=ev.target.closest?.(".dashboardModAction");if(!button||button.disabled)return;const action=button.dataset.action,platform=button.dataset.platform,user=button.dataset.user;button.disabled=true;const out=await api("/api/dashboard/moderation",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({action,platform,user,author_channel_id:button.dataset.authorChannelId||"",live_chat_id:button.dataset.liveChatId||""})});button.disabled=false;if(!out.ok)alert(out.error||out.detail||L("Moderationsaktion fehlgeschlagen","Moderation action failed"));};
   el.scrollTop=el.scrollHeight;
 }
 async function refreshNowPlaying(){
@@ -342,11 +352,11 @@ function redirectFieldOnly(label,val){
 }
 function devButton(platform){
   const href = DEV_LINKS[platform] || "#";
-  return `<button type="button" class="btn devBtn" data-url="${esc(href)}" title="Oeffne die Developer-Konsole">Dev-Seite</button>`;
+  return `<button type="button" class="btn devBtn" data-url="${esc(href)}" title="${L("Öffnet die Entwicklerkonsole","Opens the developer console")}">${L("Entwicklerseite","Developer page")}</button>`;
 }
 function redirectField(platform,val){
   const href = DEV_LINKS[platform] || "#";
-  return `<label class="redirectWithDev"><div>Redirect URI</div><div class="inlineField"><input name="redirect_uri" type="text" value="${esc(val||"")}" autocomplete="on" autocapitalize="off" spellcheck="false"><button type="button" class="btn devBtn" data-url="${esc(href)}">Dev-Seite</button></div></label>`;
+  return `<label class="redirectWithDev"><div>Redirect URI</div><div class="inlineField"><input name="redirect_uri" type="text" value="${esc(val||"")}" autocomplete="on" autocapitalize="off" spellcheck="false"><button type="button" class="btn devBtn" data-url="${esc(href)}">${L("Entwicklerseite","Developer page")}</button></div></label>`;
 }
 function normalizeObsFields(form){
   const urlEl=form.querySelector('[name="url"]');
@@ -364,18 +374,20 @@ function normalizeObsFields(form){
     urlEl.value=`ws://${hostEl.value || '127.0.0.1'}:${portEl.value || '4455'}`;
   }
 }
-function sel(name,label,val){return `<label><div>${label}</div><select name="${name}"><option value="false" ${!val?'selected':''}>Nein</option><option value="true" ${val?'selected':''}>Ja</option></select></label>`;}
+function sel(name,label,val){return `<label><div>${label}</div><select name="${name}"><option value="false" ${!val?'selected':''}>${L("Nein","No")}</option><option value="true" ${val?'selected':''}>${L("Ja","Yes")}</option></select></label>`;}
 function platformForm(p,cfg){
-  if(p==="tiktok") return `<form class="platformForm" data-platform="${p}">${sel("enabled","Aktiv",cfg.enabled)}${sel("autoconnect","Autoconnect",cfg.autoconnect ?? true)}${field("main","Main/Kanal",cfg.main)}${field("bot","Botaccount",cfg.bot)}<div class="platformSubBox"><b>Testkanal / Fremd-Live lesen</b>${sel("test_channel_enabled","Testkanal aktiv",cfg.test_channel_enabled ?? false)}${field("test_channel","Testkanal ohne @",cfg.test_channel || "")}<div class="hint">Wenn aktiv, liest das TikTok-Chatplugin Chat, Joins, Likes, Gifts, Follows und Shares aus diesem Kanal. So kannst du Alerts testen, ohne mit deinem eigenen Account live zu gehen. Der angegebene Kanal muss selbst gerade live sein.</div></div><div class="hint">TikTok nutzt getrennte gespeicherte Browserprofile für Main und Bot. Es gibt keine Redirect URL. Beim Login öffnet sich die TikTok-Anmeldeseite, dort kannst du dich z.B. per QR-Code anmelden.</div><div class="btnLine"><button type="submit">Speichern</button><button type="button" class="btn tiktokLogin" data-account="main">Main anmelden</button><button type="button" class="btn tiktokLogin" data-account="bot">Bot anmelden</button><button type="button" class="secondary disconnect" data-platform="${p}" data-account="main">Main trennen</button><button type="button" class="secondary disconnect" data-platform="${p}" data-account="bot">Bot trennen</button><span class="small">Status: ${esc(cfg.status||"nicht verbunden")}${cfg.detail ? " · "+esc(cfg.detail) : ""}</span></div></form>`;
-  if(p==="meld") return `<form class="platformForm" data-platform="${p}">${sel("enabled","Aktiv",cfg.enabled)}${sel("autoconnect","Autoconnect",cfg.autoconnect ?? true)}${field("host","Host",cfg.host || "127.0.0.1")}${field("port","Port",cfg.port || "13376")}<div class="hint">Meld Studio braucht keine Anmeldedaten. Wie im Original wird nur per lokalem WebSocket verbunden.</div><div class="btnLine"><button type="submit">Speichern</button><button type="button" class="secondary testMeld">Verbindung testen</button><span class="small">Status: ${esc(cfg.status||"nicht verbunden")}${cfg.detail ? " · "+esc(cfg.detail) : ""}</span></div></form>`;
-  if(p==="obs") return `<form class="platformForm" data-platform="${p}">${sel("enabled","Aktiv",cfg.enabled)}${sel("autoconnect","Autoconnect",cfg.autoconnect ?? true)}${field("host","Host",cfg.host || "127.0.0.1")}${field("port","Port",cfg.port || "4455")}${field("password","Passwort",cfg.password,"password")}<div class="hint">OBS WebSocket Standard: <b>ws://127.0.0.1:4455</b>. In OBS muss unter <b>Werkzeuge &gt; WebSocket-Servereinstellungen</b> der WebSocket-Server aktiviert sein.</div><div class="btnLine"><button type="submit">Speichern</button><button type="button" class="secondary testObs">Verbindung testen</button><span class="small">Status: ${esc(cfg.status||"nicht verbunden")}${cfg.detail ? " · "+esc(cfg.detail) : ""}</span></div></form>`;
-  if(p==="spotify") return `<form class="platformForm" data-platform="${p}">${sel("enabled","Aktiv",cfg.enabled)}${sel("autoconnect","Autoconnect",cfg.autoconnect ?? true)}${field("client_id","Client ID",cfg.client_id)}${field("client_secret","Client Secret",cfg.client_secret,"password")}${redirectFieldOnly("Redirect URI",cfg.redirect_uri || "http://127.0.0.1:5173/callback")}<div class="hint">Spotify braucht keinen Accountnamen. Die Redirect URI ist manuell einstellbar und wird genau so für OAuth benutzt.</div><div class="btnLine"><button type="submit">Speichern</button><a class="btn login" data-platform="${p}" data-account="main" href="#">Spotify anmelden</a><button type="button" class="secondary disconnect" data-platform="${p}" data-account="main">Trennen</button>${devButton(p)}<span class="small">Status: ${esc(cfg.status||"nicht verbunden")}</span></div></form>`;
-  if(p==="openai") return `<form class="platformForm" data-platform="${p}">${sel("enabled","Aktiv",cfg.enabled)}${sel("autoconnect","Autoconnect",cfg.autoconnect ?? true)}${field("api_key","API-Key",cfg.api_key,"password")}${field("organization","Organisations-ID (optional)",cfg.organization)}${field("project","Projekt-ID (optional)",cfg.project)}<div class="hint">Der API-Key wird lokal in <b>data/settings.json</b> gespeichert. Ein ChatGPT-Abo enthaelt nicht automatisch API-Guthaben. Beim Verbinden wird nur die Modellliste der offiziellen OpenAI-API abgerufen und keine Antwort erzeugt. Modelle waehlst du im jeweiligen Plugin.</div><div class="btnLine"><button type="submit">Speichern</button><button type="button" class="secondary testOpenAI">ChatGPT verbinden</button><button type="button" class="secondary disconnect" data-platform="${p}" data-account="main">ChatGPT trennen</button>${devButton(p)}<span class="small">Status: ${esc(cfg.status||"nicht verbunden")}${cfg.detail ? " - "+esc(cfg.detail) : ""}</span></div></form>`;
-  return `<form class="platformForm" data-platform="${p}">${sel("enabled","Aktiv",cfg.enabled)}${sel("autoconnect","Autoconnect",cfg.autoconnect ?? true)}${field("main","Main/Kanal",cfg.main)}${field("bot","Bot",cfg.bot)}${field("client_id","Client ID",cfg.client_id)}${field("client_secret","Client Secret",cfg.client_secret,"password")}${redirectFieldOnly("Redirect URI",cfg.redirect_uri)}<div class="btnLine"><button type="submit">Speichern</button><a class="btn login" data-platform="${p}" data-account="main" href="#">OAuth Main</a><a class="btn login" data-platform="${p}" data-account="bot" href="#">OAuth Bot</a><button type="button" class="secondary disconnect" data-platform="${p}" data-account="main">Main trennen</button><button type="button" class="secondary disconnect" data-platform="${p}" data-account="bot">Bot trennen</button>${devButton(p)}<span class="small">Status: ${esc(cfg.status||"nicht verbunden")}</span></div></form>`;
+  const enabled=sel("enabled",L("Aktiv","Active"),cfg.enabled), auto=sel("autoconnect",L("Automatisch verbinden","Autoconnect"),cfg.autoconnect ?? true);
+  const status=(detail=true)=>`<span class="small">Status: ${esc(cfg.status||L("nicht verbunden","not connected"))}${detail&&cfg.detail?" · "+esc(cfg.detail):""}</span>`;
+  if(p==="tiktok") return `<form class="platformForm" data-platform="${p}">${enabled}${auto}${field("main",L("Hauptkonto/Kanal","Main/Channel"),cfg.main)}${field("bot",L("Botkonto","Bot account"),cfg.bot)}<div class="platformSubBox"><b>${L("Testkanal / fremden Livestream lesen","Read test channel / external livestream")}</b><div class="testChannelFields">${sel("test_channel_enabled",L("Testkanal aktiv","Test channel active"),cfg.test_channel_enabled ?? false)}${field("test_channel",L("Testkanal ohne @","Test channel without @"),cfg.test_channel || "")}</div><div class="hint testChannelHint">${L("Wenn aktiviert, liest das TikTok-Chatplugin Chat, Beitritte, Likes, Geschenke, Follows und Shares aus diesem Kanal. Damit kannst du Warnungen testen, ohne mit deinem eigenen Konto live zu gehen. Der angegebene Kanal muss gerade live sein.","When enabled, the TikTok chat plugin reads chat, joins, likes, gifts, follows and shares from this channel. This lets you test alerts without going live on your own account. The specified channel must currently be live.")}</div></div><div class="hint">${L("TikTok verwendet getrennte gespeicherte Browserprofile für Hauptkonto und Bot. Es gibt keine Redirect-URL. Beim Anmelden öffnet sich die TikTok-Anmeldeseite, auf der du dich beispielsweise per QR-Code anmelden kannst.","TikTok uses separate saved browser profiles for the main account and bot. There is no redirect URL. Signing in opens the TikTok login page, where you can sign in using a QR code, for example.")}</div><div class="btnLine"><button type="submit">${L("Speichern","Save")}</button><button type="button" class="btn tiktokLogin" data-account="main">${L("Hauptkonto anmelden","Sign in main")}</button><button type="button" class="btn tiktokLogin" data-account="bot">${L("Bot anmelden","Sign in bot")}</button><button type="button" class="secondary disconnect" data-platform="${p}" data-account="main">${L("Hauptkonto trennen","Disconnect main")}</button><button type="button" class="secondary disconnect" data-platform="${p}" data-account="bot">${L("Bot trennen","Disconnect bot")}</button>${status()}</div></form>`;
+  if(p==="meld") return `<form class="platformForm" data-platform="${p}">${enabled}${auto}${field("host","Host",cfg.host||"127.0.0.1")}${field("port","Port",cfg.port||"13376")}<div class="hint">${L("Meld Studio benötigt keine Anmeldedaten. Es wird ausschließlich über einen lokalen WebSocket verbunden.","Meld Studio does not require login credentials. It connects exclusively through a local WebSocket.")}</div><div class="btnLine"><button type="submit">${L("Speichern","Save")}</button><button type="button" class="secondary testMeld">${L("Verbindung testen","Test connection")}</button>${status()}</div></form>`;
+  if(p==="obs") return `<form class="platformForm" data-platform="${p}">${enabled}${auto}${field("host","Host",cfg.host||"127.0.0.1")}${field("port","Port",cfg.port||"4455")}${field("password",L("Passwort","Password"),cfg.password,"password")}<div class="hint">${L("OBS-WebSocket-Standard:","OBS WebSocket default:")} <b>ws://127.0.0.1:4455</b>. ${L("In OBS muss der WebSocket-Server unter Werkzeuge > WebSocket-Servereinstellungen aktiviert sein.","In OBS, the WebSocket server must be enabled under Tools > WebSocket Server Settings.")}</div><div class="btnLine"><button type="submit">${L("Speichern","Save")}</button><button type="button" class="secondary testObs">${L("Verbindung testen","Test connection")}</button>${status()}</div></form>`;
+  if(p==="spotify") return `<form class="platformForm" data-platform="${p}">${enabled}${auto}${field("client_id","Client ID",cfg.client_id)}${field("client_secret","Client Secret",cfg.client_secret,"password")}${redirectFieldOnly("Redirect URI",cfg.redirect_uri||"http://127.0.0.1:5173/callback")}<div class="hint">${L("Spotify benötigt keinen Kontonamen. Die Redirect-URI kann manuell eingestellt werden und wird genau so für OAuth verwendet.","Spotify does not require an account name. The redirect URI can be configured manually and is used exactly as entered for OAuth.")}</div><div class="btnLine"><button type="submit">${L("Speichern","Save")}</button><a class="btn login" data-platform="${p}" data-account="main" href="#">${L("Spotify anmelden","Sign in to Spotify")}</a><button type="button" class="secondary disconnect" data-platform="${p}" data-account="main">${L("Trennen","Disconnect")}</button>${devButton(p)}${status(false)}</div></form>`;
+  if(p==="openai") return `<form class="platformForm" data-platform="${p}">${enabled}${auto}${field("api_key","API key",cfg.api_key,"password")}${field("organization",L("Organisations-ID (optional)","Organization ID (optional)"),cfg.organization)}${field("project",L("Projekt-ID (optional)","Project ID (optional)"),cfg.project)}<div class="hint">${L("Der API-Key wird lokal in data/settings.json gespeichert. Ein ChatGPT-Abonnement enthält nicht automatisch API-Guthaben. Beim Verbinden wird nur die Modellliste der offiziellen OpenAI-API abgerufen; es wird keine Antwort erzeugt. Das Modell wählst du im jeweiligen Plugin.","The API key is stored locally in data/settings.json. A ChatGPT subscription does not automatically include API credit. Connecting only retrieves the model list from the official OpenAI API; no response is generated. Select the model in the relevant plugin.")}</div><div class="btnLine"><button type="submit">${L("Speichern","Save")}</button><button type="button" class="secondary testOpenAI">${L("ChatGPT verbinden","Connect ChatGPT")}</button><button type="button" class="secondary disconnect" data-platform="${p}" data-account="main">${L("ChatGPT trennen","Disconnect ChatGPT")}</button>${devButton(p)}${status()}</div></form>`;
+  return `<form class="platformForm" data-platform="${p}">${enabled}${auto}${field("main",L("Hauptkonto/Kanal","Main/Channel"),cfg.main)}${field("bot","Bot",cfg.bot)}${field("client_id","Client ID",cfg.client_id)}${field("client_secret","Client Secret",cfg.client_secret,"password")}${redirectFieldOnly("Redirect URI",cfg.redirect_uri)}<div class="btnLine"><button type="submit">${L("Speichern","Save")}</button><a class="btn login" data-platform="${p}" data-account="main" href="#">OAuth Main</a><a class="btn login" data-platform="${p}" data-account="bot" href="#">OAuth Bot</a><button type="button" class="secondary disconnect" data-platform="${p}" data-account="main">${L("Hauptkonto trennen","Disconnect main")}</button><button type="button" class="secondary disconnect" data-platform="${p}" data-account="bot">${L("Bot trennen","Disconnect bot")}</button>${devButton(p)}${status(false)}</div></form>`;
 }
 async function renderPlatforms(){
   const {settings,status}=await loadAll(); const p=settings.platforms;
-  shell("platforms","Plattformen","Anmeldedaten bleiben im webbased/data Ordner.",["twitch","tiktok","youtube","kick","spotify","openai","meld","obs"].map(k=>`<section class="card platformCard"><h3>${platformLabel(k)}</h3>${platformForm(k,{...(p[k]||{}),...(status.platforms[k]||{})})}</section>`).join(""));
+  shell("platforms",L("Plattformen","Platforms"),L("Anmeldedaten bleiben im Ordner webbased/data.","Login data remains in the webbased/data folder."),["twitch","tiktok","youtube","kick","spotify","openai","meld","obs"].map(k=>`<section class="card platformCard"><h3>${platformLabel(k)}</h3>${platformForm(k,{...(p[k]||{}),...(status.platforms[k]||{})})}</section>`).join(""));
   $$("form[data-platform]").forEach(form=>{
     form.onsubmit=async(e)=>{
       e.preventDefault();
@@ -399,7 +411,7 @@ async function renderPlatforms(){
       }
       if(pf === "meld"){ delete settingsCache.platforms[pf].password; }
       await api("/api/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(settingsCache)});
-      alert("Gespeichert");
+      alert(L("Gespeichert","Saved"));
     };
   });
   $$(".testMeld").forEach(b=>b.onclick=async()=>{
@@ -410,7 +422,7 @@ async function renderPlatforms(){
     delete settingsCache.platforms.meld.password;
     await api("/api/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(settingsCache)});
     const res=await api("/api/test-platform/meld");
-    alert((res.ok ? "Verbunden: " : "Nicht verbunden: ") + (res.detail || ""));
+    alert((res.ok ? L("Verbunden: ","Connected: ") : L("Nicht verbunden: ","Not connected: ")) + (res.detail || ""));
     location.reload();
   });
   $$(".testObs").forEach(b=>b.onclick=async()=>{
@@ -421,7 +433,7 @@ async function renderPlatforms(){
     applyFormValues(settingsCache.platforms.obs, form);
     await api("/api/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(settingsCache)});
     const res=await api("/api/test-platform/obs");
-    alert((res.ok ? "Verbunden: " : "Nicht verbunden: ") + (res.detail || ""));
+    alert((res.ok ? L("Verbunden: ","Connected: ") : L("Nicht verbunden: ","Not connected: ")) + (res.detail || ""));
     location.reload();
   });
   $$(".testOpenAI").forEach(b=>b.onclick=async()=>{
@@ -431,7 +443,7 @@ async function renderPlatforms(){
     applyFormValues(settingsCache.platforms.openai, form);
     await api("/api/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(settingsCache)});
     const res=await api("/api/test-platform/openai");
-    alert((res.ok ? "Verbunden: " : "Nicht verbunden: ") + (res.detail || ""));
+    alert((res.ok ? L("Verbunden: ","Connected: ") : L("Nicht verbunden: ","Not connected: ")) + (res.detail || ""));
     location.reload();
   });
   $$(".tiktokLogin").forEach(b=>b.onclick=async()=>{
@@ -451,17 +463,17 @@ async function renderPlatforms(){
     await api("/api/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(settingsCache)});
     const res=await api(`/api/tiktok/open/${b.dataset.account || "main"}`);
     const oldText = b.textContent;
-    b.textContent = res.ok ? (res.already_logged_in ? "Bereits angemeldet" : "Loginfenster geöffnet") : "Öffnen fehlgeschlagen";
+    b.textContent = res.ok ? (res.already_logged_in ? L("Bereits angemeldet","Already signed in") : L("Anmeldefenster geöffnet","Login window opened")) : L("Öffnen fehlgeschlagen","Failed to open");
     setTimeout(()=>{ b.textContent = oldText; }, 3000);
-    if(!res.ok) alert(res.error || "TikTok konnte nicht geöffnet werden");
+    if(!res.ok) alert(res.error || L("TikTok konnte nicht geöffnet werden","Could not open TikTok"));
   });
   $$(".devBtn").forEach(b=>b.onclick=async()=>{
     const url = b.dataset.url || b.getAttribute("href") || "";
     const oldText = b.textContent;
-    b.textContent = "Geoeffnet";
+    b.textContent = L("Geöffnet","Opened");
     const res = await openExternal(url);
     setTimeout(()=>{ b.textContent = oldText; }, 1800);
-    if(!res.ok) alert(res.error || "Dev-Seite konnte nicht geoeffnet werden");
+    if(!res.ok) alert(res.error || L("Entwicklerseite konnte nicht geöffnet werden","Could not open developer page"));
   });
   $$(".login").forEach(a=>a.onclick=async(e)=>{
     e.preventDefault();
@@ -473,7 +485,7 @@ async function renderPlatforms(){
     if(pf === "spotify"){ delete settingsCache.platforms[pf].main; delete settingsCache.platforms[pf].bot; }
     await api("/api/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(settingsCache)});
     const res = await api(`/api/oauth/open/${a.dataset.platform}/${a.dataset.account}`, {timeoutMs:2500});
-    if(!res.ok) alert(res.error || "OAuth-Anmeldung konnte nicht geoeffnet werden");
+    if(!res.ok) alert(res.error || L("OAuth-Anmeldung konnte nicht geöffnet werden","Could not open OAuth login"));
   });
   $$(".disconnect").forEach(b=>b.onclick=async()=>{await api(`/api/disconnect/${b.dataset.platform}/${b.dataset.account}`,{method:"POST"}); location.reload();});
 }
@@ -498,17 +510,25 @@ async function renderObsMeld(){
   const [settings,targetData]=await Promise.all([api("/api/settings"),api("/api/automation/targets")]);
   const rules=Array.isArray(settings.automation_rules)?settings.automation_rules:[];
   const targets=targetData.targets||{};
-  const values={tiktok:[["latest_follow","Neuester Follow"],["top_liker","Top-Liker"],["top_gifter","Top-Gifter"],["latest_gift","Neuestes Gift"],["like_total","Like-Zähler"]],twitch:[["latest_follow","Neuester Follow"],["latest_subscribe","Neuester Sub"],["latest_raid","Letzter Raid"],["latest_donation","Letzte Donation"],["latest_bits","Letzte Bits"]],youtube:[["latest_member","Neuestes Mitglied"],["latest_superchat","Letzter Superchat"]],kick:[["latest_follow","Neuester Follow"],["latest_subscribe","Neuester Sub"]]};
+  const values={tiktok:[["latest_follow",L("Neuester Follow","Latest follow")],["top_liker",L("Top-Liker","Top liker")],["top_gifter",L("Top-Gifter","Top gifter")],["latest_gift",L("Neuestes Geschenk","Latest gift")],["like_total",L("Like-Zähler","Like counter")]],twitch:[["latest_follow",L("Neuester Follow","Latest follow")],["latest_subscribe",L("Neuestes Abo","Latest subscription")],["latest_raid",L("Letzter Raid","Latest raid")],["latest_donation",L("Letzte Spende","Latest donation")],["latest_bits",L("Letzte Bits","Latest bits")]],youtube:[["latest_member",L("Neuestes Mitglied","Latest member")],["latest_superchat",L("Letzter Superchat","Latest Super Chat")]],kick:[["latest_follow",L("Neuester Follow","Latest follow")],["latest_subscribe",L("Neuestes Abo","Latest subscription")]]};
   const option=(items,selected="")=>items.map(([v,l])=>`<option value="${esc(v)}" ${v===selected?"selected":""}>${esc(l)}</option>`).join("");
-  const targetOptions=Object.entries(targets).map(([key,value])=>[key,`${key.toUpperCase()}${value.connected?"":" (nicht verbunden)"}`]);
+  const targetOptions=Object.entries(targets).map(([key,value])=>[key,`${key.toUpperCase()}${value.connected?"":L(" (nicht verbunden)"," (not connected)")}`]);
+  const actionLabels={text:L("Text schreiben","Write text"),show:L("Quelle einblenden","Show source"),hide:L("Quelle ausblenden","Hide source"),play:L("Quelle einmal abspielen","Play source once"),scene:L("Szene aktivieren","Activate scene")};
   const textActions=new Set(["text"]);
   const isTextRule=r=>textActions.has(String(r?.action||"text").toLowerCase());
   const isShowRule=r=>String(r?.action||"").toLowerCase()==="show";
   const isLikeCounterRule=r=>String(r?.platform||"").toLowerCase()==="tiktok"&&String(r?.value||"").toLowerCase()==="like_total";
   const savedLikeUsers=()=>[...new Set(rules.map(r=>String(r?.likeUser||r?.like_user||"").trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
   const defaultPreview=r=>{
-    const label=(values[r.platform]||[]).find(x=>x[0]===r.value)?.[1]||r.value||"Wert";
-    if(isLikeCounterRule(r))return `Test: ${String(r.likeUser||"Chatter")} · Intervall ${Number(r.likeThreshold||0)||1} Likes`;
+    const label=(values[r.platform]||[]).find(x=>x[0]===r.value)?.[1]||r.value||L("Wert","Value");
+    if(isLikeCounterRule(r))return `Test: ${String(r.likeUser||"Chatter")} · ${L("Intervall","Interval")} ${Number(r.likeThreshold||0)||1} Likes`;
+    return `Test: ${label}`;
+  };
+  const localizedPreview=(r,value)=>{
+    const raw=String(value||"");
+    if(window.APP_LANGUAGE!=="en"||!/^Test:\s*/i.test(raw))return raw;
+    if(isLikeCounterRule(r)&&/Intervall/i.test(raw))return defaultPreview(r);
+    const label=(values[r.platform]||[]).find(x=>x[0]===r.value)?.[1]||r.value||"Value";
     return `Test: ${label}`;
   };
   const persistRules=async()=>{
@@ -516,31 +536,31 @@ async function renderObsMeld(){
     return await api("/api/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(settings)});
   };
 
-  shell("obs_meld","OBS/Meld Integration","Dauerhafte Live-Werte gezielt in eine OBS- oder Meld-Quelle schreiben.",`<section class="card integrationBuilder"><h3>Neuen Eintrag anlegen</h3><div class="integrationFlow"><label><div>1 · Plattform</div><select id="rulePlatform">${option([["tiktok","TikTok"],["twitch","Twitch"],["youtube","YouTube"],["kick","Kick"]])}</select></label><label><div>2 · Live-Wert</div><select id="ruleValue"></select></label><label><div>3 · Ausgabe</div><select id="ruleTarget">${option(targetOptions)}</select></label><label><div>4 · Szene</div><select id="ruleScene"></select></label><label><div>5 · Quelle</div><select id="ruleSource"></select></label></div><div class="integrationName"><label><div>Name dieses Eintrags</div><input id="ruleName" placeholder="z. B. TikTok Like-Zähler Aktion"></label><div class="btnLine"><button id="saveRule">Speichern</button><button class="secondary" id="clearRule">Ändern abbrechen</button></div></div></section><section class="card"><h3>Gespeicherte Einträge</h3><div id="ruleList" class="ruleList"></div></section>`);
+  shell("obs_meld","OBS/Meld Integration",L("Dauerhafte Live-Werte gezielt in eine OBS- oder Meld-Quelle schreiben.","Write persistent live values to a specific OBS or Meld source."),`<section class="card integrationBuilder"><h3>${L("Neuen Eintrag anlegen","Create new entry")}</h3><div class="integrationFlow"><label><div>1 · ${L("Plattform","Platform")}</div><select id="rulePlatform">${option([["tiktok","TikTok"],["twitch","Twitch"],["youtube","YouTube"],["kick","Kick"]])}</select></label><label><div>2 · ${L("Live-Wert","Live value")}</div><select id="ruleValue"></select></label><label><div>3 · ${L("Ausgabe","Output")}</div><select id="ruleTarget">${option(targetOptions)}</select></label><label><div>4 · ${L("Szene","Scene")}</div><select id="ruleScene"></select></label><label><div>5 · ${L("Quelle","Source")}</div><select id="ruleSource"></select></label></div><div class="integrationName"><label><div>${L("Name dieses Eintrags","Name of this entry")}</div><input id="ruleName" placeholder="${L("z. B. TikTok-Like-Zähler","e.g. TikTok like counter")}"></label><div class="btnLine"><button id="saveRule">${L("Speichern","Save")}</button><button class="secondary" id="clearRule">${L("Ändern abbrechen","Cancel editing")}</button></div></div></section><section class="card"><h3>${L("Gespeicherte Einträge","Saved entries")}</h3><div id="ruleList" class="ruleList"></div></section>`);
   const reloadButton=document.createElement("button");
   reloadButton.className="secondary targetReload";
-  reloadButton.textContent="Szenen & Quellen neu laden";
+  reloadButton.textContent=L("Szenen & Quellen neu laden","Reload scenes & sources");
   reloadButton.onclick=async()=>{await api("/api/automation/reload-targets",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"});setTimeout(renderObsMeld,900);};
   $(".integrationBuilder").append(reloadButton);
 
   const actionField=document.createElement("label");
-  actionField.innerHTML=`<div>6 · Aktion</div><select id="ruleAction"><option value="text">Live-Wert als Text schreiben</option><option value="show">Quelle einblenden</option><option value="hide">Quelle ausblenden</option><option value="play">Quelle einmal abspielen</option><option value="scene">Szene aktivieren</option></select>`;
+  actionField.innerHTML=`<div>6 · ${L("Aktion","Action")}</div><select id="ruleAction">${option(Object.entries(actionLabels))}</select>`;
   $(".integrationFlow").append(actionField);
   const likeCounterField=document.createElement("div");
   likeCounterField.className="likeCounterFields";
-  likeCounterField.innerHTML=`<label><div>Chatter</div><input id="ruleLikeUser" list="ruleLikeUserList" placeholder="TikTok-Name exakt eingeben"></label><label><div>Auslösen alle X Likes</div><input id="ruleLikeThreshold" type="number" min="1" step="1" value="10"></label><datalist id="ruleLikeUserList"></datalist><div class="hint">Gilt nur für TikTok Like-Zähler: Die Aktion läuft wiederkehrend bei jedem Intervall dieses Users, z. B. 50, 100, 150 Likes.</div>`;
+  likeCounterField.innerHTML=`<label><div>Chatter</div><input id="ruleLikeUser" list="ruleLikeUserList" placeholder="${L("TikTok-Name exakt eingeben","Enter exact TikTok name")}"></label><label><div>${L("Auslösen alle X Likes","Trigger every X likes")}</div><input id="ruleLikeThreshold" type="number" min="1" step="1" value="10"></label><datalist id="ruleLikeUserList"></datalist><div class="hint">${L("Gilt nur für TikTok-Like-Zähler: Die Aktion wird bei jedem Intervall dieses Benutzers erneut ausgeführt, z. B. bei 50, 100 und 150 Likes.","Only applies to the TikTok like counter: the action repeats at every interval for this user, e.g. at 50, 100 and 150 likes.")}</div>`;
   $(".integrationFlow").append(likeCounterField);
   const hideSecondsField=document.createElement("label");
   hideSecondsField.className="hideSecondsField";
-  hideSecondsField.innerHTML=`<div>Nach X Sekunden ausblenden</div><input id="ruleHideSeconds" type="number" min="0" max="3600" step="0.1" value="4"><div class="hint">0 = nicht automatisch ausblenden.</div>`;
+  hideSecondsField.innerHTML=`<div>${L("Nach X Sekunden ausblenden","Hide after X seconds")}</div><input id="ruleHideSeconds" type="number" min="0" max="3600" step="0.1" value="4"><div class="hint">${L("0 = nicht automatisch ausblenden.","0 = do not hide automatically.")}</div>`;
   $(".integrationFlow").append(hideSecondsField);
   const startupField=document.createElement("label");
   startupField.className="textStartupField";
-  startupField.innerHTML=`<div>Text beim Toolstart</div><select id="ruleStartup"><option value="keep">Letzten Wert behalten</option><option value="placeholder">Platzhalter anzeigen</option></select>`;
+  startupField.innerHTML=`<div>${L("Text beim Programmstart","Text on tool startup")}</div><select id="ruleStartup"><option value="keep">${L("Letzten Wert behalten","Keep last value")}</option><option value="placeholder">${L("Platzhalter anzeigen","Show placeholder")}</option></select>`;
   $(".integrationFlow").append(startupField);
   const placeholderField=document.createElement("label");
   placeholderField.className="textPlaceholderField";
-  placeholderField.innerHTML=`<div>Platzhalter</div><input id="rulePlaceholder" value="---" placeholder="z. B. Noch keine Daten">`;
+  placeholderField.innerHTML=`<div>${L("Platzhalter","Placeholder")}</div><input id="rulePlaceholder" value="---" placeholder="${L("z. B. noch keine Daten","e.g. no data yet")}">`;
   $(".integrationFlow").append(placeholderField);
 
   const fillLikeUserList=()=>{$("#ruleLikeUserList").innerHTML=savedLikeUsers().map(x=>`<option value="${esc(x)}"></option>`).join("");};
@@ -549,11 +569,11 @@ async function renderObsMeld(){
   $("#ruleAction").onchange=toggleTextOptions;$("#ruleStartup").onchange=toggleTextOptions;
 
   let editIndex=-1;
-  const refreshSources=()=>{const target=targets[$("#ruleTarget").value]||{},scene=$("#ruleScene").value,sources=(target.sources_by_scene||{})[scene]||[];$("#ruleSource").innerHTML=option(sources.length?sources.map(x=>[x,x]):[["","Keine Quelle in dieser Szene"]]);};
-  const refreshTargets=()=>{const key=$("#ruleTarget").value,target=targets[key]||{},scenes=target.scenes||[];$("#ruleScene").innerHTML=option(scenes.length?scenes.map(x=>[x,x]):[["","Zuerst OBS/Meld verbinden"]]);refreshSources();};
+  const refreshSources=()=>{const target=targets[$("#ruleTarget").value]||{},scene=$("#ruleScene").value,sources=(target.sources_by_scene||{})[scene]||[];$("#ruleSource").innerHTML=option(sources.length?sources.map(x=>[x,x]):[["",L("Keine Quelle in dieser Szene","No source in this scene")]]);};
+  const refreshTargets=()=>{const key=$("#ruleTarget").value,target=targets[key]||{},scenes=target.scenes||[];$("#ruleScene").innerHTML=option(scenes.length?scenes.map(x=>[x,x]):[["",L("Zuerst OBS/Meld verbinden","Connect OBS/Meld first")]]);refreshSources();};
   const refreshValues=()=>{$("#ruleValue").innerHTML=option(values[$("#rulePlatform").value]||[]);toggleTextOptions();};
   const readRule=()=>{
-    const r={name:$("#ruleName").value.trim()||`${platformLabel($("#rulePlatform").value)} ${$("#ruleValue").selectedOptions[0]?.textContent||"Wert"}`,platform:$("#rulePlatform").value,value:$("#ruleValue").value,target:$("#ruleTarget").value,scene:$("#ruleScene").value,source:$("#ruleSource").value,action:$("#ruleAction").value,startup:$("#ruleStartup").value,placeholder:$("#rulePlaceholder").value.trim()||"---"};
+    const r={name:$("#ruleName").value.trim()||`${platformLabel($("#rulePlatform").value)} ${$("#ruleValue").selectedOptions[0]?.textContent||L("Wert","Value")}`,platform:$("#rulePlatform").value,value:$("#ruleValue").value,target:$("#ruleTarget").value,scene:$("#ruleScene").value,source:$("#ruleSource").value,action:$("#ruleAction").value,startup:$("#ruleStartup").value,placeholder:$("#rulePlaceholder").value.trim()||"---"};
     if(r.action==="show")r.hideSeconds=Math.max(0,Number($("#ruleHideSeconds").value)||0);
     if(isLikeCounterRule(r)){r.likeUser=$("#ruleLikeUser").value.trim();r.likeThreshold=Math.max(1,Number($("#ruleLikeThreshold").value)||1);}
     return r;
@@ -562,21 +582,21 @@ async function renderObsMeld(){
     const body={...r};
     if(isTextRule(r))body.preview=String(previewText||r.testText||defaultPreview(r));
     const out=await api("/api/automation/test",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
-    if(!out.ok)console.warn("Regeltest fehlgeschlagen",out.error);
+    if(!out.ok)console.warn(L("Regeltest fehlgeschlagen","Rule test failed"),out.error);
   };
   const renderRules=()=>{
     fillLikeUserList();
     $("#ruleList").innerHTML=rules.length?rules.map((r,i)=>{
       const textRule=isTextRule(r);
-      const testText=String(r.testText||defaultPreview(r));
+      const testText=localizedPreview(r,r.testText||defaultPreview(r));
       const valueLabel=(values[r.platform]||[]).find(x=>x[0]===r.value)?.[1]||r.value;
-      const condition=isLikeCounterRule(r)?` · User: ${esc(r.likeUser||"-")} · alle ${esc(r.likeThreshold||"-")} Likes`:"";
-      const showInfo=isShowRule(r)?` · ausblenden nach ${esc(r.hideSeconds??4)}s`:"";
+      const condition=isLikeCounterRule(r)?` · ${L("Benutzer","User")}: ${esc(r.likeUser||"-")} · ${L("alle","every")} ${esc(r.likeThreshold||"-")} Likes`:"";
+      const showInfo=isShowRule(r)?` · ${L("ausblenden nach","hide after")} ${esc(r.hideSeconds??4)}s`:"";
       const testControls=textRule
-        ? `<input class="savedRuleTestText" data-i="${i}" value="${esc(testText)}" placeholder="Testtext"><button class="secondary testSavedRule" data-i="${i}">Testen</button>`
-        : `<button class="secondary testSavedRule" data-i="${i}">Testen</button>`;
-      return `<div class="ruleRow"><div><b>${esc(r.name)}</b><div class="small">${esc(platformLabel(r.platform))} · ${esc(valueLabel)}${condition} → ${esc((r.target||"").toUpperCase())} · ${esc(r.scene||"-")} · ${esc(r.source||"-")} · ${esc(r.action||"text")}${showInfo}</div></div><div class="btnLine">${testControls}<button class="secondary editRule" data-i="${i}">Ändern</button><button class="secondary deleteRule" data-i="${i}">Löschen</button></div></div>`;
-    }).join(""):`<div class="hint">Noch keine Einträge. Lege oben gezielt einen dauerhaften Live-Wert an.</div>`;
+        ? `<input class="savedRuleTestText" data-i="${i}" value="${esc(testText)}" placeholder="${L("Testtext","Test text")}"><button class="secondary testSavedRule" data-i="${i}">${L("Testen","Test")}</button>`
+        : `<button class="secondary testSavedRule" data-i="${i}">${L("Testen","Test")}</button>`;
+      return `<div class="ruleRow"><div><b>${esc(r.name)}</b><div class="small">${esc(platformLabel(r.platform))} · ${esc(valueLabel)}${condition} → ${esc((r.target||"").toUpperCase())} · ${esc(r.scene||"-")} · ${esc(r.source||"-")} · ${esc(actionLabels[r.action]||r.action||actionLabels.text)}${showInfo}</div></div><div class="btnLine">${testControls}<button class="secondary editRule" data-i="${i}">${L("Ändern","Edit")}</button><button class="secondary deleteRule" data-i="${i}">${L("Löschen","Delete")}</button></div></div>`;
+    }).join(""):`<div class="hint">${L("Noch keine Einträge. Lege oben einen dauerhaften Live-Wert an.","No entries yet. Create a persistent live value above.")}</div>`;
     let testTextSaveTimer=null;
     const queueTestTextSave=()=>{clearTimeout(testTextSaveTimer);testTextSaveTimer=setTimeout(()=>persistRules(),450);};
     $$('.savedRuleTestText').forEach(input=>{
@@ -584,12 +604,12 @@ async function renderObsMeld(){
       input.onchange=async()=>{const i=Number(input.dataset.i);if(!rules[i])return;rules[i].testText=input.value;await persistRules();};
     });
     $$('.testSavedRule').forEach(b=>b.onclick=async()=>{const i=Number(b.dataset.i);const r=rules[i];if(!r)return;const input=$(`.savedRuleTestText[data-i="${i}"]`);if(input){r.testText=input.value;await persistRules();await runRuleTest(r,input.value);}else{await runRuleTest(r);}});
-    $$('.editRule').forEach(b=>b.onclick=()=>{const r=rules[Number(b.dataset.i)];editIndex=Number(b.dataset.i);$("#rulePlatform").value=r.platform;refreshValues();$("#ruleValue").value=r.value;toggleTextOptions();$("#ruleTarget").value=r.target;refreshTargets();$("#ruleScene").value=r.scene||"";refreshSources();$("#ruleSource").value=r.source||"";$("#ruleAction").value=r.action||"text";$("#ruleStartup").value=r.startup||"keep";$("#rulePlaceholder").value=r.placeholder||"---";$("#ruleHideSeconds").value=r.hideSeconds??r.hide_seconds??4;$("#ruleLikeUser").value=r.likeUser||r.like_user||"";$("#ruleLikeThreshold").value=r.likeThreshold||r.like_threshold||10;toggleTextOptions();$("#ruleName").value=r.name;$("#saveRule").textContent="Änderung speichern";});
+    $$('.editRule').forEach(b=>b.onclick=()=>{const r=rules[Number(b.dataset.i)];editIndex=Number(b.dataset.i);$("#rulePlatform").value=r.platform;refreshValues();$("#ruleValue").value=r.value;toggleTextOptions();$("#ruleTarget").value=r.target;refreshTargets();$("#ruleScene").value=r.scene||"";refreshSources();$("#ruleSource").value=r.source||"";$("#ruleAction").value=r.action||"text";$("#ruleStartup").value=r.startup||"keep";$("#rulePlaceholder").value=r.placeholder||"---";$("#ruleHideSeconds").value=r.hideSeconds??r.hide_seconds??4;$("#ruleLikeUser").value=r.likeUser||r.like_user||"";$("#ruleLikeThreshold").value=r.likeThreshold||r.like_threshold||10;toggleTextOptions();$("#ruleName").value=r.name;$("#saveRule").textContent=L("Änderung speichern","Save changes");});
     $$('.deleteRule').forEach(b=>b.onclick=async()=>{rules.splice(Number(b.dataset.i),1);await persistRules();renderRules();});
   };
   $("#rulePlatform").onchange=()=>{refreshValues();};$("#ruleValue").onchange=toggleTextOptions;$("#ruleTarget").onchange=refreshTargets;$("#ruleScene").onchange=refreshSources;
-  $("#clearRule").onclick=()=>{editIndex=-1;$("#ruleName").value="";$("#ruleLikeUser").value="";$("#ruleLikeThreshold").value=10;$("#ruleHideSeconds").value=4;$("#saveRule").textContent="Speichern";};
-  $("#saveRule").onclick=async()=>{const r=readRule();if(isLikeCounterRule(r)&&!r.likeUser){alert("Bitte einen Chatter für den Like-Zähler eintragen.");return;}if(editIndex>=0){r.testText=rules[editIndex]?.testText||defaultPreview(r);rules[editIndex]=r;}else{r.testText=defaultPreview(r);rules.push(r);}const out=await persistRules();if(!out.ok){console.warn("Regel speichern fehlgeschlagen",out.error);return;}editIndex=-1;$("#ruleName").value="";$("#ruleLikeUser").value="";$("#ruleLikeThreshold").value=10;$("#ruleHideSeconds").value=4;$("#saveRule").textContent="Speichern";renderRules();};
+  $("#clearRule").onclick=()=>{editIndex=-1;$("#ruleName").value="";$("#ruleLikeUser").value="";$("#ruleLikeThreshold").value=10;$("#ruleHideSeconds").value=4;$("#saveRule").textContent=L("Speichern","Save");};
+  $("#saveRule").onclick=async()=>{const r=readRule();if(isLikeCounterRule(r)&&!r.likeUser){alert(L("Bitte einen Chatter für den Like-Zähler eintragen.","Please enter a chatter for the like counter."));return;}if(editIndex>=0){r.testText=rules[editIndex]?.testText||defaultPreview(r);rules[editIndex]=r;}else{r.testText=defaultPreview(r);rules.push(r);}const out=await persistRules();if(!out.ok){console.warn(L("Regel speichern fehlgeschlagen","Failed to save rule"),out.error);return;}editIndex=-1;$("#ruleName").value="";$("#ruleLikeUser").value="";$("#ruleLikeThreshold").value=10;$("#ruleHideSeconds").value=4;$("#saveRule").textContent=L("Speichern","Save");renderRules();};
   fillLikeUserList();refreshValues();refreshTargets();toggleTextOptions();renderRules();
 }
 async function renderSpotify(){
@@ -849,9 +869,9 @@ function openInfo3ditorSettings(mount, values){
 async function openPluginSettings(pluginId){
   const mount=$("#pluginSettingsMount");
   if(!mount) return;
-  mount.innerHTML=`<section class="card pluginSettingsCard"><h3>Settings laden...</h3></section>`;
+  mount.innerHTML=`<section class="card pluginSettingsCard"><h3>Einstellungen werden geladen...</h3></section>`;
   const d=await api(`/api/plugins/${encodeURIComponent(pluginId)}/settings`);
-  if(!d.ok){mount.innerHTML=`<section class="card pluginSettingsCard"><h3>Settings</h3><div class="warnBox">${esc(d.error||"Konnte Settings nicht laden")}</div></section>`;return;}
+  if(!d.ok){mount.innerHTML=`<section class="card pluginSettingsCard"><h3>Einstellungen</h3><div class="warnBox">${esc(d.error||"Einstellungen konnten nicht geladen werden")}</div></section>`;return;}
   if(pluginId==="info3ditor"){openInfo3ditorSettings(mount,d.values||{});return;}
   let schema=d.schema||[];
   const values=d.values||{};
@@ -860,7 +880,7 @@ async function openPluginSettings(pluginId){
   const groups=tabs.length?tabs:["Allgemein"];
   const tabButtons=groups.map((tab,i)=>`<button type="button" class="pluginSettingsTabBtn ${i===0?"active":""}" data-tab="${esc(tab)}">${esc(tab)}</button>`).join("");
   const body=groups.map((tab,i)=>`<div class="pluginSettingsGroup ${i===0?"active":""}" data-tab="${esc(tab)}"><div class="pluginSettingsFields">${schema.filter(f=>schemaTab(f)===tab || (!tabs.length&&true)).map(f=>renderPluginField(f,values)).join("")}</div></div>`).join("");
-  mount.innerHTML=`<section class="card pluginSettingsCard"><div class="pluginSettingsHead"><div><h3>${esc(d.plugin_id)} Settings</h3><div class="small">Wird in data/settings.json unter plugins/${esc(d.plugin_id)} gespeichert und danach neu gestartet.</div></div><button type="button" class="secondary" id="pluginSettingsClose">Schließen</button></div>${groups.length>1?`<div class="pluginSettingsTabs">${tabButtons}</div>`:""}<form id="pluginSettingsForm">${body||"<div class='small'>Dieses Plugin hat kein Settings-Schema.</div>"}<div class="btnLine"><button type="submit">Speichern & neu starten</button><button type="button" class="secondary" id="pluginSettingsCancel">Abbrechen</button><span class="small" id="pluginSettingsResult"></span></div></form></section>`;
+  mount.innerHTML=`<section class="card pluginSettingsCard"><div class="pluginSettingsHead"><div><h3>${esc(d.plugin_id)} Einstellungen</h3><div class="small">Wird in data/settings.json unter plugins/${esc(d.plugin_id)} gespeichert und danach neu gestartet.</div></div><button type="button" class="secondary" id="pluginSettingsClose">Schließen</button></div>${groups.length>1?`<div class="pluginSettingsTabs">${tabButtons}</div>`:""}<form id="pluginSettingsForm">${body||"<div class='small'>Dieses Plugin hat kein Einstellungsschema.</div>"}<div class="btnLine"><button type="submit">Speichern & neu starten</button><button type="button" class="secondary" id="pluginSettingsCancel">Abbrechen</button><span class="small" id="pluginSettingsResult"></span></div></form></section>`;
   $("#pluginSettingsClose").onclick=()=>mount.innerHTML="";
   $("#pluginSettingsCancel").onclick=()=>mount.innerHTML="";
   $$(".pluginSettingsTabBtn", mount).forEach(btn=>btn.onclick=()=>{
@@ -891,7 +911,7 @@ async function openPluginSettings(pluginId){
 }
 async function togglePluginEnabled(pluginId, enabled){
   const d=await api(`/api/plugins/${encodeURIComponent(pluginId)}/settings`);
-  if(!d.ok){alert(d.error||"Konnte Plugin-Settings nicht laden");return;}
+  if(!d.ok){alert(d.error||"Plugin-Einstellungen konnten nicht geladen werden");return;}
   const values={...(d.values||{}),enabled:!!enabled};
   const out=await api(`/api/plugins/${encodeURIComponent(pluginId)}/settings`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({values})});
   if(!out.ok){alert(out.error||"Plugin konnte nicht umgeschaltet werden");return;}
@@ -945,7 +965,7 @@ async function renderEasyslider(){
 }
 async function renderPlugins(){
   const s=await api("/api/status");
-  const cards=(s.plugins||[]).map(p=>`<section class="card pluginCard"><div class="pluginHead"><h3>${esc(p.name)}</h3><span class="pluginState ${pluginStateClass(p.state)}">${esc(p.state||"ready")}</span></div><div class="small">${esc(p.description||"")}</div><div class="small pluginStatusText">${esc(p.status||p.message||"Bereit")}</div><div class="btnLine"><button type="button" class="pluginSettingsBtn" data-plugin="${esc(p.id)}">Settings</button><a class="btn secondary" href="/dev" title="Logs im DEV-Bereich prüfen">Logs</a></div></section>`).join("");
+  const cards=(s.plugins||[]).map(p=>`<section class="card pluginCard"><div class="pluginHead"><h3>${esc(p.name)}</h3><span class="pluginState ${pluginStateClass(p.state)}">${esc(p.state||"ready")}</span></div><div class="small">${esc(p.description||"")}</div><div class="small pluginStatusText">${esc(p.status||p.message||"Bereit")}</div><div class="btnLine"><button type="button" class="pluginSettingsBtn" data-plugin="${esc(p.id)}">Einstellungen</button><a class="btn secondary" href="/dev" title="Protokolle im DEV-Bereich prüfen">Protokolle</a></div></section>`).join("");
   shell("plugins","Plugins","Hier stellst du jedes gefundene Plugin direkt ein. Der alte nutzlose Bereit-Button ist weg.",`<div id="pluginSettingsMount"></div><div class="pluginGrid">${cards}</div>`);
   $$(".pluginSettingsBtn").forEach(b=>b.onclick=()=>openPluginSettings(b.dataset.plugin));
 }
@@ -962,7 +982,7 @@ function addPluginToggleButtons(plugins){
     const restart=document.createElement("button");
     restart.type="button";
     restart.className="pluginRestartBtn secondary";
-    restart.textContent="Restart";
+    restart.textContent="Neustart";
     restart.onclick=()=>restartPlugin(p.id);
     btn.parentElement?.insertBefore(restart,btn);
   });
@@ -989,14 +1009,14 @@ function formatUptime(seconds){
 async function renderDev(){
   shell("dev","DEV","Lokale Entwicklungsdiagnose. Geheimnisse werden in der Logansicht automatisch ausgeblendet.",`
     <div class="devGrid">
-      <section class="card"><h3>Runtime</h3><div id="devRuntime" class="devFacts"></div></section>
+      <section class="card"><h3>Laufzeit</h3><div id="devRuntime" class="devFacts"></div></section>
       <section class="card"><h3>Zustand</h3><div id="devCounts" class="devFacts"></div></section>
       <section class="card"><h3>Plattformen</h3><div id="devPlatforms" class="devFacts"></div></section>
       <section class="card"><h3>Entwicklerlinks</h3><div class="devLinks">
-        <a class="btn secondary" target="_blank" href="/debug">Raw Debug</a>
+        <a class="btn secondary" target="_blank" href="/debug">Ungefilterte Diagnose</a>
         <a class="btn secondary" target="_blank" href="/api/status">Status JSON</a>
-        <a class="btn secondary" target="_blank" href="/api/dev/settings">Settings JSON (bereinigt)</a>
-        <a class="btn secondary" target="_blank" href="/api/runtime">Runtime JSON</a>
+        <a class="btn secondary" target="_blank" href="/api/dev/settings">Einstellungen-JSON (bereinigt)</a>
+        <a class="btn secondary" target="_blank" href="/api/runtime">Laufzeit-JSON</a>
         <a class="btn secondary" target="_blank" href="/api/overlay-urls">Overlay JSON</a>
       </div></section>
     </div>
@@ -1060,7 +1080,7 @@ async function renderDev(){
     renderLogFilters(d);
     $("#devRuntime").innerHTML=[
       ["Version",d.version],["Uptime",formatUptime(d.uptime)],["Port",d.port],["PID",d.pid],
-      ["Python",d.python],["Modus",d.frozen?"EXE":"Source"],["Arbeitsordner",d.cwd],["Executable",d.executable],
+      ["Python",d.python],["Modus",d.frozen?"EXE":"Quellcode"],["Arbeitsordner",d.cwd],["Programmdatei",d.executable],
       ["Daten",d.paths?.data],["Log",d.paths?.log]
     ].map(x=>`<div><b>${esc(x[0])}</b><span>${esc(x[1])}</span></div>`).join("");
     $("#devCounts").innerHTML=[
@@ -1093,9 +1113,29 @@ async function renderDev(){
   await refreshInfo(); await refreshLog();
   setInterval(()=>{if($("#devAutoRefresh")?.checked){refreshInfo();refreshLog(true);}},2000);
 }
+async function renderChattim3r(){
+  shell("chattim3r","Chattim3r",L("Wiederkehrende Chatnachrichten automatisch an ausgewählte Plattformen senden.","Automatically send recurring chat messages to selected platforms."),`
+    <section class="card timerEditor"><h3 id="timerFormTitle">${L("Neuen Eintrag anlegen","Create new entry")}</h3>
+      <form id="timerForm"><div class="timerFields">
+        <label><div>${L("Intervall in Minuten","Interval in minutes")}</div><input id="timerMinutes" type="number" min="1" step="1" value="30" required></label>
+        <label class="timerText"><div>${L("Nachricht","Message")}</div><textarea id="timerText" rows="3" maxlength="1000" required></textarea></label>
+      </div><div class="timerPlatforms"><b>${L("Plattformen","Platforms")}</b>${["twitch","tiktok","youtube","kick"].map(p=>`<label><input type="checkbox" name="timerPlatform" value="${p}"> ${platformLabel(p)}</label>`).join("")}</div>
+      <div class="btnLine"><button type="submit" id="timerSave">${L("Speichern","Save")}</button><button type="button" class="secondary" id="timerCancel" hidden>${L("Abbrechen","Cancel")}</button></div></form>
+    </section><section class="card"><h3>${L("Gespeicherte Einträge","Saved entries")}</h3><div id="timerList" class="timerList"></div></section>`);
+  let entries=[], editing="";
+  const load=async()=>{const out=await api("/api/chattim3r");entries=Array.isArray(out.entries)?out.entries:[];draw();};
+  const reset=()=>{editing="";$("#timerForm").reset();$("#timerMinutes").value=30;$("#timerCancel").hidden=true;$("#timerFormTitle").textContent=L("Neuen Eintrag anlegen","Create new entry");};
+  const draw=()=>{$("#timerList").innerHTML=entries.map(e=>`<div class="timerRow"><div><b>${esc(e.text)}</b><span>${esc(e.minutes)} min · ${(e.platforms||[]).map(platformLabel).join(", ")}</span></div><div class="btnLine"><button class="secondary timerEdit" data-id="${esc(e.id)}">${L("Bearbeiten","Edit")}</button><button class="secondary timerTest" data-id="${esc(e.id)}">${L("Testen","Test")}</button><button class="secondary timerDelete" data-id="${esc(e.id)}">${L("Löschen","Delete")}</button></div></div>`).join("")||`<div class="small">${L("Noch keine Einträge gespeichert.","No entries saved yet.")}</div>`;
+    $$(".timerEdit").forEach(b=>b.onclick=()=>{const e=entries.find(x=>x.id===b.dataset.id);if(!e)return;editing=e.id;$("#timerMinutes").value=e.minutes;$("#timerText").value=e.text;$$('[name="timerPlatform"]').forEach(x=>x.checked=(e.platforms||[]).includes(x.value));$("#timerCancel").hidden=false;$("#timerFormTitle").textContent=L("Eintrag bearbeiten","Edit entry");scrollTo({top:0,behavior:"smooth"});});
+    $$(".timerTest").forEach(b=>b.onclick=async()=>{const old=b.textContent;b.disabled=true;b.textContent=L("Wird gesendet…","Sending…");const out=await api("/api/chattim3r/test",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:b.dataset.id})});b.disabled=false;b.textContent=out.ok?L("Gesendet","Sent"):L("Fehlgeschlagen","Failed");setTimeout(()=>{b.textContent=old},1600);if(!out.ok)alert(out.error||L("Test fehlgeschlagen","Test failed"));});
+    $$(".timerDelete").forEach(b=>b.onclick=async()=>{if(!confirm(L("Eintrag wirklich löschen?","Really delete this entry?")))return;const out=await api("/api/chattim3r/delete",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id:b.dataset.id})});if(out.ok){entries=out.entries||[];draw();}});};
+  $("#timerCancel").onclick=reset;
+  $("#timerForm").onsubmit=async ev=>{ev.preventDefault();const platforms=$$('[name="timerPlatform"]:checked').map(x=>x.value);if(!platforms.length){alert(L("Bitte mindestens eine Plattform auswählen.","Please select at least one platform."));return;}const payload={id:editing,minutes:Number($("#timerMinutes").value),text:$("#timerText").value.trim(),platforms};const out=await api("/api/chattim3r",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});if(!out.ok){alert(out.error||L("Speichern fehlgeschlagen","Save failed"));return;}entries=out.entries||[];reset();draw();};
+  await load();
+}
 async function bootPage(){
   try{
-    await (({dashboard:renderDashboard,platforms:renderPlatforms,chat:renderChat,obs_meld:renderObsMeld,spotify:renderSpotify,easyslider:renderEasyslider,overlays:renderOverlays,plugins:renderPlugins,dev:renderDev}[page]||renderDashboard)());
+    await (({dashboard:renderDashboard,platforms:renderPlatforms,chat:renderChat,obs_meld:renderObsMeld,spotify:renderSpotify,easyslider:renderEasyslider,overlays:renderOverlays,plugins:renderPlugins,chattim3r:renderChattim3r,dev:renderDev}[page]||renderDashboard)());
   }catch(e){
     try{
       await api("/api/client-error",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({level:"error",message:String(e&&e.stack||e)})});

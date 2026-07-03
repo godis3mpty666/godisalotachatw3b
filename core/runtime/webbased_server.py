@@ -3,6 +3,7 @@ import base64, hashlib, json, mimetypes, os, re, secrets, socket, struct, sys, t
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+from shared.i18n import normalize_language, translate_log
 from shared.version import APP_VERSION
 
 APP_NAME = "godisalotachat webbased"
@@ -575,7 +576,13 @@ class WebbasedPluginHost:
             changed = str(previous.get("state") or "") != str(st) or str(previous.get("message") or "") != str(msg)
             self.state.plugin_status[plugin_id] = {"state": str(st), "message": str(msg), "ts": time.time()}
             if changed:
-                self.state.log(plugin_id, "status", st, msg)
+                # Plugins commonly log the connection error immediately before
+                # publishing an error status. Use the same canonical error text
+                # so the central logger can collapse both into one useful line.
+                if str(st).strip().lower() in {"error", "failed"}:
+                    self.state.log(plugin_id, "error", msg or st)
+                else:
+                    self.state.log(plugin_id, "status", st, msg)
         except Exception:
             pass
 
@@ -808,7 +815,7 @@ class WebbasedPluginHost:
         ])
 
     def _mark_outbound_echo(self, sender: str, platform: str, message: str, ttl: float = 45.0) -> None:
-        if str(sender or "").strip().lower() not in {"bridg3alot", "spotis3mptify", "botalot", "gam3pick3r", "bot"}:
+        if str(sender or "").strip().lower() not in {"bridg3alot", "spotis3mptify", "botalot", "gam3pick3r", "chattim3r", "bot"}:
             return
         key = self._outbound_echo_key(platform, message)
         if not key.strip("|"):
@@ -892,6 +899,7 @@ class WebbasedPluginManager:
 
     def discover(self) -> list[dict]:
         out = []
+        language = normalize_language(self.state.settings().get("ui", {}).get("language", "de"))
         try:
             for module_root in self.state.module_roots:
                 for folder in sorted(module_root.iterdir()):
@@ -906,7 +914,7 @@ class WebbasedPluginManager:
                         "id": pid,
                         "name": man.get("name") or folder.name,
                         "version": man.get("version") or "",
-                        "description": man.get("description") or man.get("description_de") or "",
+                        "description": man.get("description_en" if language == "en" else "description_de") or man.get("description") or "",
                         "enabled": bool(self.state.plugin_enabled(pid)),
                         "status": self._status_label(state, msg),
                         "state": state,
@@ -967,6 +975,9 @@ class WebbasedPluginManager:
                 return False
             plugin = self.load_plugin(plugin_id)
             settings = self.state.plugin_settings(plugin_id, plugin)
+            set_language = getattr(plugin, "set_ui_language", None)
+            if callable(set_language):
+                set_language(self.state.settings().get("ui", {}).get("language", "de"))
             plugin.start(settings, self.host)
             return True
         except Exception as exc:
@@ -1034,6 +1045,8 @@ class AppState:
         self.asset_pics = next((p for p in asset_candidates if p.exists()), asset_candidates[0])
         self.module_roots = [self.modules / "integrations", self.modules / "plugins"]
         self.settings_path = self.data / "settings.json"
+        self.chattim3r_path = self.data / "chattim3r.json"
+        self._chattim3r_lock = threading.RLock()
         self.auth_dir = self.data / "auth"
         self.messages = [{
             "id": _now_ms(),
@@ -1063,6 +1076,7 @@ class AppState:
         # one instance of an identical error per runtime session in the DEV log.
         self._log_lock = threading.RLock()
         self._seen_error_logs: dict[str, float] = {}
+        self._recent_log_lines: dict[str, float] = {}
         self.main_url = ""
         self.shutting_down = False
         self._tiktok_cookie_backoff = {}
@@ -1109,6 +1123,47 @@ class AppState:
         self._write_run_state("running", clean=False, reason="started")
         self.plugin_manager = WebbasedPluginManager(self)
         self.log("start", "base=" + str(self.base), "resource=" + str(self.resource_base), "templates=" + str(self.templates), "static=" + str(self.static))
+
+    def chattim3r_entries(self) -> list[dict]:
+        with self._chattim3r_lock:
+            raw = _json_load(self.chattim3r_path, [])
+            return raw if isinstance(raw, list) else []
+
+    def save_chattim3r_entries(self, entries: list[dict]) -> None:
+        with self._chattim3r_lock:
+            _json_save(self.chattim3r_path, entries)
+
+    def chattim3r_loop(self) -> None:
+        while not self.shutting_down:
+            now = time.time()
+            entries = self.chattim3r_entries()
+            changed = False
+            for entry in entries:
+                if not isinstance(entry, dict):
+                    continue
+                try:
+                    next_run = float(entry.get("next_run") or 0)
+                    minutes = max(1, int(entry.get("minutes") or 30))
+                except (TypeError, ValueError):
+                    next_run, minutes = 0, 30
+                if now < next_run:
+                    continue
+                text = str(entry.get("text") or "").strip()
+                entry["last_run"] = int(now)
+                entry["next_run"] = int(now + minutes * 60)
+                changed = True
+                if text:
+                    for platform in entry.get("platforms") or []:
+                        threading.Thread(
+                            target=self.plugin_manager.host.send_platform_message,
+                            args=(str(platform), text),
+                            kwargs={"sender": "chattim3r"},
+                            daemon=True,
+                            name=f"chattim3r-{platform}",
+                        ).start()
+            if changed:
+                self.save_chattim3r_entries(entries)
+            time.sleep(2)
 
     def _json_has_runtime_token(self, path: Path) -> bool:
         try:
@@ -1318,16 +1373,28 @@ class AppState:
         try:
             source, level, message = _normalize_log_parts(parts)
             message = _redact_dev_log(message)
-            if level == "error":
-                signature = source + "\x1f" + message
-                with self._log_lock:
+            # Runtime metrics belong in the dashboard, not in the human log.
+            # Likewise, polling/keepalive/chat tracing creates noise without
+            # describing a state change or an actionable problem.
+            if level in {"debug", "metric"} or _is_noisy_log_message(message, source):
+                return
+            signature = source + "\x1f" + _log_dedupe_text(message)
+            now = time.time()
+            with self._log_lock:
+                # Errors are emitted once per run. Other identical lines may be
+                # useful again later, but never every poll cycle.
+                ttl = 86400.0 if level == "error" else 300.0
+                if now - float(self._recent_log_lines.get(signature) or 0.0) < ttl:
+                    return
+                self._recent_log_lines[signature] = now
+                if level == "error":
                     if signature in self._seen_error_logs:
                         return
-                    now = time.time()
                     self._seen_error_logs[signature] = now
-                    # Bound the small in-memory cache for very long runtimes.
-                    if len(self._seen_error_logs) > 512:
-                        self._seen_error_logs = {key: ts for key, ts in self._seen_error_logs.items() if now - ts < 21600}
+                if len(self._recent_log_lines) > 1024:
+                    self._recent_log_lines = {key: ts for key, ts in self._recent_log_lines.items() if now - ts < 86400}
+                if len(self._seen_error_logs) > 512:
+                    self._seen_error_logs = {key: ts for key, ts in self._seen_error_logs.items() if now - ts < 86400}
             line = time.strftime("%Y-%m-%d %H:%M:%S") + f" | {source} | {level} | " + message + "\n"
             self.log_file.parent.mkdir(parents=True, exist_ok=True)
             with self.log_file.open("a", encoding="utf-8") as f:
@@ -1341,7 +1408,7 @@ class AppState:
             "platforms": {p: {"enabled": False, "status": "nicht verbunden"} for p in PLATFORM_ORDER},
             "plugins": {},
             "automation_rules": [],
-            "ui": {"3asyslid3r": default_easyslider_settings()},
+            "ui": {"language": "de", "3asyslid3r": default_easyslider_settings()},
         }
         s = _json_load(self.settings_path, default)
         s["version"] = VERSION
@@ -1349,6 +1416,7 @@ class AppState:
         s.setdefault("ui", {})
         if not isinstance(s.get("ui"), dict):
             s["ui"] = {}
+        s["ui"]["language"] = normalize_language(s["ui"].get("language", "de"))
         s["ui"]["3asyslid3r"] = normalize_easyslider_settings(s["ui"].get("3asyslid3r"))
         if not isinstance(s.get("automation_rules"), list):
             s["automation_rules"] = []
@@ -3209,6 +3277,8 @@ class AppState:
             cfg["viewer_count_enabled"] = True
         if plugin_id == "twitch_chat":
             cfg.setdefault("viewer_join_alerts", True)
+        cfg["_ui_language"] = normalize_language(self.settings().get("ui", {}).get("language", "de"))
+        cfg["_main_ui_base"] = f"http://127.0.0.1:{self.port}"
         return cfg
 
     def plugin_list(self):
@@ -3784,6 +3854,25 @@ def _normalize_log_parts(parts) -> tuple[str, str, str]:
     message = " | ".join(_clean_log_field(item, "") for item in rest).strip(" |")
     return source, level, message
 
+def _log_dedupe_text(message: str) -> str:
+    text = re.sub(r"\[?\d{1,2}:\d{2}:\d{2}(?:\.\d+)?\]?", "", str(message or ""))
+    text = re.sub(r"^(?:error|failed|warning|status)\s*\|\s*", "", text, flags=re.I)
+    return re.sub(r"\s+", " ", text).strip().casefold()
+
+def _is_noisy_log_message(message: str, source: str = "") -> bool:
+    low = str(message or "").casefold()
+    if str(source or "").casefold() in {"callback-listen"}:
+        return True
+    noisy = (
+        "duplicate chat row suppressed", "chat |", "viewer_count", "followers_count",
+        '"message_type": "is_live"', "metric_only", "rx keepalive", "tx keepalive",
+        "poller thread started", "session cache updated", "cached session items",
+        "sending webchannel init", "published webchannel objects", "published meld methods",
+        "published meld properties", "youtube chat message:", "like event:", "join event:",
+        "waiting for youtube live chat", "no active youtube livestream chat found yet",
+    )
+    return any(token in low for token in noisy)
+
 def _redact_dev_log(text):
     text = str(text or "")
     text = re.sub(r"(?i)(authorization\s*[:=]\s*bearer\s+)[^\s,;]+", r"\1[REDACTED]", text)
@@ -3857,7 +3946,19 @@ def _filter_dev_log(text, scope, selected, plugin_ids, level="all", search=""):
     search = str(search or "").strip().lower()
     plugin_ids = set(plugin_ids or [])
     platform_sources = set().union(*DEV_PLATFORM_LOG_SOURCES.values())
-    lines = str(text or "").splitlines()
+    lines = []
+    seen = set()
+    for line in str(text or "").splitlines():
+        parts = line.split(" | ", 3)
+        message = parts[3] if len(parts) >= 4 else line
+        line_level = _dev_log_level(line)
+        if line_level in {"debug", "metric"} or _is_noisy_log_message(message, _dev_log_source(line)):
+            continue
+        signature = _dev_log_source(line) + "\x1f" + _log_dedupe_text(message)
+        if signature in seen:
+            continue
+        seen.add(signature)
+        lines.append(line)
     if scope == "platform":
         allowed = DEV_PLATFORM_LOG_SOURCES.get(selected, {selected})
         lines = [line for line in lines if _dev_source_matches(_dev_log_source(line), allowed)]
@@ -3977,6 +4078,13 @@ class Handler(BaseHTTPRequestHandler):
         return
 
     def _send(self, code, body, ctype="text/html; charset=utf-8", extra=None):
+        if isinstance(body, str) and str(ctype).lower().startswith("text/html") and "i18n.js" not in body and "</head>" in body.lower():
+            try:
+                language = normalize_language(STATE.settings().get("ui", {}).get("language", "de")) if STATE is not None else "de"
+                i18n_head = f'<script>window.APP_LANGUAGE={json.dumps(language)};</script><script src="/static/js/i18n.js?v={VERSION}"></script>'
+                body = re.sub(r"</head>", i18n_head + "</head>", body, count=1, flags=re.IGNORECASE)
+            except Exception:
+                pass
         b = body.encode("utf-8") if isinstance(body, str) else body
         self.send_response(code)
         self.send_header("Content-Type", ctype)
@@ -4051,6 +4159,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._page("platforms.html")
         if path == "/chat":
             return self._page("chat.html")
+        if path == "/chattim3r":
+            return self._page("chattim3r.html")
         if path == "/obs-meld-integration":
             return self._page("obs_meld_integration.html")
         if path in ("/spotis3mptify", "/spotify"):
@@ -4125,6 +4235,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/settings":
             self._json(st.settings())
             return
+        if path == "/api/language":
+            self._json({"ok": True, "language": normalize_language(st.settings().get("ui", {}).get("language"))})
+            return
         if path == "/api/openai/models":
             cfg = st.settings().get("platforms", {}).get("openai", {})
             force = str((urllib.parse.parse_qs(parsed.query).get("force") or [""])[0]).lower() in {"1", "true", "yes"}
@@ -4134,6 +4247,7 @@ class Handler(BaseHTTPRequestHandler):
         m_plugin_settings = re.match(r"^/api/plugins/([^/]+)/settings$", path)
         if m_plugin_settings:
             plugin_id = urllib.parse.unquote(m_plugin_settings.group(1)).strip()
+            ui_language = normalize_language(st.settings().get("ui", {}).get("language", "de"))
             schema = []
             defaults = {}
             plugin = None
@@ -4145,9 +4259,12 @@ class Handler(BaseHTTPRequestHandler):
                 st.log(plugin_id or "plugins", "settings plugin load failed", exc)
             if plugin is not None:
                 try:
+                    set_language = getattr(plugin, "set_ui_language", None)
+                    if callable(set_language):
+                        set_language(ui_language)
                     if hasattr(plugin, "settings_schema"):
                         try:
-                            schema = plugin.settings_schema(language="de", ui_language="de")
+                            schema = plugin.settings_schema(language=ui_language, ui_language=ui_language)
                         except TypeError:
                             schema = plugin.settings_schema()
                 except Exception as exc:
@@ -4160,6 +4277,22 @@ class Handler(BaseHTTPRequestHandler):
                             defaults = {}
                 except Exception:
                     defaults = {}
+            if ui_language == "en" and isinstance(schema, list):
+                localized_schema = []
+                for raw_field in schema:
+                    field = dict(raw_field) if isinstance(raw_field, dict) else raw_field
+                    if isinstance(field, dict):
+                        for base_key in ("label", "help", "placeholder", "button_text", "tab", "ui_tab", "category"):
+                            english_key = base_key + "_en"
+                            if field.get(english_key):
+                                field[base_key] = field[english_key]
+                        if isinstance(field.get("options"), list):
+                            field["options"] = [
+                                ({**option, "label": option.get("label_en") or option.get("label")} if isinstance(option, dict) else option)
+                                for option in field["options"]
+                            ]
+                    localized_schema.append(field)
+                schema = localized_schema
             values = st.plugin_settings(plugin_id, plugin)
             if not schema:
                 merged_keys = []
@@ -4195,7 +4328,7 @@ class Handler(BaseHTTPRequestHandler):
             plugin_ids = [str(item.get("id") or "") for item in st.plugin_list()]
             filtered = _filter_dev_log(txt, scope, selected, plugin_ids, level=level, search=search)
             self._json({
-                "log": _redact_dev_log(filtered[-100000:]),
+                "log": translate_log(_redact_dev_log(filtered[-100000:]), st.settings().get("ui", {}).get("language", "de")),
                 "bytes": st.log_file.stat().st_size if st.log_file.exists() else 0,
                 "scope": scope,
                 "id": selected,
@@ -4249,7 +4382,8 @@ class Handler(BaseHTTPRequestHandler):
                 txt = st.log_file.read_text(encoding="utf-8") if st.log_file.exists() else ""
             except Exception as e:
                 txt = "Log lesen fehlgeschlagen: " + str(e)
-            body = "<!doctype html><meta charset=utf-8><title>webbased debug</title><body style='background:#080a13;color:#fff;font-family:Consolas,monospace;white-space:pre-wrap;padding:24px'><h2>webbased debug Ver. " + VERSION + "</h2>" + esc_html(txt[-20000:]) + "</body>"
+            language = normalize_language(st.settings().get("ui", {}).get("language", "de"))
+            body = "<!doctype html><meta charset=utf-8><title>webbased debug</title><body style='background:#080a13;color:#fff;font-family:Consolas,monospace;white-space:pre-wrap;padding:24px'><h2>webbased debug Ver. " + VERSION + "</h2>" + esc_html(translate_log(txt[-20000:], language)) + "</body>"
             self._send(200, body)
             return
 
@@ -4266,6 +4400,8 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/chat-state":
             self._json({"messages": st.messages[-100:], "platforms": _chat_platform_state(st, st.settings())})
             return
+        if path == "/api/chattim3r":
+            return self._json({"ok": True, "entries": st.chattim3r_entries()})
         if path == "/api/desktop-chat/layout":
             stored = _json_load(st.data / "plugins" / "chat_desktop" / "layout.json", {})
             self._json(normalize_desktop_chat_layout(stored))
@@ -4299,6 +4435,7 @@ class Handler(BaseHTTPRequestHandler):
                 "base_url": base,
                 "callback_port": CALLBACK_PORT,
                 "spotify_redirect_uri": spotify_redirect,
+                "language": normalize_language(settings.get("ui", {}).get("language", "de")),
                 "port_warning": ""
             })
             return
@@ -4414,6 +4551,58 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
         data = self._read_json()
+
+        if path == "/api/language":
+            language = normalize_language(data.get("language") if isinstance(data, dict) else "de")
+            current = st.settings()
+            current.setdefault("ui", {})["language"] = language
+            st.save_settings(current)
+            for plugin in list(st.plugin_instances.values()):
+                set_language = getattr(plugin, "set_ui_language", None)
+                if callable(set_language):
+                    try:
+                        set_language(language)
+                    except Exception as exc:
+                        st.log(getattr(plugin, "plugin_id", "plugin"), "language update failed", exc)
+            st.log("ui", "Sprache geändert" if language == "de" else "language changed", language)
+            return self._json({"ok": True, "language": language})
+
+        if path == "/api/chattim3r/delete":
+            entry_id = str(data.get("id") or "")
+            entries = [e for e in st.chattim3r_entries() if str(e.get("id")) != entry_id]
+            st.save_chattim3r_entries(entries)
+            return self._json({"ok": True, "entries": entries})
+
+        if path == "/api/chattim3r/test":
+            entry_id = str(data.get("id") or "")
+            entry = next((e for e in st.chattim3r_entries() if str(e.get("id")) == entry_id), None)
+            if entry is None:
+                return self._json({"ok": False, "error": "Entry not found."}, 404)
+            text = str(entry.get("text") or "").strip()
+            results = {str(platform): st.plugin_manager.host.send_platform_message(str(platform), text, sender="chattim3r") for platform in entry.get("platforms") or []}
+            if not any(results.values()):
+                return self._json({"ok": False, "error": "The message could not be sent to any selected platform.", "results": results}, 502)
+            return self._json({"ok": True, "results": results})
+
+        if path == "/api/chattim3r":
+            text = str(data.get("text") or "").strip()[:1000]
+            try:
+                minutes = max(1, min(525600, int(data.get("minutes") or 30)))
+            except (TypeError, ValueError):
+                minutes = 30
+            allowed = {"twitch", "tiktok", "youtube", "kick"}
+            platforms = [p for p in data.get("platforms", []) if p in allowed]
+            if not text or not platforms:
+                return self._json({"ok": False, "error": "Text and at least one platform are required."}, 400)
+            entries = st.chattim3r_entries()
+            entry_id = str(data.get("id") or "").strip()
+            existing = next((e for e in entries if str(e.get("id")) == entry_id), None)
+            if existing is None:
+                existing = {"id": str(_now_ms())}
+                entries.append(existing)
+            existing.update({"minutes": minutes, "text": text, "platforms": platforms, "next_run": int(time.time() + minutes * 60)})
+            st.save_chattim3r_entries(entries)
+            return self._json({"ok": True, "entries": entries})
 
         if path == "/api/automation/reload-targets":
             try:
@@ -5062,7 +5251,13 @@ class Handler(BaseHTTPRequestHandler):
         if not p.exists():
             STATE.log("template missing", str(p), "resource=" + str(STATE.resource_base), "base=" + str(STATE.base))
             return self._send(404, f"Template missing: {p}\n\nDebug: http://127.0.0.1:{STATE.port}/debug", "text/plain; charset=utf-8")
-        html = p.read_text(encoding="utf-8").replace("__VERSION__", VERSION)
+        language = normalize_language(STATE.settings().get("ui", {}).get("language", "de"))
+        html = p.read_text(encoding="utf-8").replace("__VERSION__", VERSION).replace("__LANGUAGE__", language)
+        i18n_head = (
+            f'<script>window.APP_LANGUAGE={json.dumps(language)};</script>'
+            f'<script src="/static/js/i18n.js?v={VERSION}"></script>'
+        )
+        html = html.replace("</head>", i18n_head + "</head>", 1)
         return self._send(200, html)
 
     def _spotify_token(self):
@@ -5976,6 +6171,7 @@ def run(base_dir: str, open_browser: bool = True):
     except Exception as exc:
         try: STATE.log("plugins", "autostart failed", exc)
         except Exception: pass
+    threading.Thread(target=STATE.chattim3r_loop, daemon=True, name="chattim3r").start()
     _start_ui_watchdog()
     _write_pid(port)
     httpd = WebbasedHTTPServer(("127.0.0.1", port), Handler)
@@ -6008,8 +6204,13 @@ def run(base_dir: str, open_browser: bool = True):
         STATE.log("listen", url)
     except Exception:
         pass
-    print(f"{APP_NAME} Ver. {VERSION} läuft auf {url}")
-    print("OAuth Callback-Ports: " + ", ".join(f"http://127.0.0.1:{p}/callback" for p in CALLBACK_PORTS))
+    language = normalize_language(STATE.settings().get("ui", {}).get("language", "de"))
+    if language == "en":
+        print(f"{APP_NAME} ver. {VERSION} is running at {url}")
+        print("OAuth callback ports: " + ", ".join(f"http://127.0.0.1:{p}/callback" for p in CALLBACK_PORTS))
+    else:
+        print(f"{APP_NAME} Ver. {VERSION} läuft auf {url}")
+        print("OAuth-Callback-Ports: " + ", ".join(f"http://127.0.0.1:{p}/callback" for p in CALLBACK_PORTS))
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

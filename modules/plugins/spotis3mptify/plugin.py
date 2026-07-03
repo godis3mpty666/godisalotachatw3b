@@ -330,21 +330,23 @@ class _DashboardWindow(QtWidgets.QWidget if QtWidgets is not None else object): 
         row.addWidget(self.open_btn)
         root.addLayout(row)
 
-        cover_box = QtWidgets.QGroupBox('User-Playlist Cover')
-        cover_layout = QtWidgets.QVBoxLayout(cover_box)
+        self.cover_box = QtWidgets.QGroupBox('User-Playlist Cover')
+        cover_layout = QtWidgets.QVBoxLayout(self.cover_box)
         cover_row = QtWidgets.QHBoxLayout()
         self.playlist_cover_combo = QtWidgets.QComboBox()
         self.playlist_cover_combo.currentTextChanged.connect(self._cover_changed)
         self.reload_cover_btn = QtWidgets.QPushButton('Bilder neu laden')
         self.reload_cover_btn.clicked.connect(self._reload_cover_dropdown)
-        cover_row.addWidget(QtWidgets.QLabel('Bild aus assets:'))
+        self.asset_label = QtWidgets.QLabel('Bild aus assets:')
+        cover_row.addWidget(self.asset_label)
         cover_row.addWidget(self.playlist_cover_combo, 1)
         cover_row.addWidget(self.reload_cover_btn)
         cover_layout.addLayout(cover_row)
         self.cover_note = QtWidgets.QLabel('Das Bild wird bei neu erstellten User-Playlists als Spotify-Cover gesetzt.')
         self.cover_note.setWordWrap(True)
         cover_layout.addWidget(self.cover_note)
-        root.addWidget(cover_box)
+        root.addWidget(self.cover_box)
+        self.apply_language()
         self._reload_cover_dropdown()
 
         self.timer = QtCore.QTimer(self)
@@ -352,6 +354,15 @@ class _DashboardWindow(QtWidgets.QWidget if QtWidgets is not None else object): 
         self.timer.timeout.connect(self.refresh)
         self.timer.start()
         self.refresh()
+
+    def apply_language(self) -> None:
+        english = str(self.plugin._settings.get('_ui_language') or 'de').lower().startswith('en')
+        self.title.setText('No song yet' if english else 'Noch kein Song')
+        self.open_btn.setText('Open browser view' if english else 'Browseranzeige öffnen')
+        self.cover_box.setTitle('User playlist cover' if english else 'Cover der Benutzer-Playlist')
+        self.reload_cover_btn.setText('Reload images' if english else 'Bilder neu laden')
+        self.asset_label.setText('Image from assets:' if english else 'Bild aus Assets:')
+        self.cover_note.setText('The image is used as the Spotify cover for newly created user playlists.' if english else 'Das Bild wird bei neu erstellten Benutzer-Playlists als Spotify-Cover gesetzt.')
 
     def _reload_cover_dropdown(self) -> None:
         try:
@@ -363,7 +374,8 @@ class _DashboardWindow(QtWidgets.QWidget if QtWidgets is not None else object): 
             self.playlist_cover_combo.clear()
             names = _asset_image_names()
             if not names:
-                self.playlist_cover_combo.addItem('Keine .jpg/.jpeg in assets gefunden')
+                english = str(self.plugin._settings.get('_ui_language') or 'de').lower().startswith('en')
+                self.playlist_cover_combo.addItem('No .jpg/.jpeg files found in assets' if english else 'Keine .jpg/.jpeg-Dateien in Assets gefunden')
                 self.playlist_cover_combo.setEnabled(False)
             else:
                 self.playlist_cover_combo.setEnabled(True)
@@ -383,7 +395,8 @@ class _DashboardWindow(QtWidgets.QWidget if QtWidgets is not None else object): 
         if not name or not name.lower().endswith(('.jpg', '.jpeg')):
             return
         self.plugin.set_playlist_cover_image(name)
-        self.cover_note.setText(f'Aktiv: {name} Â· wird bei neuen User-Playlists gesetzt.')
+        english = str(self.plugin._settings.get('_ui_language') or 'de').lower().startswith('en')
+        self.cover_note.setText((f'Active: {name} · used for new user playlists.' if english else f'Aktiv: {name} · wird bei neuen Benutzer-Playlists gesetzt.'))
 
     def refresh(self) -> None:
         data = self.plugin.current_nowplaying()
@@ -392,7 +405,8 @@ class _DashboardWindow(QtWidgets.QWidget if QtWidgets is not None else object): 
         provider = str(data.get('provider') or 'spotify').strip()
         playing = bool(data.get('is_playing'))
         self.status.setText(('â–¶ ' if playing else 'â¸ ') + provider.upper())
-        self.title.setText(title or 'Noch kein Song')
+        english = str(self.plugin._settings.get('_ui_language') or 'de').lower().startswith('en')
+        self.title.setText(title or ('No song yet' if english else 'Noch kein Song'))
         self.artist.setText(artist or '')
         self.url.setText(str(data.get('url') or ''))
         self.overlay_url.setText(self.plugin.overlay_url())
@@ -565,6 +579,8 @@ class Spotis3mptifyPlugin(ProviderPlugin):
             settings['port'] = port
         return {
             'enabled': _as_bool(settings.get('enabled'), True),
+            'ui_language': str(settings.get('_ui_language') or 'de'),
+            'main_ui_base': str(settings.get('_main_ui_base') or ''),
             'client_id': _safe_text(settings.get('client_id')),
             'client_secret': _safe_text(settings.get('client_secret')),
             'redirect_uri': _safe_text(settings.get('redirect_uri')),
@@ -610,6 +626,19 @@ class Spotis3mptifyPlugin(ProviderPlugin):
             'obs_ws_enabled': False,
             'async_playlist_add': False,
         }
+
+    def set_ui_language(self, language: str) -> None:
+        self._settings['_ui_language'] = 'en' if str(language or '').lower().startswith('en') else 'de'
+        if self._core is not None:
+            try:
+                self._core.apply_settings(self._merged_config(self._settings))
+            except Exception as exc:
+                self._log(f'Language update failed: {exc}')
+        if self._dashboard is not None:
+            try:
+                self._dashboard.apply_language()
+            except Exception as exc:
+                self._log(f'Dashboard language update failed: {exc}')
 
     def start(self, settings: dict[str, Any], host: PluginHost) -> None:
         self._host = host

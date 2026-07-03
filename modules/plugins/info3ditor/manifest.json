@@ -2,5 +2,7 @@
   "id": "info3ditor",
   "name": "info3ditor",
   "version": "0.12",
-  "description": "Speichert Streaminfo-Presets und sendet sie an die zentral verbundenen Plattformen."
+  "description": "Speichert Streaminfo-Presets und sendet sie an die zentral verbundenen Plattformen.",
+  "description_de": "Speichert Streaminfo-Vorlagen und sendet sie an die zentral verbundenen Plattformen.",
+  "description_en": "Stores stream information presets and sends them to the centrally connected platforms."
 }

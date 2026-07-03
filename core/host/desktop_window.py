@@ -247,6 +247,7 @@ class DesktopTkOverlay:
         self.layout_url = f"{base}/api/desktop-chat/layout"
         self.state_url = f"{base}/api/desktop-chat/state"
         self.chat_url = f"{base}/api/chat-state"
+        self.language = "de"
 
         self.root = tk.Tk()
         self.root.title(WINDOW_TITLE)
@@ -489,7 +490,12 @@ class DesktopTkOverlay:
 
         self.runtime_fail_count = 0
         self.last_runtime_ok = True
+        new_language = "en" if str(runtime.get("language") or "de").lower().startswith("en") else "de"
+        language_changed = new_language != self.language
+        self.language = new_language
         needs_render = False
+        if language_changed:
+            needs_render = True
 
         try:
             state = _fetch_json(self.state_url, timeout=0.5)
@@ -843,7 +849,7 @@ class DesktopTkOverlay:
         self._draw_alert_panel(bg, bg_stipple, radius, font_family, font_size, text_color)
 
         if not self.last_chat_state and self.editing:
-            c.create_text(18, 18, anchor="nw", text="Desktop-Overlay aktiv · F8 toggelt Editmode", fill="#b9c2e2", font=(font_family, 10))
+            c.create_text(18, 18, anchor="nw", text=("Desktop overlay active · F8 toggles edit mode" if self.language == "en" else "Desktop-Overlay aktiv · F8 schaltet den Bearbeitungsmodus um"), fill="#b9c2e2", font=(font_family, 10))
 
         if self.editing:
             w, h = self.root.winfo_width(), self.root.winfo_height()
@@ -851,7 +857,7 @@ class DesktopTkOverlay:
                 12,
                 h - 18,
                 anchor="w",
-                text="Elemente mit der Maus verschieben. Unten rechts skalieren. ESC beendet Bearbeitung.",
+                text=("Move elements with the mouse. Resize at the bottom right. ESC finishes editing." if self.language == "en" else "Elemente mit der Maus verschieben. Unten rechts skalieren. ESC beendet die Bearbeitung."),
                 fill="#b9c2e2",
                 font=("Segoe UI", 10),
             )
@@ -952,10 +958,10 @@ class DesktopTkOverlay:
         ][-max(1, min(20, int(cfg.get("maxItems", 5) or 5))):]
         title_font = self.tkfont.Font(family=font_family, size=max(10, int(font_size * .9)), weight="bold")
         text_font = self.tkfont.Font(family=font_family, size=max(10, int(font_size * .9)))
-        self.canvas.create_text(x + 12, y + 12, text="ALERTS", fill="#b9c2e2", font=title_font, anchor="w")
+        self.canvas.create_text(x + 12, y + 12, text=("ALERTS" if self.language == "en" else "WARNUNGEN"), fill="#b9c2e2", font=title_font, anchor="w")
         if not alerts:
             if self.editing:
-                self.canvas.create_text(x + 12, y + 36, text="Neue Live-Events erscheinen hier.", fill="#8f9abe", font=text_font, anchor="w")
+                self.canvas.create_text(x + 12, y + 36, text=("New live events appear here." if self.language == "en" else "Neue Live-Ereignisse erscheinen hier."), fill="#8f9abe", font=text_font, anchor="w")
         else:
             line_h = max(32, int(font_size * 1.7))
             rows = alerts[-max(1, int((h - 28) / line_h)):]

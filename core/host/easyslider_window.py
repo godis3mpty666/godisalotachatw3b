@@ -39,6 +39,7 @@ class EasySliderWindow:
         self.root.attributes("-topmost", True)
         self.root.configure(bg="#080a18")
         self.settings: dict[str, Any] = {}
+        self.language = "de"
         self.images: list[tk.PhotoImage] = []
         self.opened = False
         self._last_settings_key = ""
@@ -71,19 +72,24 @@ class EasySliderWindow:
     def poll_settings(self) -> None:
         try:
             data = _fetch_json(f"{self.base_url}/api/settings", timeout=1.0)
-            settings = ((data.get("ui") or {}).get("3asyslid3r") or {})
-            key = json.dumps(settings, sort_keys=True)
+            ui = data.get("ui") or {}
+            settings = (ui.get("3asyslid3r") or {})
+            language = "en" if str(ui.get("language") or "de").lower().startswith("en") else "de"
+            key = json.dumps({"settings": settings, "language": language}, sort_keys=True)
             if key != self._last_settings_key:
-                self.reload(settings)
+                self.reload(settings, language)
         except Exception:
             pass
         self.root.after(2500, self.poll_settings)
 
-    def reload(self, settings: dict[str, Any] | None = None) -> None:
+    def reload(self, settings: dict[str, Any] | None = None, language: str | None = None) -> None:
         if settings is None:
-            settings = ((_fetch_json(f"{self.base_url}/api/settings").get("ui") or {}).get("3asyslid3r") or {})
+            ui = _fetch_json(f"{self.base_url}/api/settings").get("ui") or {}
+            settings = ui.get("3asyslid3r") or {}
+            language = str(ui.get("language") or "de")
         self.settings = settings
-        self._last_settings_key = json.dumps(settings, sort_keys=True)
+        self.language = "en" if str(language or "de").lower().startswith("en") else "de"
+        self._last_settings_key = json.dumps({"settings": settings, "language": self.language}, sort_keys=True)
         enabled = bool(settings.get("enabled", True))
         if not enabled:
             self.root.withdraw()
@@ -107,6 +113,8 @@ class EasySliderWindow:
         horizontal = edge in {"top", "bottom"}
         for button in buttons:
             label = str(button.get("label") or button.get("id") or "Button")
+            if self.language == "en":
+                label = {"Plattformen": "Platforms"}.get(label, label)
             path = str(button.get("path") or "/")
             image = self.load_image(str(button.get("id") or ""))
             kwargs = {

@@ -3,5 +3,7 @@
   "name": "al3rtalot",
   "version": "0.03",
   "entry": "plugin.py",
-  "description": "Plattformübergreifendes Alert-Plugin für Twitch, TikTok, YouTube und Kick; Kick ist für offizielle Webhook-Eventnamen vorbereitet."
+  "description": "Plattformübergreifendes Alert-Plugin für Twitch, TikTok, YouTube und Kick; Kick ist für offizielle Webhook-Eventnamen vorbereitet.",
+  "description_de": "Plattformübergreifendes Warnungs-Plugin für Twitch, TikTok, YouTube und Kick.",
+  "description_en": "Cross-platform alert plugin for Twitch, TikTok, YouTube and Kick."
 }
