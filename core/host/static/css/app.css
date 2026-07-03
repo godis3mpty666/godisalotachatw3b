@@ -352,7 +352,7 @@ h2{
 .sendRow input{
   flex:1;
 }
-input,select{
+input,select,textarea{
   background:#090b16;
   border:1px solid #303656;
   color:white;
@@ -365,10 +365,15 @@ input,select{
   width:100%;
   box-sizing:border-box;
 }
-input:focus,select:focus{
+textarea{
+  min-height:76px;
+  resize:vertical;
+}
+input:focus,select:focus,textarea:focus{
   border-color:var(--purple);
   box-shadow:0 0 0 3px rgba(134,92,255,.2);
 }
+input::placeholder,textarea::placeholder{color:#737da9;opacity:1}
 label{
   color:var(--text);
 }

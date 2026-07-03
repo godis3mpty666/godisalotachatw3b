@@ -9,6 +9,9 @@
   const pairs=[
     ["Beenden","Exit"],["Schließt…","Closing…"],["Sprache","Language"],["Deutsch","German"],["Englisch","English"],
     ["Dashboard","Dashboard"],["Plattformen","Platforms"],["OBS/Meld Integration","OBS/Meld Integration"],["Overlay URLs","Overlay URLs"],
+    ["Browserquellen","Browser sources"],["Diese URLs direkt in OBS, Meld oder Browserquelle eintragen.","Add these URLs directly to OBS, Meld, or a browser source."],["Alle URLs öffnen","Open all URLs"],
+    ["OpenAI API verbunden","OpenAI API connected"],["Chat-Modelle","chat models"],["verfuegbar","available"],["Gestoppt","Stopped"],["Deaktiviert","Disabled"],["Liest","Reading"],["liest","reading"],["als","as"],
+    ["Meld ist nicht gestartet oder nicht erreichbar.","Meld is not running or cannot be reached."],
     ["Übersicht & Status","Overview & status"],["Credits & Community","Credits & community"],["Feedback senden","Send feedback"],
     ["Bug oder Idee auf GitHub","Bug or idea on GitHub"],["Anmeldedaten bleiben im webbased/data Ordner.","Login data remains in the webbased/data folder."],
     ["Gemeinsamer Chat für Dashboard, Browserquelle und Desktopfenster.","Shared chat for the dashboard, browser source and desktop window."],
@@ -177,7 +180,7 @@
   const start=()=>{
     window.translateUi(document);
     let queued=false;
-    new MutationObserver(()=>{if(queued)return;queued=true;queueMicrotask(()=>{queued=false;window.translateUi(document);});}).observe(document.body,{childList:true,subtree:true});
+    new MutationObserver(()=>{if(queued)return;queued=true;queueMicrotask(()=>{queued=false;window.translateUi(document);});}).observe(document.body,{childList:true,characterData:true,subtree:true});
   };
   if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",start);else start();
 })();

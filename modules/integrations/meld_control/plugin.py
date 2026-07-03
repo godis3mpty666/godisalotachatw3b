@@ -563,6 +563,19 @@ class MeldControlPlugin(ThreadedPlugin):
             merged['platform_enabled'] = platform.get('enabled')
         return merged
 
+    @staticmethod
+    def _is_connection_refused(exc: BaseException) -> bool:
+        current: BaseException | None = exc
+        seen: set[int] = set()
+        while current is not None and id(current) not in seen:
+            seen.add(id(current))
+            if isinstance(current, ConnectionRefusedError):
+                return True
+            if getattr(current, 'winerror', None) == 10061 or getattr(current, 'errno', None) in {61, 111, 10061}:
+                return True
+            current = current.__cause__ or current.__context__
+        return False
+
 
     def _log_throttled(self, host: PluginHost | None, key: str, message: str, interval_seconds: float = 60.0) -> None:
         if host is None:
@@ -793,6 +806,8 @@ class MeldControlPlugin(ThreadedPlugin):
             ws, detail = self._connect_and_verify(settings, None)
             return True, detail
         except Exception as exc:
+            if self._is_connection_refused(exc):
+                return False, 'Meld ist nicht gestartet oder nicht erreichbar.'
             return False, f'Meld test failed: {exc}'
         finally:
             if ws is not None:
@@ -837,13 +852,20 @@ class MeldControlPlugin(ThreadedPlugin):
                     host.set_status(self.plugin_id, PluginStatus('connected', detail))
                     self._clear_throttled_log('meld_connecting')
                     self._clear_throttled_log('meld_connect_failed')
+                    self._clear_throttled_log('meld_offline')
                 except Exception as exc:
+                    offline = self._is_connection_refused(exc)
+                    status_detail = 'Meld ist nicht gestartet oder nicht erreichbar.' if offline else f'Meld connect failed: {exc}'
                     with self._lock:
                         self._ws = None
                         self._connected = False
-                        self._last_detail = f'Meld connect failed: {exc}'
-                    self._log_throttled(host, 'meld_connect_failed', f'Meld connect failed: {exc}', 60.0)
-                    host.set_status(self.plugin_id, PluginStatus('error', f'Meld connect failed: {exc}'))
+                        self._last_detail = status_detail
+                    if offline:
+                        self._log_throttled(host, 'meld_offline', status_detail, 60.0)
+                        host.set_status(self.plugin_id, PluginStatus('disconnected', status_detail))
+                    else:
+                        self._log_throttled(host, 'meld_connect_failed', status_detail, 60.0)
+                        host.set_status(self.plugin_id, PluginStatus('error', status_detail))
                 continue
 
             try:

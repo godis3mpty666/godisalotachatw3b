@@ -9,6 +9,12 @@ LANGUAGES = {"de", "en"}
 # Logs stay canonical on disk and are localized when displayed. Technical IDs,
 # plugin names, exception details, URLs and user content are left untouched.
 _PAIRS = (
+    ("Meld is not running or cannot be reached.", "Meld ist nicht gestartet oder nicht erreichbar."),
+    ("Chat command detected", "Chatbefehl erkannt"),
+    ("Queue reply", "Queue-Antwort"),
+    ("mirrored to", "gespiegelt an"),
+    ("mirrored", "gespiegelt"),
+    ("Like counter triggered", "Like-Zähler ausgelöst"),
     ("YouTube request will wait for Spotify track id", "YouTube-Anfrage wartet auf Spotify-Track-ID"),
     ("Could not attach Spotify wait marker", "Spotify-Wartemarkierung konnte nicht gesetzt werden"),
     ("Spotify snapshot unavailable; keeping YouTube handoff waiting", "Spotify-Status nicht verfügbar; YouTube-Übergabe wartet weiter"),
@@ -168,11 +174,29 @@ def translate_log(value: object, language: str) -> str:
         if len(parts) == 4:
             # Timestamp and source/plugin ID are technical identity, not UI copy.
             message = parts[3]
+            if normalize_language(language) == "en":
+                source = parts[1].strip().lower()
+                if source == "spotis3mptify":
+                    message = re.sub(r"(?i)Queue-Antwort an\s+(\S+)\s+gespiegelt:", r"Queue reply mirrored to \1:", message)
+                    message = re.sub(r"(?i)Queue-Antwort an\s+(\S+)\s+fehlgeschlagen:", r"Queue reply to \1 failed:", message)
+                    message = re.sub(r"(?i)(Chat command detected:\s*\S+)\s+von\s+", r"\1 by ", message)
+                elif source == "al3rtalot":
+                    message = re.sub(r"(?i)(.*?)\s+hat\s+(\d+)\s+Likes erreicht,\s*Intervall\s+(\d+),\s*Stufe\s+(\d+)", r"\1 reached \2 likes, interval \3, level \4", message)
+                    message = re.sub(r"(?i)(->\s*.*?)\s+ist im Live", r"\1 joined the live stream", message)
+                    message = re.sub(r"(?i)(->\s*.*?)\s+hat\s+(\d+)\s+Likes geschickt", r"\1 sent \2 likes", message)
             # Chat payloads are user-owned content. Translate only the application
             # prefix and keep username/message text byte-for-byte intact.
             chat_match = re.match(r"(?i)(.*?chat\s*\|\s*)([^:|]*:[^:|]*:\s*)(.*)$", message)
             if not chat_match:
                 chat_match = re.match(r"(?i)(.*?chat message:\s*)([^:]*:\s*)(.*)$", message)
+            if not chat_match:
+                # Bridged chat lines contain application metadata followed by
+                # user-owned text. Only localize the metadata prefix.
+                chat_match = re.match(
+                    r"(?i)(.*?bridge\s+\S+\s+(?:\u2192|->)\s+\S+(?:\s+failed)?\s*:\s*)"
+                    r"([^:]+\s+from\s+(?:Twitch|TT|TikTok|YouTube|Kick)\s*:\s*)(.*)$",
+                    message,
+                )
             if chat_match:
                 message = translate_text(chat_match.group(1), language) + chat_match.group(2) + chat_match.group(3)
             else:

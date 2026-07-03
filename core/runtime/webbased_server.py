@@ -331,7 +331,7 @@ def default_easyslider_settings() -> dict:
             {"id": "chat", "label": "Chat", "path": "/chat", "enabled": True},
             {"id": "obs_meld", "label": "OBS/Meld Integration", "path": "/obs-meld-integration", "enabled": False},
             {"id": "spotify", "label": "Spotis3mptify", "path": "/spotis3mptify", "enabled": False},
-            {"id": "modalot", "label": "Modalot", "path": "/plugins?plugin=modalot", "enabled": True},
+            {"id": "modalot", "label": "Modalot", "path": "/modalot", "enabled": True},
             {"id": "plugins", "label": "Plugins", "path": "/plugins", "enabled": True},
             {"id": "dev", "label": "DEV", "path": "/dev", "enabled": True},
         ],
@@ -362,6 +362,8 @@ def normalize_easyslider_settings(raw_settings) -> dict:
         button_id = re.sub(r"[^a-z0-9_-]+", "", str(item.get("id") or "").strip().lower())[:40]
         label = str(item.get("label") or button_id or "Button").strip()[:80]
         path = str(item.get("path") or "/").strip()
+        if button_id == "modalot" and path == "/plugins?plugin=modalot":
+            path = "/modalot"
         if not path.startswith("/"):
             path = "/" + path
         if button_id:
@@ -4161,6 +4163,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._page("chat.html")
         if path == "/chattim3r":
             return self._page("chattim3r.html")
+        if path == "/modalot":
+            return self._page("modalot.html")
+        if path == "/info3ditor":
+            return self._page("info3ditor.html")
         if path == "/obs-meld-integration":
             return self._page("obs_meld_integration.html")
         if path in ("/spotis3mptify", "/spotify"):

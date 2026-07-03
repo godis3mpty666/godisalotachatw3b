@@ -10,7 +10,7 @@ let shutdownInProgress = false;
 function nav(active){
   const items = [
     ["dashboard","Dashboard","/"],["platforms","Plattformen","/plattformen"],["chat","Chat","/chat"],["obs_meld","OBS/Meld Integration","/obs-meld-integration"],
-    ["spotify","Spotis3mptify","/spotis3mptify"],["easyslider","3asyslid3r","/3asyslid3r"],["overlays","Overlay URLs","/overlays"],["plugins","Plugins","/plugins"],["chattim3r","Chattim3r","/chattim3r"],["dev","DEV","/dev"]
+    ["spotify","Spotis3mptify","/spotis3mptify"],["easyslider","3asyslid3r","/3asyslid3r"],["plugins","Plugins","/plugins"],["chattim3r","Chattim3r","/chattim3r"],["modalot","Modalot","/modalot"],["info3ditor","Info3ditor","/info3ditor"],["dev","DEV","/dev"]
   ];
   const issueUrl = "https://github.com/godis3mpty666/godisalotachatw3b/issues/new?title=" + encodeURIComponent("[Feedback] ") + "&body=" + encodeURIComponent("**Was ist passiert oder was soll verbessert werden?**\n\n\n**So kann man es nachstellen (bei einem Bug):**\n1. \n2. \n\n**Version:** " + (window.WEB_VERSION || "unbekannt") + "\n\n**Zusätzliche Infos / Screenshots:**\n");
   const credits = [
@@ -101,6 +101,14 @@ async function openExternal(url){
 async function loadAll(){ settingsCache=await api("/api/settings"); statusCache=await api("/api/status"); return {settings:settingsCache,status:statusCache};}
 function esc(s){return String(s??"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[m]));}
 function L(de,en){return window.APP_LANGUAGE==="en"?en:de;}
+function LT(value){return window.t?window.t(String(value??"")):String(value??"");}
+function localizedPluginStatus(plugin){
+  if(window.APP_LANGUAGE!=="en")return String(plugin.status||plugin.message||"");
+  const state=String(plugin.state||"").toLowerCase();
+  const label=({connected:"Connected",running:"Connected",connecting:"Connecting",starting:"Connecting",error:"Error",failed:"Error",disconnected:"Stopped",stopped:"Stopped",ready:"Ready"}[state]||"Ready");
+  const message=LT(plugin.message||"").trim();
+  return message?`${label} - ${message}`:label;
+}
 function userColor(platform,user){let h=2166136261;for(const c of `${platform}:${user}`){h^=c.charCodeAt(0);h=Math.imul(h,16777619)}return `hsl(${Math.abs(h)%360} 78% 68%)`;}
 function platformMark(p){return ({twitch:"Twitch",tiktok:"TikTok",youtube:"YouTube",kick:"Kick"}[p]||p);}
 function platformBadge(p){return `<span class="chatPlatform"><img src="/platform-icon/${esc(p)}" alt="${esc(platformMark(p))}"></span>`;}
@@ -111,7 +119,7 @@ function defaultEasysliderSettings(){return {enabled:true,edge:"left",delaySecon
   {id:"chat",label:"Chat",path:"/chat",enabled:true},
   {id:"obs_meld",label:"OBS/Meld Integration",path:"/obs-meld-integration",enabled:false},
   {id:"spotify",label:"Spotis3mptify",path:"/spotis3mptify",enabled:false},
-  {id:"modalot",label:"Modalot",path:"/plugins?plugin=modalot",enabled:true},
+  {id:"modalot",label:"Modalot",path:"/modalot",enabled:true},
   {id:"plugins",label:"Plugins",path:"/plugins",enabled:true},
   {id:"dev",label:"DEV",path:"/dev",enabled:true}
 ]};}
@@ -122,7 +130,7 @@ function normalizeEasysliderClient(cfg){
   const delay=Math.max(0,Math.min(120,Number(cfg.delaySeconds??d.delaySeconds)||0));
   const opacity=Math.max(0,Math.min(100,Number(cfg.opacity??d.opacity)||0));
   const buttons=Array.isArray(cfg.buttons)&&cfg.buttons.length?cfg.buttons:d.buttons;
-  return {enabled:cfg.enabled!==false,edge,delaySeconds:delay,opacity,buttons:buttons.map(b=>({id:String(b.id||"").trim()||"dashboard",label:String(b.label||b.id||"Dashboard").trim(),path:String(b.path||"/").trim()||"/",enabled:b.enabled!==false}))};
+  return {enabled:cfg.enabled!==false,edge,delaySeconds:delay,opacity,buttons:buttons.map(b=>{const id=String(b.id||"").trim()||"dashboard";let path=String(b.path||"/").trim()||"/";if(id==="modalot"&&path==="/plugins?plugin=modalot")path="/modalot";return {id,label:String(b.label||b.id||"Dashboard").trim(),path,enabled:b.enabled!==false};})};
 }
 async function mountEasysliderRail(){
   const old=$("#easysliderRail");
@@ -178,9 +186,9 @@ function card(p,cfg){
   let details = "";
   if(p==="tiktok"||p==="twitch"||p==="youtube"||p==="kick") details = platformAccountDetails(cfg);
   else if(p==="spotify") details = ``;
-  else if(p==="openai") details = cfg.detail ? esc(cfg.detail) : (cfg.status==="verbunden" ? "API-Key gespeichert" : "OpenAI API-Key fehlt");
-  else if(p==="meld") details = cfg.detail ? esc(cfg.detail) : ``;
-  else if(p==="obs") details = cfg.detail ? esc(cfg.detail) : ``;
+  else if(p==="openai") details = cfg.detail ? esc(LT(cfg.detail)) : (cfg.status==="verbunden" ? L("API-Key gespeichert","API key saved") : L("OpenAI API-Key fehlt","OpenAI API key missing"));
+  else if(p==="meld") details = cfg.detail ? esc(LT(cfg.detail)) : ``;
+  else if(p==="obs") details = cfg.detail ? esc(LT(cfg.detail)) : ``;
   else details = `Host: ${esc(cfg.host||"-")}:${esc(cfg.port||"-")}`;
   return `<div class="card" data-platform-card="${esc(p)}"><div class="label">${platformLabel(p)}</div><div class="status"><span class="dot ${ok?'ok':''}"></span><span class="statusText">${label}</span></div><div class="small cardDetails">${details}</div></div>`;
 }
@@ -195,7 +203,7 @@ function updatePlatformCard(p,cfg){
   if(dot) dot.classList.toggle("ok", ok);
   if(txt) txt.textContent = statusLabel(cfg);
   if(details && (p === "tiktok" || p === "twitch" || p === "youtube" || p === "kick")) details.innerHTML = platformAccountDetails(cfg);
-  else if(details && (p === "meld" || p === "obs" || p === "openai")) details.textContent = cfg.detail || "";
+  else if(details && (p === "meld" || p === "obs" || p === "openai")) details.textContent = LT(cfg.detail || "");
 }
 let meldDashboardPoll = null;
 let obsDashboardPoll = null;
@@ -294,7 +302,7 @@ async function renderDashboard(){
     <section class="card" style="margin-top:18px"><div class="label">Plugins</div><div id="plugMini" class="pluginGrid"></div></section>`);
   $("#sendMsg").onclick=async()=>{let v=$("#testmsg").value.trim(); if(!v)return; await api("/api/message",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({text:v})}); $("#testmsg").value=""; refreshMessages();};
   refreshMessages(); refreshNowPlaying(); loadDashboardUrls();
-  $("#plugMini").innerHTML = status.plugins.slice(0,6).map(x=>`<div class="msg"><b>${esc(x.name)}</b><div class="small">${esc(x.status)}</div></div>`).join("");
+  $("#plugMini").innerHTML = status.plugins.slice(0,6).map(x=>`<div class="msg"><b>${esc(x.name)}</b><div class="small">${esc(localizedPluginStatus(x))}</div></div>`).join("");
   if(((status.platforms || {}).tiktok || {}).status !== "verbunden") startTikTokDashboardPoll();
   if(((status.platforms || {}).youtube || {}).status !== "verbunden") startYoutubeDashboardPoll();
   if(((status.platforms || {}).meld || {}).status !== "verbunden") startMeldDashboardPoll();
@@ -905,9 +913,17 @@ async function openPluginSettings(pluginId){
     const values=collectPluginSettings(ev.currentTarget,schema);
     const out=await api(`/api/plugins/${encodeURIComponent(pluginId)}/settings`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({values})});
     result.textContent=out.ok?"Gespeichert und neu gestartet.":`Fehler: ${out.error||"unbekannt"}`;
-    if(out.ok) setTimeout(()=>{ mount.innerHTML=""; renderPlugins(); },700);
+    if(out.ok) setTimeout(()=>{if(page===pluginId)location.reload();else{mount.innerHTML="";renderPlugins();}},700);
   };
   mount.scrollIntoView({behavior:"smooth",block:"start"});
+}
+async function renderDedicatedPlugin(pluginId,title,description){
+  shell(pluginId,title,description,`<div id="pluginSettingsMount"></div>`);
+  await openPluginSettings(pluginId);
+  const close=$("#pluginSettingsClose",$("#pluginSettingsMount"));
+  if(close)close.hidden=true;
+  const cancel=$("#pluginSettingsCancel",$("#pluginSettingsMount"));
+  if(cancel)cancel.hidden=true;
 }
 async function togglePluginEnabled(pluginId, enabled){
   const d=await api(`/api/plugins/${encodeURIComponent(pluginId)}/settings`);
@@ -927,17 +943,17 @@ async function renderEasyslider(){
   shell("easyslider","3asyslid3r","Schnellleiste am Fensterrand.",`
     <section class="card easysliderSettings">
       <form id="easysliderForm" class="platformForm">
-        <label><div>Aktiv</div><select name="enabled"><option value="true" ${settings.enabled?"selected":""}>Ja</option><option value="false" ${!settings.enabled?"selected":""}>Nein</option></select></label>
-        <label><div>Bildschirmrand</div><select name="edge">${[["left","Links"],["right","Rechts"],["top","Oben"],["bottom","Unten"]].map(([v,l])=>`<option value="${v}" ${settings.edge===v?"selected":""}>${l}</option>`).join("")}</select></label>
-        <label><div>Sekunden bis offen</div><input name="delaySeconds" type="number" min="0" max="120" step="0.5" value="${esc(settings.delaySeconds)}"></label>
-        <label><div>Transparenz</div><input name="opacity" type="range" min="0" max="100" value="${esc(settings.opacity)}"></label>
-        <div class="hint">PNG-Ordner: assets\\pics\\3asyslid3r</div>
+        <label><div>${L("Aktiv","Enabled")}</div><select name="enabled"><option value="true" ${settings.enabled?"selected":""}>${L("Ja","Yes")}</option><option value="false" ${!settings.enabled?"selected":""}>${L("Nein","No")}</option></select></label>
+        <label><div>${L("Bildschirmrand","Screen edge")}</div><select name="edge">${[["left",L("Links","Left")],["right",L("Rechts","Right")],["top",L("Oben","Top")],["bottom",L("Unten","Bottom")]].map(([v,l])=>`<option value="${v}" ${settings.edge===v?"selected":""}>${l}</option>`).join("")}</select></label>
+        <label><div>${L("VerzÃ¶gerung bis zum Ã–ffnen (Sekunden)","Delay before opening (seconds)")}</div><input name="delaySeconds" type="number" min="0" max="120" step="0.5" value="${esc(settings.delaySeconds)}"></label>
+        <label><div>${L("Transparenz","Opacity")}</div><input name="opacity" type="range" min="0" max="100" value="${esc(settings.opacity)}"></label>
+        <div class="hint">${L("PNG-Ordner","PNG folder")}: assets\\pics\\3asyslid3r</div>
       </form>
     </section>
     <section class="card easysliderSettings">
-      <h3>Buttons</h3>
+      <h3>${L("SchaltflÃ¤chen","Buttons")}</h3>
       <div id="easysliderButtons" class="easysliderButtonList"></div>
-      <div class="btnLine"><button id="easysliderSave" type="button">Speichern</button><button id="easysliderTest" type="button" class="secondary">Dashboard testen</button><span id="easysliderResult" class="small"></span></div>
+      <div class="btnLine"><button id="easysliderSave" type="button">${L("Speichern","Save")}</button><button id="easysliderTest" type="button" class="secondary">${L("Dashboard testen","Test dashboard")}</button><span id="easysliderResult" class="small"></span></div>
     </section>`);
   const form=$("#easysliderForm");
   const defaults=defaultEasysliderSettings().buttons;
@@ -953,9 +969,9 @@ async function renderEasyslider(){
   });
   $("#easysliderSave").onclick=async()=>{
     const result=$("#easysliderResult");
-    result.textContent="Speichere...";
+    result.textContent=L("Speichere...","Saving...");
     const out=await api("/api/3asyslid3r/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(collect())});
-    result.textContent=out.ok?"Gespeichert.":`Fehler: ${out.error||"unbekannt"}`;
+    result.textContent=out.ok?L("Gespeichert.","Saved."):`${L("Fehler","Error")}: ${out.error||L("unbekannt","unknown")}`;
     if(out.ok){settingsCache=null;}
   };
   $("#easysliderTest").onclick=async()=>{
@@ -1135,7 +1151,7 @@ async function renderChattim3r(){
 }
 async function bootPage(){
   try{
-    await (({dashboard:renderDashboard,platforms:renderPlatforms,chat:renderChat,obs_meld:renderObsMeld,spotify:renderSpotify,easyslider:renderEasyslider,overlays:renderOverlays,plugins:renderPlugins,chattim3r:renderChattim3r,dev:renderDev}[page]||renderDashboard)());
+    await (({dashboard:renderDashboard,platforms:renderPlatforms,chat:renderChat,obs_meld:renderObsMeld,spotify:renderSpotify,easyslider:renderEasyslider,overlays:renderOverlays,plugins:renderPlugins,chattim3r:renderChattim3r,modalot:()=>renderDedicatedPlugin("modalot","Modalot","Moderation und Regeln zentral verwalten."),info3ditor:()=>renderDedicatedPlugin("info3ditor","Info3ditor","Streaminformationen und Presets verwalten."),dev:renderDev}[page]||renderDashboard)());
   }catch(e){
     try{
       await api("/api/client-error",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({level:"error",message:String(e&&e.stack||e)})});
