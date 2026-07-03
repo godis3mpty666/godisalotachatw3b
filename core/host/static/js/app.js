@@ -15,7 +15,7 @@ const TESTER_CREDITS = [
 function nav(active){
   const items = [
     ["dashboard","Dashboard","/"],["platforms","Plattformen","/plattformen"],["chat","Chat","/chat"],["obs_meld","OBS/Meld Integration","/obs-meld-integration"],
-    ["spotify","Spotis3mptify","/spotis3mptify"],["easyslider","3asyslid3r","/3asyslid3r"],["plugins","Plugins","/plugins"],["chattim3r","Chattim3r","/chattim3r"],["modalot","Modalot","/modalot"],["info3ditor","Info3ditor","/info3ditor"],["dev","DEV","/dev"]
+    ["spotify","Spotis3mptify","/spotis3mptify"],["easyslider","3asyslid3r","/3asyslid3r"],["plugins","Plugins","/plugins"],["chattim3r","Chattim3r","/chattim3r"],["modalot","Modalot","/modalot"],["info3ditor","Info3ditor","/info3ditor"],["settings",L("Einstellungen","Settings"),"/einstellungen"],["dev","DEV","/dev"]
   ];
   const issueUrl = "https://github.com/godis3mpty666/godisalotachatw3b/issues/new?title=" + encodeURIComponent("[Feedback] ") + "&body=" + encodeURIComponent("**Was ist passiert oder was soll verbessert werden?**\n\n\n**So kann man es nachstellen (bei einem Bug):**\n1. \n2. \n\n**Version:** " + (window.WEB_VERSION || "unbekannt") + "\n\n**Zusätzliche Infos / Screenshots:**\n");
   const credits = [
@@ -1167,9 +1167,134 @@ async function renderChattim3r(){
   $("#timerForm").onsubmit=async ev=>{ev.preventDefault();const platforms=$$('[name="timerPlatform"]:checked').map(x=>x.value);if(!platforms.length){alert(L("Bitte mindestens eine Plattform auswählen.","Please select at least one platform."));return;}const payload={id:editing,minutes:Number($("#timerMinutes").value),text:$("#timerText").value.trim(),platforms};const out=await api("/api/chattim3r",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload)});if(!out.ok){alert(out.error||L("Speichern fehlgeschlagen","Save failed"));return;}entries=out.entries||[];reset();draw();};
   await load();
 }
+const SOUND_ALERTS={
+  twitch:[["twitch_follow","Follow"],["twitch_join",L("Beitritt","Join")],["twitch_sub","Sub"],["twitch_resub","Resub"],["twitch_subgift","Sub-Geschenk"],["twitch_raid","Raid"],["twitch_cheer","Cheer / Bits"]],
+  tiktok:[["tiktok_follow","Follow"],["tiktok_join",L("Beitritt","Join")],["tiktok_like","Like"],["tiktok_gift",L("Geschenk","Gift")],["tiktok_share",L("Teilen","Share")]],
+  youtube:[["youtube_superchat","Super Chat"],["youtube_supersticker","Super Sticker"],["youtube_member",L("Mitglied","Member")],["youtube_gift",L("Mitgliedschaftsgeschenk","Membership gift")]],
+  kick:[["kick_follow","Follow"],["kick_sub","Sub"],["kick_gift",L("Sub-Geschenk","Sub gift")],["kick_raid","Raid"],["kick_join",L("Beitritt","Join")]]
+};
+function soundOptions(sounds,value){
+  return `<option value="">${L("Stumm","Muted")}</option>`+sounds.map(name=>`<option value="${esc(name)}" ${name===value?"selected":""}>${esc(name)}</option>`).join("");
+}
+async function audioOutputDevices(){
+  if(!navigator.mediaDevices?.enumerateDevices)return [];
+  try{return (await navigator.mediaDevices.enumerateDevices()).filter(d=>d.kind==="audiooutput");}catch(_){return []}
+}
+function resolveSavedDeviceId(devices,id,label){
+  if(!id||id==="__default__"||devices.some(device=>device.deviceId===id))return id||"";
+  const wanted=String(label||"").trim().toLocaleLowerCase();
+  const match=wanted?devices.find(device=>String(device.label||"").trim().toLocaleLowerCase()===wanted):null;
+  return match?.deviceId||id;
+}
+async function renderSettings(){
+  const [all,soundData,devices]=await Promise.all([api("/api/settings"),api("/api/sounds"),audioOutputDevices()]);
+  const cfg=all.general?.sound||{}, sounds=Array.isArray(soundData.sounds)?soundData.sounds:[], alerts=cfg.alerts||{};
+  cfg.output_device=resolveSavedDeviceId(devices,cfg.output_device,cfg.output_device_label);
+  cfg.stream_output_device=resolveSavedDeviceId(devices,cfg.stream_output_device,cfg.stream_output_device_label);
+  const deviceRows=devices.map((d,i)=>`<option value="${esc(d.deviceId)}">${esc(d.label||`${L("Audiogerät","Audio device")} ${i+1}`)}</option>`).join("");
+  const knownDeviceIds=new Set(devices.map(d=>d.deviceId));
+  const savedBroadcaster=cfg.output_device&&!knownDeviceIds.has(cfg.output_device)?`<option value="${esc(cfg.output_device)}">${esc(cfg.output_device_label||L("Gespeichertes Broadcaster-Gerät","Saved broadcaster device"))}</option>`:"";
+  const savedStream=cfg.stream_output_device&&!['',"__default__"].includes(cfg.stream_output_device)&&!knownDeviceIds.has(cfg.stream_output_device)?`<option value="${esc(cfg.stream_output_device)}">${esc(cfg.stream_output_device_label||L("Gespeichertes Stream-Gerät","Saved stream device"))}</option>`:"";
+  const deviceOptions=`<option value="">${L("System-Standardgerät","System default device")}</option>${savedBroadcaster}${deviceRows}`;
+  const streamDeviceOptions=`<option value="">${L("Nicht ausgeben","No output")}</option><option value="__default__">${L("System-Standardgerät","System default device")}</option>${savedStream}${deviceRows}`;
+  const tabs=[["general",L("Allgemein","General")],...Object.keys(SOUND_ALERTS).map(p=>[p,platformLabel(p)])];
+  const groups=tabs.map(([tab,label],index)=>{
+    if(tab==="general")return `<div class="soundSettingsGroup ${index===0?"active":""}" data-sound-tab="general"><div class="soundSettingsGrid"><label><div>${L("Broadcaster-Ausgabe (Chat + Alerts)","Broadcaster output (chat + alerts)")}</div><select id="soundDevice">${deviceOptions}</select></label><label><div>${L("Stream-Ausgabe (nur Alerts)","Stream output (alerts only)")}</div><select id="streamSoundDevice">${streamDeviceOptions}</select></label><label><div>${L("Alle eingehenden Chatnachrichten","All incoming chat messages")}</div><select id="chatSound">${soundOptions(sounds,cfg.chat_sound||"")}</select></label></div><div class="btnLine soundDeviceActions"><button type="button" class="secondary" id="loadSoundDevices">${L("Geräteliste aktualisieren","Refresh device list")}</button><button type="button" class="secondary" id="openSoundFolder">${L("Soundordner öffnen","Open sound folder")}</button><span class="small" id="soundDeviceHint">${L("Der Broadcaster hört Chat und Alerts. An den Stream werden ausschließlich Alerts ausgegeben.","The broadcaster hears chat and alerts. Only alerts are sent to the stream output.")}</span></div><div class="hint">${L("Sounddateien kommen aus assets/sound. Unterstützt werden MP3, WAV, OGG, M4A, AAC und FLAC.","Sound files are loaded from assets/sound. MP3, WAV, OGG, M4A, AAC and FLAC are supported.")}</div></div>`;
+    const pCfg=alerts[tab]||{};
+    return `<div class="soundSettingsGroup" data-sound-tab="${tab}"><div class="soundPlatformHead">${platformBadge(tab)}<h3>${label}</h3></div><div class="soundSettingsGrid">${SOUND_ALERTS[tab].map(([key,name])=>`<label><div>${esc(name)}</div><select data-sound-platform="${tab}" data-sound-event="${key}">${soundOptions(sounds,pCfg[key]||"")}</select></label>`).join("")}</div></div>`;
+  }).join("");
+  shell("settings",L("Einstellungen","Settings"),L("Allgemeine Einstellungen für das gesamte Tool.","General settings for the entire tool."),`<section class="card pluginSettingsCard"><h3 class="settingsSectionTitle">${L("Sounds","Sounds")}</h3><div class="pluginSettingsTabs">${tabs.map(([key,label],i)=>`<button type="button" class="pluginSettingsTabBtn soundTab ${i===0?"active":""}" data-tab="${key}">${label}</button>`).join("")}</div><form id="soundSettingsForm">${groups}<div class="btnLine"><button type="submit">${L("Speichern","Save")}</button><button type="button" class="secondary" id="testSelectedSound">${L("Ausgewählten Sound testen","Test selected sound")}</button><span class="small" id="soundSettingsResult"></span></div></form></section>`);
+  $("#soundDevice").value=cfg.output_device||"";
+  $("#streamSoundDevice").value=cfg.stream_output_device||"";
+  $$(".soundTab").forEach(btn=>btn.onclick=()=>{$$(".soundTab").forEach(x=>x.classList.toggle("active",x===btn));$$(".soundSettingsGroup").forEach(x=>x.classList.toggle("active",x.dataset.soundTab===btn.dataset.tab));});
+  $$('#soundSettingsForm select:not(#soundDevice)').forEach(select=>select.onchange=()=>{if(select.value&&select.value!=="__off__")playConfiguredSound(select.value,$("#soundDevice")?.value||"");});
+  $("#openSoundFolder").onclick=async()=>{const out=await api("/api/sounds/open-folder",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"});if(!out.ok)$("#soundDeviceHint").textContent=out.error||L("Soundordner konnte nicht geöffnet werden.","Could not open the sound folder.");};
+  $("#loadSoundDevices").onclick=async()=>{
+    const button=$("#loadSoundDevices"),hint=$("#soundDeviceHint"),select=$("#soundDevice");button.disabled=true;
+    try{
+      let chosen=null;
+      if(typeof navigator.mediaDevices?.selectAudioOutput==="function")chosen=await navigator.mediaDevices.selectAudioOutput();
+      else if(typeof navigator.mediaDevices?.getUserMedia==="function"){const stream=await navigator.mediaDevices.getUserMedia({audio:true});stream.getTracks().forEach(track=>track.stop());}
+      const streamSelect=$("#streamSoundDevice"),oldStream=streamSelect.value,oldStreamLabel=streamSelect.selectedOptions[0]?.textContent||"";
+      const oldBroadcaster=select.value,oldBroadcasterLabel=select.selectedOptions[0]?.textContent||"";
+      const found=await audioOutputDevices(),selected=chosen?.deviceId||oldBroadcaster;
+      select.innerHTML=`<option value="">${L("System-Standardgerät","System default device")}</option>`+found.map((d,i)=>`<option value="${esc(d.deviceId)}">${esc(d.label||`${L("Audiogerät","Audio device")} ${i+1}`)}</option>`).join("");
+      streamSelect.innerHTML=`<option value="">${L("Nicht ausgeben","No output")}</option><option value="__default__">${L("System-Standardgerät","System default device")}</option>`+found.map((d,i)=>`<option value="${esc(d.deviceId)}">${esc(d.label||`${L("Audiogerät","Audio device")} ${i+1}`)}</option>`).join("");
+      select.value=selected;if(select.value!==selected&&selected)select.append(new Option(chosen?.label||oldBroadcasterLabel||L("Gespeichertes Broadcaster-Gerät","Saved broadcaster device"),selected,true,true));
+      streamSelect.value=oldStream;if(streamSelect.value!==oldStream&&oldStream)streamSelect.append(new Option(oldStreamLabel||L("Gespeichertes Stream-Gerät","Saved stream device"),oldStream,true,true));
+      hint.textContent=found.length?L(`${found.length} Audiogerät(e) gefunden.`,`Found ${found.length} audio device(s).`):L("Keine Audiogeräte gefunden.","No audio devices found.");
+    }catch(e){hint.textContent=L("Gerätefreigabe wurde abgebrochen oder vom Browser blockiert.","Device access was cancelled or blocked by the browser.");}
+    finally{button.disabled=false;}
+  };
+  $("#testSelectedSound").onclick=async()=>{
+    const group=$(".soundSettingsGroup.active"),isChatTest=group?.dataset.soundTab==="general";
+    const select=isChatTest?$("#chatSound"):group?.querySelector('[data-sound-event]');
+    const name=select?.value;if(!name)return;
+    if(isChatTest)await playConfiguredSound(name,$("#soundDevice")?.value||"",true);
+    else await playSoundForAudience(name,true,{output_device:$("#soundDevice")?.value||"",stream_output_device:$("#streamSoundDevice")?.value||""});
+  };
+  $("#soundSettingsForm").onsubmit=async ev=>{ev.preventDefault();const broadcaster=$("#soundDevice"),stream=$("#streamSoundDevice");const next={enabled:true,output_device:broadcaster.value,output_device_label:broadcaster.selectedOptions[0]?.textContent||"",stream_output_device:stream.value,stream_output_device_label:stream.selectedOptions[0]?.textContent||"",chat_sound:$("#chatSound").value,alerts:{}};$$('[data-sound-platform]').forEach(el=>{const p=el.dataset.soundPlatform;next.alerts[p]=next.alerts[p]||{};next.alerts[p][el.dataset.soundEvent]=el.value;});const out=await api("/api/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({general:{sound:next}})});$("#soundSettingsResult").textContent=out.ok?L("Gespeichert.","Saved."):out.error||L("Fehler beim Speichern.","Could not save.");if(out.ok)soundRuntimeConfig=next;};
+}
+let soundRuntimeConfig=null;
+let soundSeen=new Set();
+let soundBaselineReady=false;
+function soundMessageKey(item){return [item.id||"",item.message_id||"",item.platform||"",item.time||"",item.user||"",item.text||"",item.event_type||item.alert_type||item.message_type||""].join("|");}
+async function playConfiguredSound(name,deviceId="",fallbackToDefault=false){
+  if(!name||name==="__off__")return false;
+  try{
+    const audio=new Audio(`/sound-asset/${encodeURIComponent(name)}`);
+    if(deviceId&&deviceId!=="__default__"&&typeof audio.setSinkId==="function"){
+      try{await audio.setSinkId(deviceId);}
+      catch(error){console.warn("Audiogerät ist nicht verfügbar",error);return false;}
+    }
+    await audio.play();
+    return true;
+  }catch(e){console.warn("Sound konnte nicht abgespielt werden",e);return false;}
+}
+async function playSoundForAudience(name,isAlert,cfg){
+  const broadcaster=cfg.output_device||"";
+  const broadcasterPlay=playConfiguredSound(name,broadcaster,true);
+  if(!isAlert)return;
+  const stream=cfg.stream_output_device||"";
+  const sameDevice=stream==="__default__"?(broadcaster===""||broadcaster==="default"):(stream&&stream===broadcaster);
+  if(stream&&!sameDevice)playConfiguredSound(name,stream,false);
+  return broadcasterPlay;
+}
+function configuredSoundForMessage(item,cfg){
+  const platform=String(item.platform||"").toLowerCase();
+  if(!Object.prototype.hasOwnProperty.call(SOUND_ALERTS,platform))return "";
+  const type=String(item.message_type||item.type||"chat").toLowerCase();
+  if(["chat","message","comment"].includes(type))return cfg.chat_sound||"";
+  const raw=String(item.event_type||item.alert_type||item.message_type||item.type||"").toLowerCase();
+  const platformCfg=cfg.alerts?.[platform]||{};
+  const prefixed=raw.startsWith(platform+"_")?raw:`${platform}_${raw}`;
+  for(const key of [raw,prefixed]){if(Object.prototype.hasOwnProperty.call(platformCfg,key))return platformCfg[key]||"";}
+  return "";
+}
+async function pollIncomingSounds(){
+  try{
+    if(!soundRuntimeConfig){
+      const all=await api("/api/settings");soundRuntimeConfig=all.general?.sound||{};
+      const devices=await audioOutputDevices();
+      soundRuntimeConfig.output_device=resolveSavedDeviceId(devices,soundRuntimeConfig.output_device,soundRuntimeConfig.output_device_label);
+      soundRuntimeConfig.stream_output_device=resolveSavedDeviceId(devices,soundRuntimeConfig.stream_output_device,soundRuntimeConfig.stream_output_device_label);
+    }
+    const out=await api("/api/messages");
+    const messages=Array.isArray(out.messages)?out.messages:[];
+    if(!soundBaselineReady){messages.forEach(item=>soundSeen.add(soundMessageKey(item)));soundBaselineReady=true;return;}
+    for(const item of messages){
+      const key=soundMessageKey(item);if(soundSeen.has(key))continue;soundSeen.add(key);
+      const name=configuredSoundForMessage(item,soundRuntimeConfig);
+      const type=String(item.message_type||item.type||"chat").toLowerCase();
+      const isAlert=!["chat","message","comment"].includes(type);
+      if(name)playSoundForAudience(name,isAlert,soundRuntimeConfig);
+    }
+    if(soundSeen.size>600)soundSeen=new Set(messages.map(soundMessageKey));
+  }catch(_){}
+}
 async function bootPage(){
   try{
-    await (({dashboard:renderDashboard,platforms:renderPlatforms,chat:renderChat,obs_meld:renderObsMeld,spotify:renderSpotify,easyslider:renderEasyslider,overlays:renderOverlays,plugins:renderPlugins,chattim3r:renderChattim3r,modalot:()=>renderDedicatedPlugin("modalot","Modalot","Moderation und Regeln zentral verwalten."),info3ditor:()=>renderDedicatedPlugin("info3ditor","Info3ditor","Streaminformationen und Presets verwalten."),dev:renderDev}[page]||renderDashboard)());
+    await (({dashboard:renderDashboard,platforms:renderPlatforms,chat:renderChat,obs_meld:renderObsMeld,spotify:renderSpotify,easyslider:renderEasyslider,overlays:renderOverlays,plugins:renderPlugins,settings:renderSettings,chattim3r:renderChattim3r,modalot:()=>renderDedicatedPlugin("modalot","Modalot","Moderation und Regeln zentral verwalten."),info3ditor:()=>renderDedicatedPlugin("info3ditor","Info3ditor","Streaminformationen und Presets verwalten."),dev:renderDev}[page]||renderDashboard)());
   }catch(e){
     try{
       await api("/api/client-error",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({level:"error",message:String(e&&e.stack||e)})});
@@ -1178,6 +1303,8 @@ async function bootPage(){
   }
 }
 bootPage();
+pollIncomingSounds();
+setInterval(pollIncomingSounds,1000);
 setInterval(()=>{
   if(page==="dashboard"||page==="chat") refreshMessages().catch(()=>{});
   if(page==="dashboard"||page==="spotify") refreshNowPlaying().catch(()=>{});

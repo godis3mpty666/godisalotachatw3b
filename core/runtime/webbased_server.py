@@ -1045,6 +1045,9 @@ class AppState:
         self.modules = next((p for p in module_candidates if p.exists()), module_candidates[0])
         asset_candidates = [p / "assets" / "pics" for p in resource_candidates]
         self.asset_pics = next((p for p in asset_candidates if p.exists()), asset_candidates[0])
+        sound_candidates = [p / "assets" / "sound" for p in resource_candidates]
+        self.asset_sounds = next((p for p in sound_candidates if p.exists()), sound_candidates[0])
+        self.asset_sounds.mkdir(parents=True, exist_ok=True)
         self.module_roots = [self.modules / "integrations", self.modules / "plugins"]
         self.settings_path = self.data / "settings.json"
         self.chattim3r_path = self.data / "chattim3r.json"
@@ -1881,6 +1884,7 @@ class AppState:
                 "--no-first-run",
                 "--no-default-browser-check",
                 "--disable-session-crashed-bubble",
+                "--autoplay-policy=no-user-gesture-required",
             ]
             try:
                 proc = subprocess.Popen(
@@ -1933,6 +1937,19 @@ class AppState:
             return True
         except Exception as exc:
             try: self.log("ui", "external browser open failed", exc)
+            except Exception: pass
+            return False
+
+    def open_sound_folder(self) -> bool:
+        try:
+            self.asset_sounds.mkdir(parents=True, exist_ok=True)
+            if os.name == "nt":
+                os.startfile(str(self.asset_sounds))
+            else:
+                webbrowser.open(self.asset_sounds.resolve().as_uri())
+            return True
+        except Exception as exc:
+            try: self.log("ui", "sound folder open failed", exc)
             except Exception: pass
             return False
 
@@ -4143,6 +4160,12 @@ class Handler(BaseHTTPRequestHandler):
                 if icon.is_file():
                     return self._send(200, icon.read_bytes(), _content_type(icon))
             return self._send(404, "Icon missing", "text/plain")
+        if path.startswith("/sound-asset/"):
+            name = Path(urllib.parse.unquote(path[len("/sound-asset/"):])).name
+            sound = st.asset_sounds / name
+            if sound.is_file() and sound.suffix.lower() in {".mp3", ".wav", ".ogg", ".m4a", ".aac", ".flac"}:
+                return self._send(200, sound.read_bytes(), _content_type(sound))
+            return self._send(404, "Sound missing", "text/plain")
         if path.startswith("/slider-asset/"):
             rel = urllib.parse.unquote(path[len("/slider-asset/"):]).replace("\\", "/").lstrip("/")
             name = Path(rel).name
@@ -4175,6 +4198,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._page("overlays.html")
         if path == "/plugins":
             return self._page("plugins.html")
+        if path in ("/einstellungen", "/settings"):
+            return self._page("settings.html")
         if path == "/dev":
             return self._page("dev.html")
         if path == "/desktop-chat":
@@ -4240,6 +4265,11 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/settings":
             self._json(st.settings())
+            return
+        if path == "/api/sounds":
+            allowed = {".mp3", ".wav", ".ogg", ".m4a", ".aac", ".flac"}
+            sounds = sorted((p.name for p in st.asset_sounds.iterdir() if p.is_file() and p.suffix.lower() in allowed), key=str.casefold)
+            self._json({"ok": True, "sounds": sounds})
             return
         if path == "/api/language":
             self._json({"ok": True, "language": normalize_language(st.settings().get("ui", {}).get("language"))})
@@ -4857,6 +4887,9 @@ class Handler(BaseHTTPRequestHandler):
                 current.setdefault("ui", {})
                 current["ui"].update(incoming["ui"])
                 current["ui"]["3asyslid3r"] = normalize_easyslider_settings(current["ui"].get("3asyslid3r"))
+            if "general" in incoming and isinstance(incoming["general"], dict):
+                current.setdefault("general", {})
+                current["general"].update(incoming["general"])
             if "automation_rules" in incoming:
                 current["automation_rules"] = _sanitize_automation_rules(incoming.get("automation_rules"))
             old_key = getattr(st, "_obs_conn_key", None)
@@ -4940,6 +4973,10 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/shutdown":
             st.request_shutdown("exe close requested by ui")
             return self._json({"ok": True, "shutdown": True, "mode": "exe_exit"})
+
+        if path == "/api/sounds/open-folder":
+            ok = st.open_sound_folder()
+            return self._json({"ok": ok, "path": str(st.asset_sounds), "error": "Soundordner konnte nicht geöffnet werden." if not ok else ""}, 200 if ok else 500)
 
         if path == "/api/window-closed":
             try:
