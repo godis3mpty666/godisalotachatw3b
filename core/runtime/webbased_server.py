@@ -596,6 +596,8 @@ class WebbasedPluginHost:
 
     def emit_message(self, plugin_id: str, payload: dict) -> None:
         try:
+            if str(plugin_id or "") in CHAT_PLATFORM_PLUGINS.values() and not self.state.plugin_enabled(str(plugin_id)):
+                return
             payload = dict(payload or {})
             message_type = str(payload.get("message_type") or payload.get("type") or "").strip().lower()
             if payload.get("metric_only") or message_type in {"viewer_count", "followers_count", "metric", "stats", "live_status"}:
@@ -771,6 +773,8 @@ class WebbasedPluginHost:
 
     def emit_metric(self, plugin_id: str, payload: dict) -> None:
         try:
+            if str(plugin_id or "") in CHAT_PLATFORM_PLUGINS.values() and not self.state.plugin_enabled(str(plugin_id)):
+                return
             payload = dict(payload or {})
             platform = str(payload.get("platform") or "")
             if platform:
@@ -995,24 +999,34 @@ class WebbasedPluginManager:
         def worker() -> None:
             try:
                 self.state.plugin_status[plugin_id] = {"state": "starting", "message": reason or "Neustart laeuft", "ts": time.time()}
-                old_plugin = self.state.plugin_instances.get(plugin_id)
-                if old_plugin is not None:
-                    try:
-                        old_plugin.stop(wait=True, timeout=3.0)
-                    except TypeError:
-                        try:
-                            old_plugin.stop()
-                        except Exception:
-                            pass
-                    except Exception as exc:
-                        self.state.log(plugin_id, "stop before restart failed", exc)
-                    self.state.plugin_instances.pop(plugin_id, None)
+                self.stop_plugin(plugin_id, update_status=False)
                 self.start_plugin(plugin_id)
             except Exception as exc:
                 self.state.plugin_status[plugin_id] = {"state": "error", "message": str(exc), "ts": time.time()}
                 self.state.log(plugin_id, "async restart failed", exc)
 
         threading.Thread(target=worker, daemon=True, name=f"plugin-restart-{plugin_id}").start()
+
+    def stop_plugin(self, plugin_id: str, update_status: bool = True) -> None:
+        """Stop and unload one plugin so no stale runtime instance remains usable."""
+        plugin_id = str(plugin_id or "").strip()
+        plugin = self.state.plugin_instances.pop(plugin_id, None)
+        if plugin is not None:
+            try:
+                plugin.stop(wait=True, timeout=3.0)
+            except TypeError:
+                try:
+                    plugin.stop()
+                except Exception as exc:
+                    self.state.log(plugin_id, "stop failed", exc)
+            except Exception as exc:
+                self.state.log(plugin_id, "stop failed", exc)
+        if update_status:
+            self.state.plugin_status[plugin_id] = {"state": "stopped", "message": "Deaktiviert", "ts": time.time()}
+
+        platform = next((name for name, pid in CHAT_PLATFORM_PLUGINS.items() if pid == plugin_id), "")
+        if platform:
+            self.state.metrics.pop(platform, None)
 
     def stop_all(self) -> None:
         for pid, plugin in list(self.state.plugin_instances.items()):
@@ -3316,21 +3330,24 @@ class AppState:
         try:
             s = self.settings()
             platforms = s.get("platforms", {}) if isinstance(s.get("platforms", {}), dict) else {}
+            pcfg = s.setdefault("plugins", {}).setdefault(plugin_id, {})
             platform_for_plugin = {"twitch_chat": "twitch", "tiktok_chat": "tiktok", "youtube_chat": "youtube", "kick_chat": "kick", "meld_control": "meld", "obs_control": "obs"}.get(plugin_id)
             if platform_for_plugin:
                 pdata = platforms.get(platform_for_plugin, {}) if isinstance(platforms.get(platform_for_plugin, {}), dict) else {}
-                # Core platform switch is the source of truth for chat plugins.
-                # Old plugin-local enabled=false values must not block autoconnect.
+                # The platform switch and autoconnect govern normal startup, while
+                # an explicit plugin switch is a master kill switch from /plugins.
+                if pcfg.get("enabled") is False:
+                    return False
                 if bool(pdata.get("main_disconnected_at")) and bool(pdata.get("bot_disconnected_at")):
                     return False
                 return bool(pdata.get("enabled", False)) and bool(pdata.get("autoconnect", True))
             if plugin_id == "spotis3mptify":
                 spotify = platforms.get("spotify", {}) if isinstance(platforms.get("spotify", {}), dict) else {}
-                # Same rule: Spotify page controls Spotis3mptify autostart.
+                if pcfg.get("enabled") is False:
+                    return False
                 if bool(spotify.get("main_disconnected_at")):
                     return False
                 return bool(spotify.get("enabled", False)) and bool(spotify.get("autoconnect", True))
-            pcfg = s.setdefault("plugins", {}).setdefault(plugin_id, {})
             if plugin_id == "bridg3alot" and "enabled" not in pcfg:
                 return any(bool(platforms.get(key, {}).get("enabled", False)) for key in ("twitch", "tiktok", "youtube", "kick"))
             if plugin_id == "modalot" and "enabled" not in pcfg:
@@ -4111,7 +4128,7 @@ def _chat_platform_state(st, settings):
     now = time.time()
     for platform, plugin_id in CHAT_PLATFORM_PLUGINS.items():
         cfg = settings.get("platforms", {}).get(platform, {})
-        if not bool(cfg.get("enabled", False)):
+        if not bool(cfg.get("enabled", False)) or not st.plugin_enabled(plugin_id):
             continue
         metric = dict(st.metrics.get(platform, {}) or {})
         plugin_status = dict(st.plugin_status.get(plugin_id, {}) or {})
@@ -4515,7 +4532,14 @@ class Handler(BaseHTTPRequestHandler):
             self._json({"messages": st.messages[-80:]})
             return
         if path == "/api/chat-state":
-            self._json({"messages": st.messages[-100:], "platforms": _chat_platform_state(st, st.settings())})
+            platform_state = _chat_platform_state(st, st.settings())
+            enabled_platforms = {str(item.get("platform") or "") for item in platform_state}
+            messages = [
+                item for item in st.messages[-100:]
+                if str(item.get("platform") or "") not in CHAT_PLATFORM_PLUGINS
+                or str(item.get("platform") or "") in enabled_platforms
+            ]
+            self._json({"messages": messages, "platforms": platform_state})
             return
         if path == "/api/chattim3r":
             return self._json({"ok": True, "entries": st.chattim3r_entries()})
