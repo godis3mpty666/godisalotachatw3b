@@ -58,7 +58,7 @@
     ["Elemente mit der Maus verschieben. Unten rechts skalieren. Bearbeitung im Chat-Reiter beenden.","Move elements with the mouse. Resize at the bottom right. Finish editing in the Chat tab."],
     ["ALERTS","ALERTS"],["Aktueller Song","Current song"],["Neustart","Restart"],["Einstellungen-JSON (bereinigt)","Settings JSON (sanitized)"],
     ["Raw-Debug","Raw debug"],["Quellcode","Source"],["getrennt","disconnected"],["Warnung","warning"],["gesendet","sent"],
-    ["Nachricht","Message"],["Nachrichten","Messages"],["Benutzer","User"],["Grund","Reason"],["Regeln","Rules"],
+    ["Nachricht","Message"],["Nachrichten","Messages"],["Benutzer","User"],["Grund","Reason"],["Regeln","Rules"],["Chat-Browser","Chat Browser"],
     ["Wort/Phrase","Word/phrase"],["nur löschen","delete only"],["löschen + Zeitüberschreitung","delete + timeout"],
     ["Automatik einschalten","Enable automation"],["Wenn aktiv, prüft modalot neue Chatnachrichten mit den Regeln in den Plattform-Reitern.","When enabled, modalot checks new chat messages against the rules in the platform tabs."],
     ["Manuell","Manual"],["Manuelle Aktionen","Manual actions"],["Zeitüberschreitung Minuten","Timeout minutes"],
@@ -167,7 +167,7 @@
   }
   window.t=translate;
   window.translateUi=function(root=document){
-    const blocked="script,style,code,pre,.messages,#messages,#desktopMessages,#chatOverlay,#spTitle,#spArtist,#titleEl,#artistEl,#extrasLayer,#stage,.spotifyText,[data-i18n-skip]";
+    const blocked="script,style,code,pre,.startupSplash,.messages,#messages,#desktopMessages,#chatOverlay,#spTitle,#spArtist,#titleEl,#artistEl,#extrasLayer,#stage,.spotifyText,[data-i18n-skip]";
     const walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);
     const nodes=[]; while(walker.nextNode()) nodes.push(walker.currentNode);
     for(const node of nodes){ const p=node.parentElement; if(!p||p.closest(blocked))continue; const next=translate(node.nodeValue); if(next!==node.nodeValue)node.nodeValue=next; }

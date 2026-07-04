@@ -1204,11 +1204,58 @@ class TikTokChatPlugin(ThreadedPlugin):
             daemon=True,
         ).start()
 
+    def _start_live_window_minimize_monitor(self, port: int, channel: str) -> None:
+        """Force the automatically opened TikTok app window to start minimized.
+
+        Chrome may ignore --start-minimized when it forwards a launch to an
+        existing profile process. CDP addresses the real browser window, so the
+        result does not depend on process ownership or dashboard window state.
+        """
+        def minimize() -> None:
+            successes = 0
+            for _ in range(24):
+                if self._stop.wait(0.25):
+                    return
+                try:
+                    tab = self._find_tiktok_browser_tab(port, channel)
+                    ws_url = str((tab or {}).get('webSocketDebuggerUrl') or '')
+                    if not ws_url:
+                        continue
+                    response = self._cdp_call(ws_url, 'Browser.getWindowForTarget', {}, timeout=2.0)
+                    window_id = ((response.get('result') or {}).get('windowId'))
+                    if window_id is None:
+                        continue
+                    self._cdp_call(ws_url, 'Browser.setWindowBounds', {
+                        'windowId': window_id,
+                        'bounds': {'windowState': 'minimized'},
+                    }, timeout=2.0)
+                    successes += 1
+                    if successes >= 2:
+                        return
+                except Exception:
+                    continue
+        threading.Thread(target=minimize, daemon=True, name='tiktok-minimize-window').start()
+
     def _live_window_lock_path(self, account: str) -> Path:
         try:
             return app_root() / 'data' / 'tiktok' / f'live_window_{account}.lock'
         except Exception:
             return Path(__file__).resolve().parent / 'data' / f'live_window_{account}.lock'
+
+    def _wait_for_dashboard_ready(self, settings: dict[str, Any], timeout_seconds: float = 60.0) -> None:
+        base = str((settings or {}).get('_main_ui_base') or '').strip().rstrip('/')
+        if not base:
+            return
+        deadline = time.time() + max(1.0, timeout_seconds)
+        while time.time() < deadline and not self._stop.is_set():
+            try:
+                with urllib.request.urlopen(base + '/api/ui-ready', timeout=0.8) as response:
+                    payload = json.loads(response.read().decode('utf-8', errors='replace') or '{}')
+                if bool(payload.get('ready')):
+                    return
+            except Exception:
+                pass
+            self._stop.wait(0.25)
 
     def _claim_live_window_launch(self, account: str, ttl_seconds: float = 20.0) -> bool:
         path = self._live_window_lock_path(account)
@@ -1283,6 +1330,8 @@ class TikTokChatPlugin(ThreadedPlugin):
                         self._start_live_window_title_monitor(
                             port, channel or settings.get('unique_id') or '', window_title
                         )
+                        if reason in {'plugin active', 'start'}:
+                            self._start_live_window_minimize_monitor(port, channel or settings.get('unique_id') or '')
                         if reason == 'live detected':
                             # A reload only works when the app window already
                             # happens to be on this creator's live page. During
@@ -1290,7 +1339,7 @@ class TikTokChatPlugin(ThreadedPlugin):
                             # generic/live landing page, so explicitly point it
                             # at the detected creator before refreshing content.
                             self._cdp_call(ws_url, 'Page.navigate', {'url': url}, timeout=6.0)
-                        else:
+                        elif reason not in {'plugin active', 'start'}:
                             self._cdp_call(ws_url, 'Page.bringToFront', {}, timeout=3.0)
                         self._live_window_opened = True
                         self._live_window_last_url = url
@@ -1315,6 +1364,7 @@ class TikTokChatPlugin(ThreadedPlugin):
                     '--remote-debugging-address=127.0.0.1',
                     '--no-first-run',
                     '--no-default-browser-check',
+                    '--start-minimized',
                     '--window-size=1100,900',
                     '--window-position=180,80',
                     '--new-window',
@@ -1325,9 +1375,10 @@ class TikTokChatPlugin(ThreadedPlugin):
                     popen_kwargs['creationflags'] = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
                     si = subprocess.STARTUPINFO()
                     si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-                    si.wShowWindow = 1
+                    si.wShowWindow = 7
                     popen_kwargs['startupinfo'] = si
                 subprocess.Popen(args, **popen_kwargs)
+                self._start_live_window_minimize_monitor(port, channel or settings.get('unique_id') or '')
                 self._start_live_window_title_monitor(
                     port, channel or settings.get('unique_id') or '', window_title
                 )
@@ -1418,6 +1469,7 @@ class TikTokChatPlugin(ThreadedPlugin):
                     '--remote-debugging-address=127.0.0.1',
                     '--no-first-run',
                     '--no-default-browser-check',
+                    '--start-minimized',
                     '--window-size=1000,850',
                     '--window-position=260,90',
                     '--new-window',
@@ -1428,9 +1480,10 @@ class TikTokChatPlugin(ThreadedPlugin):
                     popen_kwargs['creationflags'] = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
                     si = subprocess.STARTUPINFO()
                     si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-                    si.wShowWindow = 1
+                    si.wShowWindow = 7
                     popen_kwargs['startupinfo'] = si
                 subprocess.Popen(args, **popen_kwargs)
+                self._start_live_window_minimize_monitor(port, unique_id)
             except Exception as exc:
                 return False, f'TikTok {account} browser could not be opened: {exc}', None
             if not self._wait_for_debugger(port, timeout_seconds=10.0):
@@ -3359,6 +3412,8 @@ class TikTokChatPlugin(ThreadedPlugin):
         if not candidates:
             raise RuntimeError('Missing TikTok main account in Platforms.')
         if not self._live_window_opened:
+            host.set_status(self.plugin_id, PluginStatus('watching', 'Waiting for dashboard'))
+            self._wait_for_dashboard_ready(settings)
             self._open_main_live_window(host, settings, candidates[0], reason='plugin active')
 
         autoconnect = self._setting_enabled(settings, 'autoconnect', False)

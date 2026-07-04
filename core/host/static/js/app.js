@@ -6,6 +6,45 @@ let settingsCache = null;
 let statusCache = null;
 let internalNavigation = false;
 let shutdownInProgress = false;
+// Startup timing can be tuned here without editing the splash markup or CSS.
+const STARTUP_SPLASH={minVisibleMs:3900,fadeInMs:1350,fadeOutMs:1200,videoPlaybackRate:.78};
+
+function prepareStartupSplash(){
+  const splash=$("#startupSplash");
+  if(splash){
+    splash.style.setProperty("--splash-fade-in",`${STARTUP_SPLASH.fadeInMs}ms`);
+    splash.style.setProperty("--splash-fade-out",`${STARTUP_SPLASH.fadeOutMs}ms`);
+  }
+  const video=$("#startupKonterfei");
+  if(!video)return;
+  video.playbackRate=STARTUP_SPLASH.videoPlaybackRate;
+  video.play().catch(()=>{});
+}
+async function finishStartupSplash(){
+  const splash=$("#startupSplash");
+  if(!splash)return;
+  const elapsed=performance.now()-Number(window.STARTUP_SPLASH_STARTED||0);
+  const remaining=Math.max(0,STARTUP_SPLASH.minVisibleMs-elapsed);
+  if(remaining)await new Promise(resolve=>setTimeout(resolve,remaining));
+  await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+  splash.classList.add("isLeaving");
+  await new Promise(resolve=>setTimeout(resolve,STARTUP_SPLASH.fadeOutMs+80));
+  splash.remove();
+}
+prepareStartupSplash();
+
+function persistMainWindowState(){
+  if(page!=="dashboard")return;
+  try{
+    const state={
+      x:Math.round(window.screenX),y:Math.round(window.screenY),
+      width:Math.round(window.outerWidth),height:Math.round(window.outerHeight),
+      maximized:window.outerWidth>=screen.availWidth-16&&window.outerHeight>=screen.availHeight-16,
+    };
+    navigator.sendBeacon("/api/ui-window-state",new Blob([JSON.stringify(state)],{type:"application/json"}));
+  }catch(_){ }
+}
+window.addEventListener("beforeunload",persistMainWindowState);
 const TESTER_CREDITS = [
   {name:"JunesGo",links:[
     {label:"Twitch",url:"https://www.twitch.tv/junesgo",icon:"twitch"}
@@ -120,11 +159,69 @@ async function loadAll(){ settingsCache=await api("/api/settings"); statusCache=
 function esc(s){return String(s??"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[m]));}
 function L(de,en){return window.APP_LANGUAGE==="en"?en:de;}
 function LT(value){return window.t?window.t(String(value??"")):String(value??"");}
+function localizedStatusValue(value, fallback="not_connected"){
+  const raw=String(value||fallback).trim().toLowerCase().replace(/[ _-]+/g," ");
+  const key=({
+    "verbunden":"connected","connected":"connected","running":"connected",
+    "verbindet":"connecting","connecting":"connecting","starting":"connecting",
+    "bereit":"ready","ready":"ready",
+    "wartet":"waiting","waiting":"waiting","watching":"waiting",
+    "inaktiv":"inactive","inactive":"inactive","disabled":"inactive","deaktiviert":"inactive",
+    "aktiv":"active","active":"active",
+    "getrennt":"disconnected","disconnected":"disconnected","stopped":"disconnected",
+    "nicht verbunden":"not_connected","not connected":"not_connected",
+    "fehler":"error","error":"error","failed":"error",
+  }[raw]||fallback);
+  return ({connected:L("Verbunden","Connected"),connecting:L("Verbindet...","Connecting..."),ready:L("Bereit","Ready"),waiting:L("Wartet","Waiting"),inactive:L("Inaktiv","Inactive"),active:L("Aktiv","Active"),disconnected:L("Getrennt","Disconnected"),error:L("Fehler","Error"),not_connected:L("Nicht verbunden","Not connected")}[key]||String(value||""));
+}
+function localizedStatusDetail(value){
+  let text=String(value||"").trim();
+  if(!text)return "";
+  const pairs=window.APP_LANGUAGE==="en"?[
+    [/\bMain fehlt(?:\/ungültig)?\b/gi,"Main missing"],[/\bBot fehlt(?:\/ungültig)?\b/gi,"Bot missing"],
+    [/\bkein OAuth gespeichert\b/gi,"no OAuth saved"],[/\bOAuth gespeichert\b/gi,"OAuth saved"],
+    [/\bnicht verbunden\b/gi,"not connected"],[/\bverbunden\b/gi,"connected"],[/\bgetrennt\b/gi,"disconnected"],
+    [/\bfehlt\b/gi,"missing"],[/\bungültig\b/gi,"invalid"],[/\bgespeichert\b/gi,"saved"],[/\bbereit\b/gi,"ready"],
+  ]:[
+    [/YouTube OAuth OK[^\p{L}\p{N}]*waiting for active livestream chat/giu,"YouTube OAuth OK · wartet auf aktiven Livestream-Chat"],
+    [/Reading YouTube live chat via web fallback/gi,"Liest den YouTube-Livechat über den Web-Fallback"],
+    [/Reading YouTube live chat/gi,"Liest den YouTube-Livechat"],[/YouTube chat stopped\.?/gi,"YouTube-Chat gestoppt"],
+    [/Watching for live start/gi,"Wartet auf den Livestream-Start"],[/Watching\s+(#[^|]+)(\s*\|\s*live=)/gi,"Beobachtet $1$2"],[/Watching\s+(#[^|]+)/gi,"Beobachtet $1"],
+    [/Waiting for dashboard/gi,"Wartet auf das Dashboard"],[/Starting/gi,"Wird gestartet"],
+    [/Reading\s+(#[^ ]+)\s+as\s+([^·|]+)/gi,"Liest $1 als $2"],[/Reading\s+(@?[^·|]+)/gi,"Liest $1"],
+    [/Reconnecting to\s+/gi,"Verbindet erneut mit "],[/Connecting to\s+/gi,"Verbindet mit "],
+    [/Waiting for main OBS connection/gi,"Wartet auf die OBS-Hauptverbindung"],[/OBS not connected in main tool/gi,"OBS ist im Haupttool nicht verbunden"],
+    [/Meld disabled in platforms/gi,"Meld ist unter Plattformen deaktiviert"],[/Auto connect disabled/gi,"Automatische Verbindung deaktiviert"],
+    [/Meld connect failed/gi,"Meld-Verbindung fehlgeschlagen"],[/Meld disconnected/gi,"Meld getrennt"],
+    [/Meld is not connected/gi,"Meld ist nicht verbunden"],[/Disconnected/gi,"Getrennt"],
+    [/TikTok reading disabled in Platforms/gi,"TikTok-Lesen ist unter Plattformen deaktiviert"],
+    [/(@[^ ]+) is currently offline\.?/gi,"$1 ist derzeit offline"],[/(@[^ ]+) stream ended\.?/gi,"Stream von $1 beendet"],
+    [/IRC stopped\.?/gi,"IRC gestoppt"],[/Idle\s*\/\s*hidden/gi,"Leerlauf / ausgeblendet"],[/Visible:/gi,"Sichtbar:"],
+    [/\blive=false\b/gi,"live=nein"],[/\blive=true\b/gi,"live=ja"],[/\blive=unknown\b/gi,"live=unbekannt"],
+    [/timed out/gi,"Zeitüberschreitung"],[/timeout/gi,"Zeitüberschreitung"],
+    [/\bMain missing\b/gi,"Hauptkonto fehlt"],[/\bBot missing\b/gi,"Bot fehlt"],
+    [/\bno OAuth saved\b/gi,"kein OAuth gespeichert"],[/\bOAuth saved\b/gi,"OAuth gespeichert"],
+    [/\bnot connected\b/gi,"nicht verbunden"],[/\bconnected\b/gi,"verbunden"],[/\bdisconnected\b/gi,"getrennt"],
+    [/\bmissing\b/gi,"fehlt"],[/\binvalid\b/gi,"ungültig"],[/\bsaved\b/gi,"gespeichert"],[/\bready\b/gi,"bereit"],
+    [/\bMain\b/g,"Hauptkonto"],
+  ];
+  for(const [pattern,replacement] of pairs)text=text.replace(pattern,replacement);
+  return LT(text);
+}
+function localizedPlatformStatus(cfg,includeDetail=true){
+  const state=localizedStatusValue(cfg?.status,cfg?.enabled===false?"inactive":"not_connected");
+  let detail=includeDetail?localizedStatusDetail(cfg?.detail):"";
+  if(includeDetail&&cfg&&(cfg.main_status||cfg.bot_status)&&/\b(?:Main|Hauptkonto|Bot)\b/i.test(String(cfg.detail||""))){
+    const mainOk=String(cfg.main_status||"").toLowerCase()==="verbunden";
+    const botOk=String(cfg.bot_status||"").toLowerCase()==="verbunden";
+    detail=`${L("Hauptkonto","Main")} ${mainOk?"OK":L("fehlt","missing")} · Bot ${botOk?"OK":L("fehlt","missing")}`;
+  }
+  return detail&&detail.toLocaleLowerCase()!==state.toLocaleLowerCase()?`${state} · ${detail}`:state;
+}
 function localizedPluginStatus(plugin){
-  if(window.APP_LANGUAGE!=="en")return String(plugin.status||plugin.message||"");
   const state=String(plugin.state||"").toLowerCase();
-  const label=({connected:"Connected",running:"Connected",connecting:"Connecting",starting:"Connecting",error:"Error",failed:"Error",disconnected:"Stopped",stopped:"Stopped",ready:"Ready"}[state]||"Ready");
-  const message=LT(plugin.message||"").trim();
+  const label=localizedStatusValue(state||"ready","ready");
+  const message=localizedStatusDetail(plugin.message||"").trim();
   return message?`${label} - ${message}`:label;
 }
 function userColor(platform,user){let h=2166136261;for(const c of `${platform}:${user}`){h^=c.charCodeAt(0);h=Math.imul(h,16777619)}return `hsl(${Math.abs(h)%360} 78% 68%)`;}
@@ -180,11 +277,7 @@ async function mountEasysliderRail(){
   });
 }
 function statusLabel(cfg){
-  const raw = String(cfg.status || (cfg.enabled ? "bereit" : "inaktiv")).toLowerCase();
-  if(raw === "verbunden") return "Verbunden";
-  if(raw === "inaktiv") return "Inaktiv";
-  if(raw === "bereit") return "Bereit";
-  return "Nicht verbunden";
+  return localizedStatusValue(cfg.status,cfg.enabled?"ready":"inactive");
 }
 function platformAccountDetails(cfg){
   const platformConnected = cfg.status === "verbunden";
@@ -193,9 +286,9 @@ function platformAccountDetails(cfg){
   const mainName = cfg.main || cfg.main_account || cfg.channel || cfg.unique_id || cfg.main_username || cfg.main_channel_title || "";
   const botName = cfg.bot || cfg.bot_account || cfg.bot_username || cfg.username || cfg.bot_channel_title || "";
   const rows = [];
-  if(mainName) rows.push(`Main: ${esc(mainName)}${mainConnected ? "" : " · nicht verbunden"}`);
-  if(botName) rows.push(`Bot: ${esc(botName)}${botConnected ? "" : " · nicht verbunden"}`);
-  return rows.length ? rows.join("<br>") : "Keine Accounts eingetragen";
+  if(mainName) rows.push(`${L("Hauptkonto","Main")}: ${esc(mainName)}${mainConnected ? "" : ` · ${L("nicht verbunden","not connected")}`}`);
+  if(botName) rows.push(`Bot: ${esc(botName)}${botConnected ? "" : ` · ${L("nicht verbunden","not connected")}`}`);
+  return rows.length ? rows.join("<br>") : L("Keine Konten eingetragen","No accounts entered");
 }
 function card(p,cfg){
   const st = cfg.status || "nicht verbunden";
@@ -204,9 +297,9 @@ function card(p,cfg){
   let details = "";
   if(p==="tiktok"||p==="twitch"||p==="youtube"||p==="kick") details = platformAccountDetails(cfg);
   else if(p==="spotify") details = ``;
-  else if(p==="openai") details = cfg.detail ? esc(LT(cfg.detail)) : (cfg.status==="verbunden" ? L("API-Key gespeichert","API key saved") : L("OpenAI API-Key fehlt","OpenAI API key missing"));
-  else if(p==="meld") details = cfg.detail ? esc(LT(cfg.detail)) : ``;
-  else if(p==="obs") details = cfg.detail ? esc(LT(cfg.detail)) : ``;
+  else if(p==="openai") details = cfg.detail ? esc(localizedStatusDetail(cfg.detail)) : (cfg.status==="verbunden" ? L("API-Key gespeichert","API key saved") : L("OpenAI API-Key fehlt","OpenAI API key missing"));
+  else if(p==="meld") details = cfg.detail ? esc(localizedStatusDetail(cfg.detail)) : ``;
+  else if(p==="obs") details = cfg.detail ? esc(localizedStatusDetail(cfg.detail)) : ``;
   else details = `Host: ${esc(cfg.host||"-")}:${esc(cfg.port||"-")}`;
   return `<div class="card" data-platform-card="${esc(p)}"><div class="label">${platformLabel(p)}</div><div class="status"><span class="dot ${ok?'ok':''}"></span><span class="statusText">${label}</span></div><div class="small cardDetails">${details}</div></div>`;
 }
@@ -221,7 +314,7 @@ function updatePlatformCard(p,cfg){
   if(dot) dot.classList.toggle("ok", ok);
   if(txt) txt.textContent = statusLabel(cfg);
   if(details && (p === "tiktok" || p === "twitch" || p === "youtube" || p === "kick")) details.innerHTML = platformAccountDetails(cfg);
-  else if(details && (p === "meld" || p === "obs" || p === "openai")) details.textContent = LT(cfg.detail || "");
+  else if(details && (p === "meld" || p === "obs" || p === "openai")) details.textContent = localizedStatusDetail(cfg.detail || "");
 }
 let meldDashboardPoll = null;
 let obsDashboardPoll = null;
@@ -326,12 +419,21 @@ async function renderDashboard(){
   if(((status.platforms || {}).meld || {}).status !== "verbunden") startMeldDashboardPoll();
   if(((status.platforms || {}).obs || {}).status !== "verbunden") startObsDashboardPoll();
 }
+async function refreshDashboardPluginStatuses(){
+  if(page!=="dashboard")return;
+  const box=$("#plugMini");
+  if(!box)return;
+  try{
+    const status=await api("/api/status");
+    box.innerHTML=(status.plugins||[]).slice(0,6).map(x=>`<div class="msg"><b>${esc(x.name)}</b><div class="small">${esc(localizedPluginStatus(x))}</div></div>`).join("");
+  }catch(_){ }
+}
 async function loadDashboardUrls(){
   const box=$("#dashUrls"); if(!box)return;
   const data=await api("/api/overlay-urls");
   const rt=await api("/api/runtime");
   const warn=rt.port_warning ? `<div class="warnBox">${esc(rt.port_warning)}<br><b>Spotify Redirect URI:</b><div class="urlBox">${esc(rt.spotify_redirect_uri)}</div></div>` : "";
-  box.innerHTML=warn+(data.main||[]).map(i=>`<div class="urlMini"><b>${esc(i.name)}</b><div class="urlBox">${esc(i.url)}</div></div>`).join("");
+  box.innerHTML=warn+(data.main||[]).map(i=>`<div class="urlMini"><b>${esc(LT(i.name))}</b><div class="urlBox">${esc(i.url)}</div></div>`).join("");
 }
 async function refreshMessages(){
   const m=await api("/api/messages");
@@ -403,7 +505,7 @@ function normalizeObsFields(form){
 function sel(name,label,val){return `<label><div>${label}</div><select name="${name}"><option value="false" ${!val?'selected':''}>${L("Nein","No")}</option><option value="true" ${val?'selected':''}>${L("Ja","Yes")}</option></select></label>`;}
 function platformForm(p,cfg){
   const enabled=sel("enabled",L("Aktiv","Active"),cfg.enabled), auto=sel("autoconnect",L("Automatisch verbinden","Autoconnect"),cfg.autoconnect ?? true);
-  const status=(detail=true)=>`<span class="small">Status: ${esc(cfg.status||L("nicht verbunden","not connected"))}${detail&&cfg.detail?" · "+esc(cfg.detail):""}</span>`;
+  const status=(detail=true)=>`<span class="small">${L("Status","Status")}: ${esc(localizedPlatformStatus(cfg,detail))}</span>`;
   if(p==="tiktok") return `<form class="platformForm" data-platform="${p}">${enabled}${auto}${field("main",L("Hauptkonto/Kanal","Main/Channel"),cfg.main)}${field("bot",L("Botkonto","Bot account"),cfg.bot)}<div class="platformSubBox"><b>${L("Testkanal / fremden Livestream lesen","Read test channel / external livestream")}</b><div class="testChannelFields">${sel("test_channel_enabled",L("Testkanal aktiv","Test channel active"),cfg.test_channel_enabled ?? false)}${field("test_channel",L("Testkanal ohne @","Test channel without @"),cfg.test_channel || "")}</div><div class="hint testChannelHint">${L("Wenn aktiviert, liest das TikTok-Chatplugin Chat, Beitritte, Likes, Geschenke, Follows und Shares aus diesem Kanal. Damit kannst du Warnungen testen, ohne mit deinem eigenen Konto live zu gehen. Der angegebene Kanal muss gerade live sein.","When enabled, the TikTok chat plugin reads chat, joins, likes, gifts, follows and shares from this channel. This lets you test alerts without going live on your own account. The specified channel must currently be live.")}</div></div><div class="hint">${L("TikTok verwendet getrennte gespeicherte Browserprofile für Hauptkonto und Bot. Es gibt keine Redirect-URL. Beim Anmelden öffnet sich die TikTok-Anmeldeseite, auf der du dich beispielsweise per QR-Code anmelden kannst.","TikTok uses separate saved browser profiles for the main account and bot. There is no redirect URL. Signing in opens the TikTok login page, where you can sign in using a QR code, for example.")}</div><div class="btnLine"><button type="submit">${L("Speichern","Save")}</button><button type="button" class="btn tiktokLogin" data-account="main">${L("Hauptkonto anmelden","Sign in main")}</button><button type="button" class="btn tiktokLogin" data-account="bot">${L("Bot anmelden","Sign in bot")}</button><button type="button" class="secondary disconnect" data-platform="${p}" data-account="main">${L("Hauptkonto trennen","Disconnect main")}</button><button type="button" class="secondary disconnect" data-platform="${p}" data-account="bot">${L("Bot trennen","Disconnect bot")}</button>${status()}</div></form>`;
   if(p==="meld") return `<form class="platformForm" data-platform="${p}">${enabled}${auto}${field("host","Host",cfg.host||"127.0.0.1")}${field("port","Port",cfg.port||"13376")}<div class="hint">${L("Meld Studio benötigt keine Anmeldedaten. Es wird ausschließlich über einen lokalen WebSocket verbunden.","Meld Studio does not require login credentials. It connects exclusively through a local WebSocket.")}</div><div class="btnLine"><button type="submit">${L("Speichern","Save")}</button><button type="button" class="secondary testMeld">${L("Verbindung testen","Test connection")}</button>${status()}</div></form>`;
   if(p==="obs") return `<form class="platformForm" data-platform="${p}">${enabled}${auto}${field("host","Host",cfg.host||"127.0.0.1")}${field("port","Port",cfg.port||"4455")}${field("password",L("Passwort","Password"),cfg.password,"password")}<div class="hint">${L("OBS-WebSocket-Standard:","OBS WebSocket default:")} <b>ws://127.0.0.1:4455</b>. ${L("In OBS muss der WebSocket-Server unter Werkzeuge > WebSocket-Servereinstellungen aktiviert sein.","In OBS, the WebSocket server must be enabled under Tools > WebSocket Server Settings.")}</div><div class="btnLine"><button type="submit">${L("Speichern","Save")}</button><button type="button" class="secondary testObs">${L("Verbindung testen","Test connection")}</button>${status()}</div></form>`;
@@ -655,13 +757,18 @@ function pluginStateClass(state){
   if(["error","failed"].includes(st)) return "bad";
   return "";
 }
-function schemaLabel(field){return field.label || field.label_de || field.name || field.key || "";}
-function schemaTab(field){return field.tab || field.tab_de || field.ui_tab || field.ui_tab_de || "Allgemein";}
+function schemaLocalized(field, name, fallback=""){
+  const english=window.APP_LANGUAGE==="en";
+  return (english?(field[`${name}_en`]??field[name]):(field[`${name}_de`]??field[name]))??fallback;
+}
+function schemaLabel(field){return schemaLocalized(field,"label",field.name||field.key||"");}
+function schemaTab(field){return schemaLocalized(field,"tab",schemaLocalized(field,"ui_tab",L("Allgemein","General")));}
 function renderPluginField(field, values){
   const key=String(field.key||field.name||"");
   const type=String(field.type||field.kind||"text").toLowerCase();
   const label=esc(schemaLabel(field));
-  const help=field.help||field.help_de||"";
+  const help=schemaLocalized(field,"help","");
+  const placeholder=schemaLocalized(field,"placeholder","");
   const value=values?.[key];
   if(!key && (type==="separator" || type==="section")) return `<div class="settingsSeparator">${label}</div>`;
   if(type==="separator" || type==="section") return `<div class="settingsSeparator">${label}</div>`;
@@ -676,7 +783,7 @@ function renderPluginField(field, values){
   const cls=(wide+compact).trim();
   const helpHtml=help?`<div class="hint${wide}">${esc(help)}</div>`:"";
   if(type==="button" || type==="action"){
-    const buttonText=field.button_text||field.text||label||"Ausführen";
+    const buttonText=schemaLocalized(field,"button_text",schemaLocalized(field,"text",schemaLabel(field)||L("Ausführen","Run")));
     return `<label class="settingsAction${wide}${compact}"${hideAttrs}><div>${label}</div><button type="button" class="secondary pluginActionBtn" data-key="${esc(key)}" ${readonly?"disabled":""}>${esc(buttonText)}</button></label>${helpHtml}`;
   }
   if(type==="bool" || type==="boolean" || type==="checkbox"){
@@ -691,7 +798,7 @@ function renderPluginField(field, values){
     }
     const options=normalizedOpts.map(o=>{
       const v=typeof o==="object"?(o.value??o.id??o.key??o.label):o;
-      const l=typeof o==="object"?(o.label??o.name??v):o;
+      const l=typeof o==="object"?schemaLocalized(o,"label",o.name??v):o;
       return `<option value="${esc(v)}" ${String(value??"")===String(v)?"selected":""}>${esc(l)}</option>`;
     }).join("");
     return `<label class="${cls}"${hideAttrs}><div>${label}</div><select name="${esc(key)}" ${readonly?"disabled":""}>${options}</select></label>${helpHtml}`;
@@ -704,10 +811,10 @@ function renderPluginField(field, values){
     return `<div class="settingsTemplateField ${cls}"${hideAttrs} data-enhanced-template="1" data-key="${esc(key)}"><div class="settingsFieldTitle">${label}</div><textarea name="${esc(key)}" ${ro} placeholder="${esc(field.placeholder||"")}">${esc(value??field.default??"")}</textarea><div class="templateTokenRow">${tokens.map(t=>`<button type="button" class="secondary templateToken" data-token="${esc(t)}" ${readonly?"disabled":""}>${esc(t)}</button>`).join("")}</div><div class="templatePreview"><span>Vorschau:</span> <b></b></div></div>${helpHtml}`;
   }
   if(type==="multiline" || type==="textarea"){
-    return `<label class="${cls}"${hideAttrs}><div>${label}</div><textarea name="${esc(key)}" ${ro} placeholder="${esc(field.placeholder||"")}">${esc(value??field.default??"")}</textarea></label>${helpHtml}`;
+    return `<label class="${cls}"${hideAttrs}><div>${label}</div><textarea name="${esc(key)}" ${ro} placeholder="${esc(placeholder)}">${esc(value??field.default??"")}</textarea></label>${helpHtml}`;
   }
   const inputType=(type==="number"||type==="int"||type==="float")?"number":(type==="password"?"password":"text");
-  return `<label class="${cls}"${hideAttrs}><div>${label}</div><input name="${esc(key)}" type="${inputType}" value="${esc(value??field.default??"")}" ${ro} placeholder="${esc(field.placeholder||"")}"></label>${helpHtml}`;
+  return `<label class="${cls}"${hideAttrs}><div>${label}</div><input name="${esc(key)}" type="${inputType}" value="${esc(value??field.default??"")}" ${ro} placeholder="${esc(placeholder)}"></label>${helpHtml}`;
 }
 
 function initPluginEnhancedFields(root){
@@ -892,6 +999,40 @@ function openInfo3ditorSettings(mount, values){
   const editor=(preset,index)=>{preset.platforms=preset.platforms||{};const blocks=Object.entries(fields).map(([platform,rows])=>{const d=preset.platforms[platform]||{};const locked=platform==='tiktok';return `<section class="infoPlatform"><div class="infoPlatformHead"><h3>${esc(platform)}</h3><label><input type="checkbox" data-info="${platform}.enabled" ${d.enabled?'checked':''} ${locked?'disabled':''}> ${locked?'Noch nicht sendbar':'Beim Senden aktiv'}</label></div><div class="platformForm">${rows.map(([key,label])=>`<label><div>${esc(label)}</div>${key==='description'?`<textarea data-info="${platform}.${key}" ${locked?'disabled':''}>${esc(locked?'TikTok wird aktuell nicht unterstützt.':d[key]||'')}</textarea>`:`<input data-info="${platform}.${key}" value="${esc(d[key]||'')}" ${locked?'disabled':''}>`}</label>`).join('')}</div></section>`}).join('');mount.innerHTML=`<section class="card pluginSettingsCard"><div class="pluginSettingsHead"><div><h3>${index<0?'Preset anlegen':'Preset bearbeiten'}</h3><div class="small">Titel, Kategorie und Aktivierung je Plattform festlegen.</div></div><button class="secondary" id="infoBack">Zurück</button></div><div class="platformForm"><label><div>Presetname</div><input id="infoName" value="${esc(preset.name||'')}"></label></div>${blocks}<div class="btnLine"><button id="infoSave">Preset speichern</button><span class="small" id="infoResult"></span></div></section>`;$('#infoBack',mount).onclick=list;$('#infoSave',mount).onclick=async()=>{preset.name=$('#infoName',mount).value.trim()||'Neues Preset';$$('[data-info]',mount).forEach(input=>{const [platform,key]=input.dataset.info.split('.');preset.platforms[platform]=preset.platforms[platform]||{};preset.platforms[platform][key]=input.type==='checkbox'?input.checked:input.value.trim();});preset.platforms.tiktok.enabled=false;if(index<0)presets.push(preset);else presets[index]=preset;const out=await save();if(out.ok)list();else $('#infoResult',mount).textContent='Fehler: '+(out.error||'?')};};
   list();
 }
+// Canonical Info3ditor UI. Keep every visible string explicit so the global
+// fallback translator never produces mixed labels inside compound phrases.
+function openInfo3ditorSettings(mount, values){
+  let presets=[];
+  try{const raw=JSON.parse(values.presets_json||'{"presets":[]}');presets=Array.isArray(raw.presets)?raw.presets:[];}catch(e){}
+  const fields={
+    twitch:[["title",L("Streamtitel","Stream title")],["category",L("Kategorie / Spiel","Category / game")],["game_id",L("Spiel-ID (optional)","Game ID (optional)")],["tags","Tags"],["description",L("Beschreibung / Notiz","Description / note")]],
+    youtube:[["title",L("Streamtitel","Stream title")],["category",L("Kategorie","Category")],["tags","Tags"],["description",L("Beschreibung","Description")]],
+    kick:[["title",L("Streamtitel","Stream title")],["category",L("Kategorie","Category")],["tags","Tags"],["description",L("Beschreibung / Notiz","Description / note")]],
+    tiktok:[["title",L("Live-Titel","Live title")],["category",L("Kategorie","Category")],["description",L("Nicht verfügbar","Not available")]],
+  };
+  const platformNames={twitch:"Twitch",youtube:"YouTube",kick:"Kick",tiktok:"TikTok"};
+  const raw=()=>JSON.stringify({presets});
+  const save=()=>api('/api/plugins/info3ditor/settings',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({values:{autoconnect:true,presets_json:raw()}})});
+  const send=preset=>api('/api/plugins/info3ditor/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key:'send_web_preset',values:{autoconnect:true,presets_json:raw(),selected_preset_id:preset.id}})});
+  const resultText=out=>out.ok?L("Vorgang erfolgreich.","Action completed."):`${L("Fehler","Error")}: ${out.error||'?'}`;
+  const list=()=>{
+    mount.innerHTML=`<section class="card pluginSettingsCard"><div class="pluginSettingsHead"><div><h3>Info3ditor ${L("Vorlagen","Presets")}</h3><div class="small">${L("Verwalte deine Spiel- und Plattforminformationen.","Manage your game and platform information.")}</div></div><button class="secondary" id="pluginSettingsClose">${L("Schließen","Close")}</button></div><div class="btnLine"><button id="infoNew">${L("Vorlage anlegen","Create preset")}</button></div><div class="infoPresetList">${presets.map((preset,index)=>`<div class="infoPresetRow"><b>${esc(preset.name||L("Unbenannt","Untitled"))}</b><div class="btnLine"><button class="infoSendPreset" data-preset="${index}">${L("Senden","Send")}</button><button class="secondary infoEditPreset" data-preset="${index}">${L("Bearbeiten","Edit")}</button><button class="secondary infoDeletePreset" data-preset="${index}">${L("Löschen","Delete")}</button></div></div>`).join('')||`<div class="small">${L("Noch keine Vorlagen angelegt.","No presets created yet.")}</div>`}</div><div class="small" id="infoResult"></div></section>`;
+    $('#pluginSettingsClose',mount).onclick=()=>mount.innerHTML='';
+    $('#infoNew',mount).onclick=()=>editor({id:`preset_${Date.now()}`,name:L("Neue Vorlage","New preset"),platforms:{}},-1);
+    $$('.infoSendPreset',mount).forEach(button=>button.onclick=async()=>{$('#infoResult',mount).textContent=L("Sende...","Sending...");const out=await send(presets[Number(button.dataset.preset)]);$('#infoResult',mount).textContent=out.ok?L("Sendevorgang gestartet.","Sending started."):resultText(out)});
+    $$('.infoEditPreset',mount).forEach(button=>button.onclick=()=>editor(structuredClone(presets[Number(button.dataset.preset)]),Number(button.dataset.preset)));
+    $$('.infoDeletePreset',mount).forEach(button=>button.onclick=async()=>{presets.splice(Number(button.dataset.preset),1);const out=await save();if(out.ok)list();else $('#infoResult',mount).textContent=resultText(out)});
+  };
+  const editor=(preset,index)=>{
+    preset.platforms=preset.platforms||{};
+    const blocks=Object.entries(fields).map(([platform,rows])=>{const d=preset.platforms[platform]||{};const locked=platform==='tiktok';return `<section class="infoPlatform"><div class="infoPlatformHead"><h3>${platformNames[platform]}</h3><label><input type="checkbox" data-info="${platform}.enabled" ${d.enabled?'checked':''} ${locked?'disabled':''}> ${locked?L("Noch nicht zum Senden verfügbar","Not available for sending yet"):L("Beim Senden aktiv","Enabled when sending")}</label></div><div class="platformForm">${rows.map(([key,label])=>`<label><div>${esc(label)}</div>${key==='description'?`<textarea data-info="${platform}.${key}" ${locked?'disabled':''}>${esc(locked?L("TikTok wird aktuell nicht unterstützt.","TikTok is not currently supported."):d[key]||'')}</textarea>`:`<input data-info="${platform}.${key}" value="${esc(d[key]||'')}" ${locked?'disabled':''}>`}</label>`).join('')}</div></section>`}).join('');
+    mount.innerHTML=`<section class="card pluginSettingsCard"><div class="pluginSettingsHead"><div><h3>${index<0?L("Vorlage anlegen","Create preset"):L("Vorlage bearbeiten","Edit preset")}</h3><div class="small">${L("Titel, Kategorie und Aktivierung je Plattform festlegen.","Set title, category and activation for each platform.")}</div></div><button class="secondary" id="infoBack">${L("Zurück","Back")}</button></div><div class="platformForm"><label><div>${L("Vorlagenname","Preset name")}</div><input id="infoName" value="${esc(preset.name||'')}"></label></div>${blocks}<div class="btnLine"><button id="infoSave">${L("Vorlage speichern","Save preset")}</button><span class="small" id="infoResult"></span></div></section>`;
+    $('#infoBack',mount).onclick=list;
+    $('#infoSave',mount).onclick=async()=>{preset.name=$('#infoName',mount).value.trim()||L("Neue Vorlage","New preset");$$('[data-info]',mount).forEach(input=>{const [platform,key]=input.dataset.info.split('.');preset.platforms[platform]=preset.platforms[platform]||{};preset.platforms[platform][key]=input.type==='checkbox'?input.checked:input.value.trim();});preset.platforms.tiktok.enabled=false;if(index<0)presets.push(preset);else presets[index]=preset;const out=await save();if(out.ok)list();else $('#infoResult',mount).textContent=resultText(out)};
+  };
+  list();
+}
+
 async function openPluginSettings(pluginId){
   const mount=$("#pluginSettingsMount");
   if(!mount) return;
@@ -906,7 +1047,7 @@ async function openPluginSettings(pluginId){
   const groups=tabs.length?tabs:["Allgemein"];
   const tabButtons=groups.map((tab,i)=>`<button type="button" class="pluginSettingsTabBtn ${i===0?"active":""}" data-tab="${esc(tab)}">${esc(tab)}</button>`).join("");
   const body=groups.map((tab,i)=>`<div class="pluginSettingsGroup ${i===0?"active":""}" data-tab="${esc(tab)}"><div class="pluginSettingsFields">${schema.filter(f=>schemaTab(f)===tab || (!tabs.length&&true)).map(f=>renderPluginField(f,values)).join("")}</div></div>`).join("");
-  mount.innerHTML=`<section class="card pluginSettingsCard"><div class="pluginSettingsHead"><div><h3>${esc(d.plugin_id)} Einstellungen</h3><div class="small">Wird in data/settings.json unter plugins/${esc(d.plugin_id)} gespeichert und danach neu gestartet.</div></div><button type="button" class="secondary" id="pluginSettingsClose">Schließen</button></div>${groups.length>1?`<div class="pluginSettingsTabs">${tabButtons}</div>`:""}<form id="pluginSettingsForm">${body||"<div class='small'>Dieses Plugin hat kein Einstellungsschema.</div>"}<div class="btnLine"><button type="submit">Speichern & neu starten</button><button type="button" class="secondary" id="pluginSettingsCancel">Abbrechen</button><span class="small" id="pluginSettingsResult"></span></div></form></section>`;
+  mount.innerHTML=`<section class="card pluginSettingsCard"><div class="pluginSettingsHead"><div><h3>${esc(d.plugin_id)} ${L("Einstellungen","Settings")}</h3><div class="small">${L(`Wird in data/settings.json unter plugins/${esc(d.plugin_id)} gespeichert und danach neu gestartet.`,`Stored in data/settings.json under plugins/${esc(d.plugin_id)} and then restarted.`)}</div></div><button type="button" class="secondary" id="pluginSettingsClose">${L("Schließen","Close")}</button></div>${groups.length>1?`<div class="pluginSettingsTabs">${tabButtons}</div>`:""}<form id="pluginSettingsForm">${body||`<div class='small'>${L("Dieses Plugin hat kein Einstellungsschema.","This plugin has no settings schema.")}</div>`}<div class="btnLine"><button type="submit">${L("Speichern & neu starten","Save & restart")}</button><button type="button" class="secondary" id="pluginSettingsCancel">${L("Abbrechen","Cancel")}</button><span class="small" id="pluginSettingsResult"></span></div></form></section>`;
   $("#pluginSettingsClose").onclick=()=>mount.innerHTML="";
   $("#pluginSettingsCancel").onclick=()=>mount.innerHTML="";
   $$(".pluginSettingsTabBtn", mount).forEach(btn=>btn.onclick=()=>{
@@ -1121,7 +1262,7 @@ async function renderDev(){
       ["Nachrichten",d.counts?.messages],["Plugins",d.counts?.plugins],["Aktive Plugins",d.counts?.active_plugins],
       ["Auth-Dateien",d.counts?.auth_files],["Freier Speicher",formatBytes(d.disk_free)]
     ].map(x=>`<div><b>${esc(x[0])}</b><span>${esc(x[1])}</span></div>`).join("");
-    $("#devPlatforms").innerHTML=Object.entries(liveStatus.platforms||{}).map(([name,cfg])=>`<div><b>${esc(platformLabel(name))}</b><span class="${cfg.status==="verbunden"?"devOk":""}">${cfg.enabled?"aktiv":"inaktiv"} · ${esc(cfg.status)}${cfg.detail?" · "+esc(cfg.detail):""}</span></div>`).join("");
+    $("#devPlatforms").innerHTML=Object.entries(liveStatus.platforms||{}).map(([name,cfg])=>`<div><b>${esc(platformLabel(name))}</b><span class="${cfg.status==="verbunden"?"devOk":""}">${localizedStatusValue(cfg.enabled?"active":"inactive")} · ${esc(localizedPlatformStatus(cfg,true))}</span></div>`).join("");
   };
   const refreshLog=async(keepPosition=false)=>{
     const box=$("#devLog"); if(!box)return;
@@ -1294,12 +1435,17 @@ async function pollIncomingSounds(){
 }
 async function bootPage(){
   try{
-    await (({dashboard:renderDashboard,platforms:renderPlatforms,chat:renderChat,obs_meld:renderObsMeld,spotify:renderSpotify,easyslider:renderEasyslider,overlays:renderOverlays,plugins:renderPlugins,settings:renderSettings,chattim3r:renderChattim3r,modalot:()=>renderDedicatedPlugin("modalot","Modalot","Moderation und Regeln zentral verwalten."),info3ditor:()=>renderDedicatedPlugin("info3ditor","Info3ditor","Streaminformationen und Presets verwalten."),dev:renderDev}[page]||renderDashboard)());
+    await (({dashboard:renderDashboard,platforms:renderPlatforms,chat:renderChat,obs_meld:renderObsMeld,spotify:renderSpotify,easyslider:renderEasyslider,overlays:renderOverlays,plugins:renderPlugins,settings:renderSettings,chattim3r:renderChattim3r,modalot:()=>renderDedicatedPlugin("modalot","Modalot",L("Moderation und Regeln zentral verwalten.","Manage moderation and rules centrally.")),info3ditor:()=>renderDedicatedPlugin("info3ditor","Info3ditor",L("Streaminformationen und Vorlagen verwalten.","Manage stream information and presets.")),dev:renderDev}[page]||renderDashboard)());
   }catch(e){
     try{
       await api("/api/client-error",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({level:"error",message:String(e&&e.stack||e)})});
     }catch(_){}
     shell(page,"Fehler","Die Oberfläche läuft weiter; Details stehen im DEV-Log.",`<section class="card"><div class="warnBox">${esc(String(e&&e.message||e||"Unbekannter Fehler"))}</div><div class="btnLine"><button onclick="location.reload()">Neu laden</button><a class="btn secondary" href="/dev">DEV-Log</a></div></section>`);
+  }finally{
+    if(page==="dashboard"){
+      await finishStartupSplash();
+      try{await api("/api/ui-ready",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}",timeoutMs:2000});}catch(_){ }
+    }
   }
 }
 bootPage();
@@ -1308,6 +1454,7 @@ setInterval(pollIncomingSounds,1000);
 setInterval(()=>{
   if(page==="dashboard"||page==="chat") refreshMessages().catch(()=>{});
   if(page==="dashboard"||page==="spotify") refreshNowPlaying().catch(()=>{});
+  if(page==="dashboard") refreshDashboardPluginStatuses().catch(()=>{});
 },2500);
 
 

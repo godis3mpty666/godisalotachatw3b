@@ -92,6 +92,7 @@ class TwitchChatPlugin(ThreadedPlugin):
         self._emote_source_counts: dict[str, int] = {'official': 0, '7tv': 0, 'bttv': 0, 'ffz': 0}
         self._third_party_emotes_loaded_for: str = ''
         self._third_party_emotes_loaded_at: float = 0.0
+        self._emote_load_in_progress: bool = False
         self._image_data_uri_cache: dict[str, str] = {}
         self._known_follower_ids: set[str] = set()
         self._followers_initialized: bool = False
@@ -378,8 +379,8 @@ class TwitchChatPlugin(ThreadedPlugin):
         if not emote_id:
             return ''
         if animated:
-            return f'https://static-cdn.jtvnw.net/emoticons/v2/{emote_id}/default/dark/2.0'
-        return f'https://static-cdn.jtvnw.net/emoticons/v2/{emote_id}/default/dark/2.0'
+            return f'https://static-cdn.jtvnw.net/emoticons/v2/{emote_id}/animated/dark/2.0'
+        return f'https://static-cdn.jtvnw.net/emoticons/v2/{emote_id}/static/dark/2.0'
     def _guess_image_content_type(self, url: str, header_content_type: str = '') -> str:
         content_type = (header_content_type or '').strip().lower()
         if content_type and content_type != 'application/octet-stream':
@@ -427,13 +428,15 @@ class TwitchChatPlugin(ThreadedPlugin):
         except Exception:
             return url
     def _build_img_html(self, url: str, alt_text: str, animated: bool = False) -> str:
-        src = self._url_to_data_uri(url, prefer_remote=self._is_probably_animated_url(url, animated))
+        # Normal image resources keep GIF/WebP animation intact and avoid huge
+        # data URIs in the chat-state response polled by every chat window.
+        src = (url or '').strip()
         safe_url = html.escape(src, quote=True)
         clean_alt = (alt_text or '').strip()
         if clean_alt.startswith(':') and clean_alt.endswith(':') and len(clean_alt) > 2:
             clean_alt = clean_alt[1:-1]
         safe_alt = html.escape(clean_alt, quote=True)
-        return f'<img src="{safe_url}" alt="{safe_alt}" title="{safe_alt}" style="{IMG_STYLE}">'
+        return f'<img class="chatEmote" src="{safe_url}" alt="{safe_alt}" title="{safe_alt}" loading="eager" decoding="async" referrerpolicy="no-referrer" style="{IMG_STYLE}">'
     def _http_get_json(self, url: str, headers: dict[str, str] | None = None) -> Any:
         req = urllib.request.Request(url, headers=headers or {}, method='GET')
         with urllib.request.urlopen(req, timeout=20) as resp:
@@ -1030,6 +1033,8 @@ class TwitchChatPlugin(ThreadedPlugin):
                 self._emit_metric_error(host, channel, str(exc))
                 return
         self._emit_is_live(host, channel, bool(metrics.get('is_live')))
+        if self._current_channel:
+            host.set_status(self.plugin_id, PluginStatus('connected', f"Watching #{channel} | live={str(bool(metrics.get('is_live'))).lower()}"))
         if self._settings_bool(settings.get('viewer_count_enabled'), True):
             self._emit_viewer_count(host, channel, self._to_int(metrics.get('viewer_count')) or 0)
         self._emit_followers_count(host, channel, self._to_int(metrics.get('followers_count')))
@@ -1557,12 +1562,16 @@ class TwitchChatPlugin(ThreadedPlugin):
         self._processed_usernotice_ids = set()
         self._processed_join_names = set()
         self._processed_join_seen_at = {}
-        try:
-            broadcaster_id, _ = self._resolve_broadcaster(settings, cache, channel)
-            headers = self._helix_headers(settings, cache)
-            self._ensure_third_party_emotes(host, headers, broadcaster_id)
-        except Exception as exc:
-            host.log(self.plugin_id, f'Emote cache warning: {exc}')
+        def load_emotes() -> None:
+            self._emote_load_in_progress = True
+            try:
+                broadcaster_id, _ = self._resolve_broadcaster(settings, cache, channel)
+                headers = self._helix_headers(settings, cache)
+                self._ensure_third_party_emotes(host, headers, broadcaster_id)
+            except Exception as exc:
+                host.log(self.plugin_id, f'Emote cache warning: {exc}')
+            finally:
+                self._emote_load_in_progress = False
         host.log(self.plugin_id, auth_msg)
         reconnect_delay = 3.0
         while not self._stop.is_set():
@@ -1591,9 +1600,12 @@ class TwitchChatPlugin(ThreadedPlugin):
                 if not ok2:
                     raise RuntimeError(message)
                 reconnect_delay = 3.0
-                host.set_status(self.plugin_id, PluginStatus('connected', f'Reading #{channel} as {username}'))
+                if not self._third_party_emotes_loaded_for and not self._emote_load_in_progress:
+                    threading.Thread(target=load_emotes, daemon=True, name='twitch-emote-loader').start()
                 self._current_channel = channel
                 self._maybe_poll_metrics(host, settings, cache, channel, force=True)
+                if self._last_is_live is None:
+                    host.set_status(self.plugin_id, PluginStatus('connected', f'Watching #{channel} | live=unknown'))
                 try:
                     self._maybe_poll_join_fallback(host, settings, cache, channel, force=True)
                 except Exception as exc:

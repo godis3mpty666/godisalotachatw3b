@@ -1048,6 +1048,8 @@ class AppState:
         sound_candidates = [p / "assets" / "sound" for p in resource_candidates]
         self.asset_sounds = next((p for p in sound_candidates if p.exists()), sound_candidates[0])
         self.asset_sounds.mkdir(parents=True, exist_ok=True)
+        video_candidates = [p / "assets" / "video" for p in resource_candidates]
+        self.asset_videos = next((p for p in video_candidates if p.exists()), video_candidates[0])
         self.module_roots = [self.modules / "integrations", self.modules / "plugins"]
         self.settings_path = self.data / "settings.json"
         self.chattim3r_path = self.data / "chattim3r.json"
@@ -1083,6 +1085,7 @@ class AppState:
         self._seen_error_logs: dict[str, float] = {}
         self._recent_log_lines: dict[str, float] = {}
         self.main_url = ""
+        self.dashboard_ready = False
         self.shutting_down = False
         self._tiktok_cookie_backoff = {}
         self._tiktok_cookie_warned = set()
@@ -1859,6 +1862,63 @@ class AppState:
     def _ui_browser_profile_dir(self) -> Path:
         return self.data / "ui_browser_profile"
 
+    def _ui_window_state_path(self) -> Path:
+        return self.data / "ui_window_state.json"
+
+    def _save_main_browser_window_state(self, profile: Path | None = None) -> None:
+        if os.name != "nt":
+            return
+        try:
+            profile = profile or self._ui_browser_profile_dir()
+            pids = set(self._windows_pids_by_command_hint(profile_dir=profile))
+            root_pid = int(getattr(self, "ui_browser_pid", 0) or 0)
+            if root_pid:
+                pids.update(self._windows_process_children(root_pid))
+            if not pids:
+                return
+            user32 = ctypes.windll.user32
+            class WindowRect(ctypes.Structure):
+                _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long), ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
+            candidates: list[tuple[int, int, int, int, int, bool]] = []
+
+            @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+            def enum_proc(hwnd, _lparam):
+                try:
+                    if not user32.IsWindowVisible(hwnd):
+                        return True
+                    out_pid = ctypes.c_ulong()
+                    user32.GetWindowThreadProcessId(hwnd, ctypes.byref(out_pid))
+                    if int(out_pid.value) not in pids:
+                        return True
+                    rect = WindowRect()
+                    if not user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+                        return True
+                    width, height = int(rect.right - rect.left), int(rect.bottom - rect.top)
+                    if width < 400 or height < 300:
+                        return True
+                    maximized = bool(user32.IsZoomed(hwnd))
+                    # F11/fullscreen windows are not reported as zoomed. Treat a
+                    # screen-sized app window as maximized for the next launch.
+                    screen_w, screen_h = int(user32.GetSystemMetrics(0)), int(user32.GetSystemMetrics(1))
+                    if width >= screen_w - 8 and height >= screen_h - 8:
+                        maximized = True
+                    candidates.append((width * height, int(rect.left), int(rect.top), width, height, maximized))
+                except Exception:
+                    pass
+                return True
+
+            user32.EnumWindows(enum_proc, 0)
+            if not candidates:
+                return
+            _area, x, y, width, height, maximized = max(candidates, key=lambda row: row[0])
+            _json_save(self._ui_window_state_path(), {
+                "x": x, "y": y, "width": width, "height": height,
+                "maximized": maximized, "saved_at": time.time(),
+            })
+        except Exception as exc:
+            try: self.log("ui", "window state save failed", exc)
+            except Exception: pass
+
     def open_main_browser(self, url: str) -> bool:
         """Open the dashboard in an isolated browser profile.
 
@@ -1877,6 +1937,7 @@ class AppState:
         except Exception:
             pass
         if browser:
+            window_state = _json_load(self._ui_window_state_path(), {})
             args = [
                 browser,
                 f"--app={url}",
@@ -1886,6 +1947,16 @@ class AppState:
                 "--disable-session-crashed-bubble",
                 "--autoplay-policy=no-user-gesture-required",
             ]
+            if isinstance(window_state, dict):
+                try:
+                    width = max(800, int(window_state.get("width") or 0))
+                    height = max(600, int(window_state.get("height") or 0))
+                    x, y = int(window_state.get("x") or 0), int(window_state.get("y") or 0)
+                    args.extend([f"--window-size={width},{height}", f"--window-position={x},{y}"])
+                    if bool(window_state.get("maximized")):
+                        args.append("--start-maximized")
+                except Exception:
+                    pass
             try:
                 proc = subprocess.Popen(
                     args,
@@ -1922,6 +1993,7 @@ class AppState:
                     except Exception:
                         pass
                     return
+                self._save_main_browser_window_state(profile)
                 time.sleep(2.5)
         except Exception as exc:
             try: self.log("ui", "main browser monitor failed", exc)
@@ -4166,6 +4238,12 @@ class Handler(BaseHTTPRequestHandler):
             if sound.is_file() and sound.suffix.lower() in {".mp3", ".wav", ".ogg", ".m4a", ".aac", ".flac"}:
                 return self._send(200, sound.read_bytes(), _content_type(sound))
             return self._send(404, "Sound missing", "text/plain")
+        if path.startswith("/video-asset/"):
+            name = Path(urllib.parse.unquote(path[len("/video-asset/"):])).name
+            video = st.asset_videos / name
+            if video.is_file() and video.suffix.lower() in {".webm", ".mp4"}:
+                return self._send(200, video.read_bytes(), _content_type(video))
+            return self._send(404, "Video missing", "text/plain")
         if path.startswith("/slider-asset/"):
             rel = urllib.parse.unquote(path[len("/slider-asset/"):]).replace("\\", "/").lstrip("/")
             name = Path(rel).name
@@ -4265,6 +4343,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/settings":
             self._json(st.settings())
+            return
+        if path == "/api/ui-ready":
+            self._json({"ok": True, "ready": bool(getattr(st, "dashboard_ready", False))})
             return
         if path == "/api/sounds":
             allowed = {".mp3", ".wav", ".ogg", ".m4a", ".aac", ".flac"}
@@ -4937,6 +5018,23 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/client-error":
             st.log("client-error", json.dumps(data, ensure_ascii=False))
             return self._json({"ok": True})
+        if path == "/api/ui-ready":
+            st.dashboard_ready = True
+            return self._json({"ok": True, "ready": True})
+        if path == "/api/ui-window-state":
+            try:
+                clean = {
+                    "x": max(-10000, min(10000, int(data.get("x") or 0))),
+                    "y": max(-10000, min(10000, int(data.get("y") or 0))),
+                    "width": max(800, min(10000, int(data.get("width") or 1200))),
+                    "height": max(600, min(10000, int(data.get("height") or 800))),
+                    "maximized": bool(data.get("maximized")),
+                    "saved_at": time.time(),
+                }
+                _json_save(st._ui_window_state_path(), clean)
+                return self._json({"ok": True})
+            except Exception as exc:
+                return self._json({"ok": False, "error": str(exc)}, 400)
         if path == "/api/dev/log/clear":
             try:
                 st.log_file.parent.mkdir(parents=True, exist_ok=True)

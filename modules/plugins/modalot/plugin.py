@@ -135,20 +135,20 @@ class ModalotPlugin(ProviderPlugin):
             return out
 
         action_options = [
-            {"value": "delete", "label": "nur löschen"},
-            {"value": "timeout", "label": "löschen + Timeout"},
-            {"value": "ban", "label": "löschen + Ban"},
+            {"value": "delete", "label": "nur löschen", "label_en": "delete only"},
+            {"value": "timeout", "label": "löschen + Timeout", "label_en": "delete + timeout"},
+            {"value": "ban", "label": "löschen + Ban", "label_en": "delete + ban"},
         ]
 
         def platform_tab(platform: str, label: str) -> list[dict[str, Any]]:
             prefix = platform.lower()
             rows: list[dict[str, Any]] = [
-                {"key": f"section_{prefix}_click_rules", "type": "separator", "label": f"{label} Regeln"},
+                {"key": f"section_{prefix}_click_rules", "type": "separator", "label": f"{label} Regeln", "label_en": f"{label} rules"},
             ]
             for idx in range(1, 9):
                 rows += [
-                    {"key": f"{prefix}_rule_{idx}_word", "label": f"{idx}. Wort/Phrase", "placeholder": "Wort oder Phrase", "compact": True},
-                    {"key": f"{prefix}_rule_{idx}_action", "label": f"{idx}. Aktion", "type": "select", "options": action_options, "compact": True},
+                    {"key": f"{prefix}_rule_{idx}_word", "label": f"{idx}. Wort/Phrase", "label_en": f"{idx}. Word/phrase", "placeholder": "Wort oder Phrase", "placeholder_en": "Word or phrase", "compact": True},
+                    {"key": f"{prefix}_rule_{idx}_action", "label": f"{idx}. Aktion", "label_en": f"{idx}. Action", "type": "select", "options": action_options, "compact": True},
                     {"key": f"{prefix}_rule_{idx}_timeout_minutes", "label": f"{idx}. Min.", "type": "number", "min": 1, "max": 20160, "compact": True, "hide_if": {"key": f"{prefix}_rule_{idx}_action", "value": "ban"}, "hide_mode": "invisible"},
                 ]
             return tab(label, rows)
@@ -156,10 +156,10 @@ class ModalotPlugin(ProviderPlugin):
         schema: list[dict[str, Any]] = []
         schema += tab("Übersicht", [
             {"key": "section_overview", "type": "separator", "label": f"{PLUGIN_NAME} - Moderation"},
-            {"key": "enabled", "label": "Plugin aktiv", "type": "bool"},
-            {"key": "status", "label": "Status", "readonly": True, "placeholder": "bereit"},
-            {"key": "auto_moderation_enabled", "label": "Automatik einschalten", "type": "bool", "help": "Wenn aktiv, prüft modalot neue Chatnachrichten mit den Regeln in den Plattform-Reitern."},
-            {"key": "tiktok_mod_info_display", "label": "TikTok Mod", "readonly": True, "placeholder": "Seitens TikTok aktuell nicht verfügbar; Regeln bleiben intern deaktiviert und werden nicht angezeigt."},
+            {"key": "enabled", "label": "Plugin aktiv", "label_en": "Plugin enabled", "type": "bool"},
+            {"key": "status", "label": "Status", "readonly": True, "placeholder": "bereit", "placeholder_en": "ready"},
+            {"key": "auto_moderation_enabled", "label": "Automatik einschalten", "label_en": "Enable automation", "type": "bool", "help": "Wenn aktiv, prüft modalot neue Chatnachrichten mit den Regeln in den Plattform-Reitern.", "help_en": "When enabled, modalot checks new chat messages against the rules in the platform tabs."},
+            {"key": "tiktok_mod_info_display", "label": "TikTok Mod", "label_en": "TikTok moderation", "readonly": True, "placeholder": "Seitens TikTok aktuell nicht verfügbar; Regeln bleiben intern deaktiviert und werden nicht angezeigt.", "placeholder_en": "Currently unavailable from TikTok; rules remain disabled internally and are not shown."},
         ], en="Overview")
 
         schema += platform_tab("twitch", "Twitch")
@@ -167,20 +167,20 @@ class ModalotPlugin(ProviderPlugin):
         schema += platform_tab("youtube", "YouTube")
 
         schema += tab("Manuell", [
-            {"key": "section_manual", "type": "separator", "label": "Manuelle Aktionen"},
-            {"key": "manual_platform", "label": "Plattform", "type": "select", "options": [
+            {"key": "section_manual", "type": "separator", "label": "Manuelle Aktionen", "label_en": "Manual actions"},
+            {"key": "manual_platform", "label": "Plattform", "label_en": "Platform", "type": "select", "options": [
                 {"value": "twitch", "label": "Twitch"},
                 {"value": "kick", "label": "Kick"},
                 {"value": "youtube", "label": "YouTube"},
             ]},
-            {"key": "manual_user", "label": "User", "placeholder": "Twitch/Kick Username oder YouTube Channel-ID"},
-            {"key": "manual_duration_minutes", "label": "Timeout Minuten", "type": "number", "min": 1, "max": 20160},
-            {"key": "manual_reason", "label": "Grund", "type": "multiline", "wide": True},
-            {"key": "manual_message_id", "label": "Message-ID zum Löschen", "placeholder": "optional; für YouTube liveChatMessage.id"},
-            {"key": "button_manual_delete", "type": "button", "label": "Nachricht löschen", "button_text": "Nachricht löschen"},
-            {"key": "button_manual_timeout", "type": "button", "label": "Timeout", "button_text": "User timeouten"},
-            {"key": "button_manual_ban", "type": "button", "label": "Ban", "button_text": "User bannen"},
-            {"key": "button_manual_unban", "type": "button", "label": "Unban", "button_text": "User freigeben"},
+            {"key": "manual_user", "label": "Benutzer", "label_en": "User", "placeholder": "Twitch/Kick-Benutzername oder YouTube-Kanal-ID", "placeholder_en": "Twitch/Kick username or YouTube channel ID"},
+            {"key": "manual_duration_minutes", "label": "Timeout-Minuten", "label_en": "Timeout minutes", "type": "number", "min": 1, "max": 20160},
+            {"key": "manual_reason", "label": "Grund", "label_en": "Reason", "type": "multiline", "wide": True},
+            {"key": "manual_message_id", "label": "Nachrichten-ID zum Löschen", "label_en": "Message ID to delete", "placeholder": "optional; bei YouTube: liveChatMessage.id", "placeholder_en": "optional; for YouTube: liveChatMessage.id"},
+            {"key": "button_manual_delete", "type": "button", "label": "Nachricht löschen", "label_en": "Delete message", "button_text": "Nachricht löschen", "button_text_en": "Delete message"},
+            {"key": "button_manual_timeout", "type": "button", "label": "Timeout", "label_en": "Timeout", "button_text": "Benutzer timeouten", "button_text_en": "Timeout user"},
+            {"key": "button_manual_ban", "type": "button", "label": "Sperren", "label_en": "Ban", "button_text": "Benutzer sperren", "button_text_en": "Ban user"},
+            {"key": "button_manual_unban", "type": "button", "label": "Entsperren", "label_en": "Unban", "button_text": "Benutzer freigeben", "button_text_en": "Unban user"},
         ], en="Manual")
 
         return schema

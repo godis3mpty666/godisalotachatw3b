@@ -15,6 +15,18 @@ html,body{
   -ms-text-size-adjust:100%;
   width:100%;
 }
+.startupSplash{--splash-fade-in:1350ms;--splash-fade-out:1200ms;position:fixed;inset:0;z-index:50000;display:grid;place-items:center;overflow:hidden;background:radial-gradient(circle at top left,#19154a 0,#090b16 38%,#05060d 100%);opacity:1;visibility:visible;transition:opacity var(--splash-fade-out) ease,visibility 0s linear var(--splash-fade-out)}
+.startupSplash::before{content:"";position:absolute;inset:-30%;background:radial-gradient(circle,rgba(95,215,255,.08),transparent 38%),radial-gradient(circle at 62% 58%,rgba(134,92,255,.1),transparent 34%);filter:blur(30px)}
+.startupSplash.isLeaving{opacity:0;visibility:hidden;pointer-events:none}
+.startupSplashInner{position:relative;display:flex;flex-direction:column;align-items:center;text-align:center;opacity:0;transform:scale(.96);animation:startupInnerIn var(--splash-fade-in) ease forwards}
+.startupKonterfei{display:block;width:min(52vw,480px);max-height:58vh;aspect-ratio:1;object-fit:contain;mix-blend-mode:screen;opacity:0;filter:drop-shadow(0 0 24px rgba(95,215,255,.16));animation:startupVideoIn var(--splash-fade-in) ease 180ms forwards}
+.startupLoading{display:flex;align-items:baseline;justify-content:center;min-height:36px;margin-top:clamp(24px,4vh,52px);color:#f5f7ff;font-size:clamp(18px,2.2vw,27px);font-weight:800;letter-spacing:.08em;text-shadow:0 0 16px rgba(95,215,255,.28)}
+.startupDots{display:inline-flex;width:2.2em;margin-left:.12em;text-align:left}.startupDots i{display:block;width:.32em;height:.32em;margin-right:.1em;border-radius:50%;background:currentColor;opacity:0;transform:translateY(.05em) scale(.4);animation:startupDot 2.2s linear infinite}
+.startupDots i:nth-child(2){animation-delay:.22s}.startupDots i:nth-child(3){animation-delay:.44s}.startupDots i:nth-child(4){animation-delay:.66s}.startupDots i:nth-child(5){animation-delay:.88s}
+.startupEdition{margin-top:7px;color:#9ca6c9;font-size:clamp(12px,1.3vw,16px);font-weight:700;letter-spacing:.16em;text-transform:lowercase}.startupEdition span{color:#5fd7ff}
+@keyframes startupInnerIn{to{opacity:1;transform:scale(1)}}@keyframes startupVideoIn{to{opacity:1}}@keyframes startupDot{0%,8%{opacity:0;transform:translateY(.05em) scale(.4)}12%,62%{opacity:1;transform:translateY(.05em) scale(1)}70%,100%{opacity:0;transform:translateY(.05em) scale(.4)}}
+@media(max-width:700px){.startupKonterfei{width:min(82vw,430px)}}
+@media(prefers-reduced-motion:reduce){.startupSplashInner,.startupKonterfei{animation:none;opacity:1;transform:none}.startupDots i{animation:none;opacity:1}.startupSplash{transition-duration:250ms}}
 .layout{
   display:grid;
   grid-template-columns:clamp(200px,22vw,280px) 1fr;
@@ -385,9 +397,40 @@ textarea{
   min-height:76px;
   resize:vertical;
 }
-input:focus,select:focus,textarea:focus{
-  border-color:var(--purple);
-  box-shadow:0 0 0 3px rgba(134,92,255,.2);
+select{
+  color-scheme:dark;
+}
+select option,select optgroup{
+  background:#111421;
+  color:#f7f8ff;
+}
+select option:checked{
+  background:#6547c7;
+  color:#fff;
+}
+input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):focus,
+select:focus,
+textarea:focus{
+  border-color:transparent;
+  background:
+    linear-gradient(#090b16,#090b16) padding-box,
+    linear-gradient(110deg,transparent 0 32%,rgba(95,215,255,.3) 39%,var(--cyan) 44%,#c078ff 49%,var(--purple) 54%,transparent 62% 100%) border-box;
+  background-size:100% 100%,350% 350%;
+  background-position:0 0,100% 100%;
+  box-shadow:0 0 0 2px rgba(95,215,255,.08),0 0 14px rgba(134,92,255,.2);
+  animation:fieldFocusBorder 2.8s linear infinite;
+}
+@keyframes fieldFocusBorder{
+  from{background-position:0 0,100% 100%}
+  to{background-position:0 0,0 0}
+}
+@media(prefers-reduced-motion:reduce){
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):focus,
+  select:focus,
+  textarea:focus{
+    animation:none;
+    background:linear-gradient(#090b16,#090b16) padding-box,linear-gradient(120deg,var(--cyan),var(--purple)) border-box;
+  }
 }
 input::placeholder,textarea::placeholder{color:#737da9;opacity:1}
 label{
@@ -825,5 +868,24 @@ button.secondary{
 .easysliderButtonRow span{color:var(--muted);font-size:12px}
 .easysliderButtonRow img{width:28px;height:28px;object-fit:contain;flex:0 0 auto}
 .dashboardChatText,.dashboardChatText>*{display:inline}
+.dashboardChatText .chatEmote,.msg>.chatEmote{display:inline-block;height:1.4em;max-height:1.4em;width:auto;vertical-align:-.25em;object-fit:contain}
 .timerEditor{margin-bottom:18px}.timerFields{display:grid;grid-template-columns:minmax(160px,240px) minmax(0,1fr);gap:14px}.timerText{min-width:0}.timerText textarea{display:block;width:100%;min-height:82px;box-sizing:border-box;resize:vertical;background:#090b16;border:1px solid #303656;color:#fff;border-radius:clamp(8px,1vw,12px);padding:clamp(9px,1vw,12px) clamp(10px,1.2vw,14px);font:inherit;font-size:clamp(12px,1.1vw,14px);outline:none}.timerText textarea:focus{border-color:var(--purple);box-shadow:0 0 0 3px rgba(134,92,255,.2)}.timerPlatforms{display:flex;flex-wrap:wrap;align-items:center;gap:14px;margin:16px 0}.timerPlatforms label{display:flex;align-items:center;gap:6px}.timerPlatforms input{width:auto}.timerList{display:grid;gap:10px}.timerRow{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:13px 14px;border:1px solid rgba(255,255,255,.1);border-radius:12px;background:rgba(8,10,22,.38)}.timerRow>div:first-child{display:grid;gap:5px;min-width:0}.timerRow b{white-space:pre-wrap;overflow-wrap:anywhere}.timerRow span{color:var(--muted);font-size:12px}@media(max-width:700px){.timerFields{grid-template-columns:1fr}.timerRow{align-items:flex-start;flex-direction:column}}
 .settingsSectionTitle{margin:0 0 12px;font-size:22px}.soundSettingsGroup{display:none}.soundSettingsGroup.active{display:block}.soundSettingsGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px;align-items:end}.soundSettingsGrid label{min-width:0}.soundPlatformHead{display:flex;align-items:center;gap:10px;margin-bottom:14px}.soundPlatformHead h3{margin:0}.soundPlatformHead .chatPlatform{width:28px;height:28px}.soundPlatformHead .chatPlatform img{width:100%;height:100%;object-fit:contain}
+
+/* Keep the animated focus treatment above component-specific field styles. */
+body input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):focus,
+body select:focus,
+body textarea:focus{
+  border-color:transparent;
+  background:
+    linear-gradient(#090b16,#090b16) padding-box,
+    linear-gradient(110deg,transparent 0 32%,rgba(95,215,255,.3) 39%,var(--cyan) 44%,#c078ff 49%,var(--purple) 54%,transparent 62% 100%) border-box;
+  background-size:100% 100%,350% 350%;
+}
+@media(prefers-reduced-motion:reduce){
+  body input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):focus,
+  body select:focus,
+  body textarea:focus{
+    background:linear-gradient(#090b16,#090b16) padding-box,linear-gradient(120deg,var(--cyan),var(--purple)) border-box;
+  }
+}
