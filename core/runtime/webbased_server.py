@@ -1181,18 +1181,26 @@ class AppState:
                 if now < next_run:
                     continue
                 text = str(entry.get("text") or "").strip()
-                entry["last_run"] = int(now)
-                entry["next_run"] = int(now + minutes * 60)
-                changed = True
+                platforms = [str(platform) for platform in entry.get("platforms") or [] if str(platform).strip()]
+                results = {}
                 if text:
-                    for platform in entry.get("platforms") or []:
-                        threading.Thread(
-                            target=self.plugin_manager.host.send_platform_message,
-                            args=(str(platform), text),
-                            kwargs={"sender": "chattim3r"},
-                            daemon=True,
-                            name=f"chattim3r-{platform}",
-                        ).start()
+                    for platform in platforms:
+                        results[platform] = bool(
+                            self.plugin_manager.host.send_platform_message(platform, text, sender="chattim3r")
+                        )
+                sent = any(results.values())
+                finished = time.time()
+                entry["last_run"] = int(finished)
+                entry["last_results"] = results
+                if sent:
+                    entry.pop("last_error", None)
+                    entry["next_run"] = int(finished + minutes * 60)
+                    self.log("chattim3r", f"Intervall gesendet: {', '.join(p for p, ok in results.items() if ok)}")
+                else:
+                    entry["last_error"] = "Keine ausgewaehlte Plattform konnte die Nachricht senden. Neuer Versuch in 30 Sekunden."
+                    entry["next_run"] = int(finished + 30)
+                    self.log("chattim3r", f"Intervall fehlgeschlagen, neuer Versuch in 30 Sekunden: {results}")
+                changed = True
             if changed:
                 self.save_chattim3r_entries(entries)
             time.sleep(2)

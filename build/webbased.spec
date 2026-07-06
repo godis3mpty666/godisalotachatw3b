@@ -17,7 +17,6 @@ a = Analysis(
     datas=[
         (str(PROJECT_ROOT / 'core'), 'core'),
         (str(PROJECT_ROOT / 'shared'), 'shared'),
-        (str(PROJECT_ROOT / 'assets'), 'assets'),
         # Nur die Data-Python-Helfer packen, NICHT den ganzen data-Ordner mit Tokens/Caches.
         (str(PROJECT_ROOT / 'data' / '__init__.py'), 'data'),
         (str(PROJECT_ROOT / 'data' / 'paths.py'), 'data'),

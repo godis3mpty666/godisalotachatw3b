@@ -18,6 +18,11 @@ build/.signing-thumbprint
 build/.version-before-build
 build/contributor_passwords.txt
 build/private/
+build/CONTRIBUTOR_ZERTIFIKAT_ANLEITUNG.txt
+build/create_contributor_certificate.bat
+build/create_contributor_certificate.ps1
+build/install_contributor_certificate.ps1
+build/setup_build_signing.ps1
 shared/build_provenance.py
 *credentials*.json
 *oauth_cache*.json
