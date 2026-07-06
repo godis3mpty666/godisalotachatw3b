@@ -1,5 +1,6 @@
 from __future__ import annotations
 import base64
+import hashlib
 import html
 import json
 import os
@@ -94,6 +95,9 @@ class TwitchChatPlugin(ThreadedPlugin):
         self._third_party_emotes_loaded_at: float = 0.0
         self._emote_load_in_progress: bool = False
         self._image_data_uri_cache: dict[str, str] = {}
+        self._media_dir = _main_data_dir('twitch_chat') / 'media'
+        self._media_downloads: set[str] = set()
+        self._media_lock = threading.RLock()
         self._known_follower_ids: set[str] = set()
         self._followers_initialized: bool = False
         self._processed_usernotice_ids: set[str] = set()
@@ -430,13 +434,46 @@ class TwitchChatPlugin(ThreadedPlugin):
     def _build_img_html(self, url: str, alt_text: str, animated: bool = False) -> str:
         # Normal image resources keep GIF/WebP animation intact and avoid huge
         # data URIs in the chat-state response polled by every chat window.
-        src = (url or '').strip()
+        src = self._cached_emote_src((url or '').strip(), animated)
         safe_url = html.escape(src, quote=True)
         clean_alt = (alt_text or '').strip()
         if clean_alt.startswith(':') and clean_alt.endswith(':') and len(clean_alt) > 2:
             clean_alt = clean_alt[1:-1]
         safe_alt = html.escape(clean_alt, quote=True)
         return f'<img class="chatEmote" src="{safe_url}" alt="{safe_alt}" title="{safe_alt}" loading="eager" decoding="async" referrerpolicy="no-referrer" style="{IMG_STYLE}">'
+    def _cached_emote_src(self, url: str, animated: bool = False) -> str:
+        if not url:
+            return ''
+        path_ext = Path(urllib.parse.urlparse(url).path).suffix.lower()
+        ext = path_ext if path_ext in {'.png', '.gif', '.webp', '.jpg', '.jpeg', '.avif'} else ('.gif' if animated else '.png')
+        filename = hashlib.sha256(url.encode('utf-8')).hexdigest() + ext
+        target = self._media_dir / filename
+        public_url = f'/cached-media/twitch/{filename}'
+        if target.is_file() and target.stat().st_size > 0:
+            return public_url
+        with self._media_lock:
+            if url not in self._media_downloads:
+                self._media_downloads.add(url)
+                threading.Thread(target=self._download_emote, args=(url, target), daemon=True, name='twitch-emote-cache').start()
+        # The current message can render immediately; subsequent polls/messages use
+        # the persistent local copy as soon as the background download finishes.
+        return url
+    def _download_emote(self, url: str, target: Path) -> None:
+        try:
+            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = resp.read(20 * 1024 * 1024 + 1)
+            if not data or len(data) > 20 * 1024 * 1024:
+                return
+            target.parent.mkdir(parents=True, exist_ok=True)
+            tmp = target.with_suffix(target.suffix + '.tmp')
+            tmp.write_bytes(data)
+            os.replace(tmp, target)
+        except Exception:
+            pass
+        finally:
+            with self._media_lock:
+                self._media_downloads.discard(url)
     def _http_get_json(self, url: str, headers: dict[str, str] | None = None) -> Any:
         req = urllib.request.Request(url, headers=headers or {}, method='GET')
         with urllib.request.urlopen(req, timeout=20) as resp:

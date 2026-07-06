@@ -678,8 +678,11 @@ class Al3rtalotPlugin(ProviderPlugin):
                 'event_type': str(item.get('event_type') or 'alert'),
                 'title': str(item.get('title') or 'Alert'),
                 'amount': item.get('amount'),
+                'gift_name': str(item.get('gift_name') or ''),
                 'color': str(item.get('color') or ''),
                 'raw': item.get('raw') if isinstance(item.get('raw'), dict) else {},
+                'gift_image_url': str(item.get('gift_image_url') or ''),
+                'overlay_html': str(item.get('overlay_html') or ''),
                 'source_plugin_id': self.plugin_id,
                 'dispatch_to_plugins': False,
             })

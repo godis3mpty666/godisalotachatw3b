@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 from typing import Any
 
 from al3rtalot_common import as_bool, clean_name, clean_text, render_template, split_names, to_int
@@ -131,6 +132,7 @@ class BaseAlertPlatform:
             0,
         )
         gift_name = clean_text(msg.get("gift_name") or msg.get("giftName") or msg.get("gift") or "")
+        gift_image_url = clean_text(msg.get("gift_image_url") or msg.get("giftImageUrl") or "")
         raw = msg.get("raw") if isinstance(msg.get("raw"), dict) else {}
         return {
             "platform": self.platform,
@@ -139,6 +141,7 @@ class BaseAlertPlatform:
             "text": text,
             "amount": amount,
             "gift_name": gift_name,
+            "gift_image_url": gift_image_url,
             "channel": clean_text(msg.get("channel") or ""),
             "message_id": clean_text(msg.get("message_id") or msg.get("id") or ""),
             "raw": raw,
@@ -181,6 +184,16 @@ class BaseAlertPlatform:
         line = render_template(template, data)
         title_template = settings.get(f"{self.platform}_{event_type}_title") or settings.get(f"{event_type}_title") or "{event_label}"
         title = render_template(title_template, data)
+        gift_image_url = clean_text(event.get("gift_image_url"))
+        overlay_html = ''
+        if event_type == 'gift' and gift_image_url:
+            overlay_html = (
+                f'<img class="chatGift" src="{html.escape(gift_image_url, quote=True)}" '
+                f'alt="{html.escape(clean_text(event.get("gift_name")) or "Gift", quote=True)}" '
+                f'loading="eager" decoding="async"> {html.escape(line)}'
+            )
+        elif event_type == 'like':
+            overlay_html = f'<span class="chatLikeHeart" aria-hidden="true">♥</span> {html.escape(line)}'
         return {
             "platform": self.platform,
             "event_type": event_type,
@@ -188,8 +201,11 @@ class BaseAlertPlatform:
             "title": title,
             "text": line,
             "amount": amount,
+            "gift_name": clean_text(event.get("gift_name")),
             "color": settings.get(f"{self.platform}_accent_color") or self.default_color,
             "channel": clean_text(event.get("channel")),
             "message_id": clean_text(event.get("message_id")),
             "raw": event.get("raw") if isinstance(event.get("raw"), dict) else {},
+            "gift_image_url": gift_image_url,
+            "overlay_html": overlay_html,
         }

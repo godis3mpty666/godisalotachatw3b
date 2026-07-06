@@ -1475,7 +1475,6 @@ if QtWidgets is not None:
                 ('enabled', 'Twitch aktiv', 'bool'),
                 ('title', 'Streamtitel', 'text'),
                 ('category', 'Kategorie/Game Name', 'text'),
-                ('game_id', 'Kategorie/Game ID optional', 'text'),
                 ('tags', 'Tags, Komma getrennt', 'text'),
                 ('description', 'Notiz/Beschreibung lokal', 'multiline'),
             ]), 'Twitch')

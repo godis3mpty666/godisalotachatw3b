@@ -228,6 +228,7 @@ def default_desktop_chat_layout() -> dict:
             "showTimestamp": False,
             "platforms": {"twitch": True, "tiktok": True, "youtube": True, "kick": True},
         },
+        "viewers": {"enabled": True},
         "window": {"x": 80, "y": 80, "w": 780, "h": 820},
         "autoStart": False,
     }
@@ -314,6 +315,8 @@ def normalize_desktop_chat_layout(raw_layout) -> dict:
         "showTimestamp": False,
         "platforms": {name: bool(platforms.get(name, True)) for name in ("twitch", "tiktok", "youtube", "kick")},
     }
+    viewers = merged.get("viewers") if isinstance(merged.get("viewers"), dict) else {}
+    merged["viewers"] = {"enabled": bool(viewers.get("enabled", True))}
     merged["autoStart"] = bool(merged.get("autoStart", False))
     merged["layoutVersion"] = 2
     return merged
@@ -624,6 +627,13 @@ class WebbasedPluginHost:
                 # oder Meld-Ausgaben genutzt werden.
                 "alert_title": str(payload.get("title") or payload.get("alert_title") or ""),
                 "amount": payload.get("amount") if payload.get("amount") is not None else payload.get("count"),
+                # Preserve TikTok gift media across the central message bus.
+                # al3rtalot receives this normalized item (not the integration's
+                # original payload) and needs these fields to build image HTML.
+                "gift_name": str(payload.get("gift_name") or payload.get("giftName") or ""),
+                "gift_id": str(payload.get("gift_id") or payload.get("giftId") or ""),
+                "gift_count": payload.get("gift_count") if payload.get("gift_count") is not None else payload.get("count"),
+                "gift_image_url": str(payload.get("gift_image_url") or payload.get("giftImageUrl") or ""),
                 "color": str(payload.get("color") or payload.get("accent_color") or ""),
                 "raw": payload.get("raw") if isinstance(payload.get("raw"), dict) else {},
                 "source_plugin_id": str(payload.get("source_plugin_id") or plugin_id),
@@ -4261,6 +4271,17 @@ class Handler(BaseHTTPRequestHandler):
             if video.is_file() and video.suffix.lower() in {".webm", ".mp4"}:
                 return self._send(200, video.read_bytes(), _content_type(video))
             return self._send(404, "Video missing", "text/plain")
+        if path.startswith("/cached-media/"):
+            rel = urllib.parse.unquote(path[len("/cached-media/"):]).replace("\\", "/").lstrip("/")
+            parts = [part for part in rel.split("/") if part]
+            # Cached chat media is deliberately restricted to one platform folder
+            # and one basename. This keeps the route useful without exposing data/.
+            if len(parts) == 2 and parts[0] in {"twitch", "tiktok"}:
+                name = Path(parts[1]).name
+                media = st.data / f"{parts[0]}_chat" / "media" / name
+                if media.is_file() and media.suffix.lower() in {".png", ".gif", ".webp", ".jpg", ".jpeg", ".avif"}:
+                    return self._send(200, media.read_bytes(), _content_type(media), {"Cache-Control": "public, max-age=31536000, immutable"})
+            return self._send(404, "Cached media missing", "text/plain")
         if path.startswith("/slider-asset/"):
             rel = urllib.parse.unquote(path[len("/slider-asset/"):]).replace("\\", "/").lstrip("/")
             name = Path(rel).name
@@ -5196,6 +5217,9 @@ class Handler(BaseHTTPRequestHandler):
                     "showTimestamp": False,
                     "platforms": {name: bool(raw_platforms.get(name, True)) for name in ("twitch", "tiktok", "youtube", "kick")},
                 }
+                raw_viewers = data.get("viewers") if isinstance(data, dict) else {}
+                raw_viewers = raw_viewers if isinstance(raw_viewers, dict) else {}
+                clean["viewers"] = {"enabled": bool(raw_viewers.get("enabled", True))}
                 clean = normalize_desktop_chat_layout(clean)
                 _json_save(st.data / "plugins" / "chat_desktop" / "layout.json", clean)
                 return self._json({"ok": True, "layout": clean})

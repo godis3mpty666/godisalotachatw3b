@@ -521,6 +521,14 @@ button.secondary{
   width:100%;
   min-width:0;
 }
+.desktopSettings input[type="color"]{
+  height:44px;
+  padding:3px;
+  cursor:pointer;
+}
+.desktopSettings input[type="color"]::-webkit-color-swatch-wrapper{padding:0}
+.desktopSettings input[type="color"]::-webkit-color-swatch{border:0;border-radius:8px}
+.desktopSettings input[type="color"]::-moz-color-swatch{border:0;border-radius:8px}
 .platformForm .wide{
   grid-column:1/-1;
 }
@@ -555,6 +563,8 @@ button.secondary{
   margin-bottom:clamp(12px,2vw,16px);
 }
   .desktopSettings{margin:14px 0}
+  .viewerCountSettings{grid-template-columns:minmax(180px,193px)}
+  .viewerCountSettings .viewerCountEnabled{width:100%}
   .alertPlatformToggles{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:10px}
   .alertPlatformToggles label{display:flex;flex-direction:row;align-items:center;gap:7px;padding:8px 10px;border:1px solid rgba(255,255,255,.13);border-radius:10px;background:rgba(8,10,22,.45)}
   .alertPlatformToggles .chatPlatform{width:18px;height:18px}
@@ -778,8 +788,10 @@ button.secondary{
 .infoPlatformHead h3{margin:0}
 .infoPresetButtons{flex-wrap:wrap}
 .infoPresetList{display:grid;gap:10px;margin-top:14px}
-.infoPresetRow{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:12px 14px;border:1px solid rgba(255,255,255,.12);border-radius:12px;background:rgba(255,255,255,.03)}
-@media(max-width:640px){.infoPresetRow{align-items:flex-start;flex-direction:column}}
+.infoPresetRow{display:grid;grid-template-columns:minmax(100px,auto) auto minmax(220px,1fr);align-items:center;gap:14px;padding:12px 14px;border:1px solid rgba(255,255,255,.12);border-radius:12px;background:rgba(255,255,255,.03)}
+.infoPresetSummary{display:flex;gap:18px;min-width:0;color:#aeb9e9;font-size:13px}
+.infoPresetSummary span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+@media(max-width:640px){.infoPresetRow{grid-template-columns:1fr;align-items:flex-start}.infoPresetSummary{flex-direction:column;gap:4px;width:100%}}
 .pluginSettingsFields{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;align-items:end}
 .pluginSettingsFields .wide{grid-column:1/-1}
 .pluginSettingsFields .hint{margin-top:-4px;grid-column:1/-1}

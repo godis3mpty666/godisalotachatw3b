@@ -4,9 +4,11 @@ import asyncio
 import base64
 import contextlib
 import hashlib
+import html
 import importlib
 import json
 import os
+import re
 import socket
 import struct
 import subprocess
@@ -661,6 +663,13 @@ class TikTokChatPlugin(ThreadedPlugin):
         self._live_reload_done = False
         self._live_window_last_url = ''
         self._live_window_title_monitors: set[int] = set()
+        self._gift_media_dir = app_root() / 'data' / 'tiktok_chat' / 'media'
+        self._gift_catalog_path = app_root() / 'data' / 'tiktok_chat' / 'gift_catalog.json'
+        self._gift_catalog: dict[str, dict[str, str]] = self._load_gift_catalog()
+        self._gift_catalog_lock = threading.RLock()
+        self._chat_emote_catalog_path = app_root() / 'data' / 'tiktok_chat' / 'chat_emote_catalog.json'
+        self._chat_emote_catalog: dict[str, dict[str, str]] = self._load_chat_emote_catalog()
+        self._chat_emote_catalog_lock = threading.RLock()
         self.ui_language = 'de'
 
     def _close_browser_profile_windows(self, profile_dir: str = '', port: int = 0) -> None:
@@ -1332,21 +1341,19 @@ class TikTokChatPlugin(ThreadedPlugin):
                         )
                         if reason in {'plugin active', 'start'}:
                             self._start_live_window_minimize_monitor(port, channel or settings.get('unique_id') or '')
-                        if reason == 'live detected':
-                            # A reload only works when the app window already
-                            # happens to be on this creator's live page. During
-                            # offline watching it can instead be on TikTok's
-                            # generic/live landing page, so explicitly point it
-                            # at the detected creator before refreshing content.
-                            self._cdp_call(ws_url, 'Page.navigate', {'url': url}, timeout=6.0)
-                        elif reason not in {'plugin active', 'start'}:
+                        # Reusing a browser target is not enough: it may still
+                        # contain the previous creator's offline page. Always
+                        # navigate it to the currently resolved live URL. This
+                        # also rebuilds TikTok's chat composer for main/bot send.
+                        self._cdp_call(ws_url, 'Page.navigate', {'url': url}, timeout=6.0)
+                        if reason not in {'plugin active', 'start', 'live detected', 'connected'}:
                             self._cdp_call(ws_url, 'Page.bringToFront', {}, timeout=3.0)
                         self._live_window_opened = True
                         self._live_window_last_url = url
                         if hasattr(host, 'log'):
                             host.log(self.plugin_id, f'TikTok chat window reused as {viewer_account} ({reason}): {url}')
                         return True
-            if reason == 'live detected' and self._live_window_opened:
+            if reason in {'live detected', 'connected'} and self._live_window_opened:
                 if hasattr(host, 'log'):
                     host.log(self.plugin_id, f'TikTok chat window reload skipped; existing {viewer_account} window not reachable via debug port: {url}')
                 return False
@@ -1400,8 +1407,9 @@ class TikTokChatPlugin(ThreadedPlugin):
             return
         if self._live_reload_done:
             return
-        self._live_reload_done = True
-        self._open_main_live_window(host, settings, channel, reason='live detected')
+        # Only mark it done after navigation/opening actually succeeded. A
+        # temporarily unavailable debug port must remain retryable.
+        self._live_reload_done = self._open_main_live_window(host, settings, channel, reason='connected')
 
     def _debug_url(self, port: int, suffix: str = 'json') -> str:
         return f'http://127.0.0.1:{port}/{suffix}'
@@ -2184,6 +2192,317 @@ class TikTokChatPlugin(ThreadedPlugin):
                 if ok:
                     return str(current)
         return ''
+
+    def _load_gift_catalog(self) -> dict[str, dict[str, str]]:
+        try:
+            raw = json.loads(self._gift_catalog_path.read_text(encoding='utf-8'))
+            return raw if isinstance(raw, dict) else {}
+        except Exception:
+            return {}
+
+    def _load_chat_emote_catalog(self) -> dict[str, dict[str, str]]:
+        catalog: dict[str, dict[str, str]] = {}
+        try:
+            raw = json.loads(self._chat_emote_catalog_path.read_text(encoding='utf-8'))
+            if isinstance(raw, dict):
+                catalog.update(raw)
+        except Exception:
+            pass
+        # Upgrade existing installations: media files predate the catalog.
+        # Recover their IDs so already downloaded emotes are immediately known.
+        for path in self._gift_media_dir.glob('emote-*'):
+            match = re.match(r'emote-(.+)-[0-9a-f]{16}\.(?:png|gif|webp|jpe?g|avif)$', path.name, flags=re.I)
+            if not match or not path.is_file() or path.stat().st_size <= 0:
+                continue
+            emote_id = match.group(1)
+            display_path = self._normalize_chat_emote_png(path)
+            previous = catalog.get(emote_id) if isinstance(catalog.get(emote_id), dict) else {}
+            if not previous or display_path.suffix.lower() == '.png':
+                catalog[emote_id] = {
+                    'id': emote_id,
+                    'source_url': str(previous.get('source_url') or ''),
+                    'file': display_path.name,
+                }
+        if catalog:
+            try:
+                self._chat_emote_catalog_path.parent.mkdir(parents=True, exist_ok=True)
+                self._chat_emote_catalog_path.write_text(json.dumps(catalog, ensure_ascii=False, indent=2), encoding='utf-8')
+            except Exception:
+                pass
+        return catalog
+
+    def _gift_image_url(self, event: Any) -> str:
+        preferred_keys = {
+            'animation_url', 'animationurl', 'animated_url', 'animatedurl',
+            'webp_url', 'webpurl', 'gif_url', 'gifurl', 'image_url', 'imageurl',
+            'icon_url', 'iconurl', 'url_list', 'urllist', 'url',
+        }
+        seen: set[int] = set()
+        def walk(value: Any, depth: int = 0) -> str:
+            if value is None or depth > 6 or id(value) in seen:
+                return ''
+            seen.add(id(value))
+            if isinstance(value, str):
+                text = value.strip()
+                return text if text.startswith(('https://', 'http://')) else ''
+            if isinstance(value, (list, tuple)):
+                for item in value:
+                    found = walk(item, depth + 1)
+                    if found:
+                        return found
+                return ''
+            if isinstance(value, dict):
+                items = list(value.items())
+            else:
+                try:
+                    items = list(vars(value).items())
+                except Exception:
+                    return ''
+            ranked = sorted(items, key=lambda pair: 0 if str(pair[0]).replace('-', '_').lower() in preferred_keys else 1)
+            for key, child in ranked:
+                normalized = str(key).replace('-', '_').lower()
+                if normalized in preferred_keys or depth < 3:
+                    found = walk(child, depth + 1)
+                    if found:
+                        return found
+            return ''
+        return walk(getattr(event, 'gift', None)) or walk(getattr(event, 'data', None)) or walk(event)
+
+    def _cache_gift_image(self, gift_id: str, gift_name: str, url: str) -> str:
+        if not url:
+            return ''
+        path_ext = Path(urlparse(url).path).suffix.lower()
+        ext = path_ext if path_ext in {'.png', '.gif', '.webp', '.jpg', '.jpeg', '.avif'} else '.webp'
+        cache_key = gift_id or hashlib.sha256(gift_name.encode('utf-8')).hexdigest()[:20]
+        safe_key = ''.join(ch for ch in cache_key if ch.isalnum() or ch in '-_')[:80] or 'gift'
+        filename = f'{safe_key}-{hashlib.sha256(url.encode("utf-8")).hexdigest()[:16]}{ext}'
+        target = self._gift_media_dir / filename
+        try:
+            if not target.is_file() or target.stat().st_size <= 0:
+                req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    data = resp.read(20 * 1024 * 1024 + 1)
+                if not data or len(data) > 20 * 1024 * 1024:
+                    return url
+                target.parent.mkdir(parents=True, exist_ok=True)
+                tmp = target.with_suffix(target.suffix + '.tmp')
+                tmp.write_bytes(data)
+                os.replace(tmp, target)
+            with self._gift_catalog_lock:
+                key = gift_id or gift_name.lower()
+                self._gift_catalog[key] = {'id': gift_id, 'name': gift_name, 'source_url': url, 'file': filename}
+                self._gift_catalog_path.parent.mkdir(parents=True, exist_ok=True)
+                tmp_catalog = self._gift_catalog_path.with_suffix('.json.tmp')
+                tmp_catalog.write_text(json.dumps(self._gift_catalog, ensure_ascii=False, indent=2), encoding='utf-8')
+                os.replace(tmp_catalog, self._gift_catalog_path)
+            return f'/cached-media/tiktok/{filename}'
+        except Exception:
+            return url
+
+    def _cached_gift_src(self, gift_id: str, gift_name: str) -> str:
+        normalized_name = str(gift_name or '').strip().lower()
+        name_aliases = {
+            'teamherz': {'heart me'},
+            'team heart': {'heart me'},
+        }
+        names = {normalized_name} | name_aliases.get(normalized_name, set())
+        candidates = [str(gift_id or '').strip(), *names]
+        matching_ids: set[str] = {str(gift_id or '').strip()} if str(gift_id or '').strip() else set()
+        files: list[Path] = []
+        with self._gift_catalog_lock:
+            for key, row in self._gift_catalog.items():
+                if not isinstance(row, dict):
+                    continue
+                row_id = str(row.get('id') or '').strip()
+                row_name = str(row.get('name') or '').strip().lower()
+                if str(key).strip().lower() not in candidates and row_id not in candidates and row_name not in names:
+                    continue
+                if row_id:
+                    matching_ids.add(row_id)
+                filename = Path(str(row.get('file') or '')).name
+                target = self._gift_media_dir / filename
+                if filename and target.is_file() and target.stat().st_size > 0:
+                    files.append(target)
+        # TikTok often returns a tiny placeholder WebP after we already cached
+        # a proper PNG for the same gift ID. Prefer the largest valid asset.
+        for match_id in matching_ids:
+            files.extend(path for path in self._gift_media_dir.glob(f'{match_id}-*') if path.is_file())
+        if files:
+            best = max(files, key=lambda path: path.stat().st_size)
+            return f'/cached-media/tiktok/{best.name}'
+        return ''
+
+    def _gift_overlay_html(self, text: str, gift_name: str, image_src: str) -> str:
+        safe_text = html.escape(text)
+        if not image_src:
+            return safe_text
+        safe_src = html.escape(image_src, quote=True)
+        safe_name = html.escape(gift_name, quote=True)
+        return f'<img class="chatGift" src="{safe_src}" alt="{safe_name}" title="{safe_name}" loading="eager" decoding="async"> {safe_text}'
+
+    def _cache_chat_emote(self, emote_id: str, url: str) -> str:
+        if not url:
+            return ''
+        catalog_key = str(emote_id or '').strip()
+        with self._chat_emote_catalog_lock:
+            known = self._chat_emote_catalog.get(catalog_key) if catalog_key else None
+            known_file = Path(str((known or {}).get('file') or '')).name if isinstance(known, dict) else ''
+        if known_file:
+            known_path = self._gift_media_dir / known_file
+            if known_path.is_file() and known_path.stat().st_size > 0:
+                display_path = self._normalize_chat_emote_png(known_path)
+                return f'/cached-media/tiktok/{display_path.name}'
+        path_ext = Path(urlparse(url).path).suffix.lower()
+        ext = path_ext if path_ext in {'.png', '.gif', '.webp', '.jpg', '.jpeg', '.avif'} else '.png'
+        safe_id = ''.join(ch for ch in str(emote_id or '') if ch.isalnum() or ch in '-_')[:80] or 'emote'
+        filename = f'emote-{safe_id}-{hashlib.sha256(url.encode("utf-8")).hexdigest()[:16]}{ext}'
+        target = self._gift_media_dir / filename
+        if target.is_file() and target.stat().st_size > 0:
+            display_path = self._normalize_chat_emote_png(target)
+            return f'/cached-media/tiktok/{display_path.name}'
+        # Do not publish a remote CDN URL to the chat. TikTok links can be
+        # short-lived and the native overlay would show a box on a slow first
+        # request. Retry here; _comment_overlay_html awaits this worker.
+        for attempt in range(4):
+            try:
+                req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+                with urllib.request.urlopen(req, timeout=6) as response:
+                    data = response.read(20 * 1024 * 1024 + 1)
+                if not data or len(data) > 20 * 1024 * 1024:
+                    raise ValueError('empty or oversized TikTok chat emote')
+                target.parent.mkdir(parents=True, exist_ok=True)
+                tmp = target.with_suffix(target.suffix + '.tmp')
+                tmp.write_bytes(data)
+                os.replace(tmp, target)
+                with self._chat_emote_catalog_lock:
+                    self._chat_emote_catalog[str(emote_id or safe_id)] = {
+                        'id': str(emote_id or safe_id),
+                        'source_url': url,
+                        'file': filename,
+                    }
+                    self._chat_emote_catalog_path.parent.mkdir(parents=True, exist_ok=True)
+                    catalog_tmp = self._chat_emote_catalog_path.with_suffix('.json.tmp')
+                    catalog_tmp.write_text(json.dumps(self._chat_emote_catalog, ensure_ascii=False, indent=2), encoding='utf-8')
+                    os.replace(catalog_tmp, self._chat_emote_catalog_path)
+                display_path = self._normalize_chat_emote_png(target)
+                return f'/cached-media/tiktok/{display_path.name}'
+            except Exception:
+                if attempt < 3:
+                    time.sleep(0.4 * (attempt + 1))
+        return ''
+
+    def _normalize_chat_emote_png(self, source: Path) -> Path:
+        if source.suffix.lower() == '.png':
+            return source
+        target = source.with_suffix('.png')
+        if target.is_file() and target.stat().st_size > 0:
+            return target
+        try:
+            from PIL import Image
+            with Image.open(source) as image:
+                frame = image.convert('RGBA')
+                tmp = target.with_suffix('.png.tmp')
+                frame.save(tmp, format='PNG', optimize=True)
+            os.replace(tmp, target)
+            return target
+        except Exception:
+            return source
+
+    def _comment_emote_rows(self, event: Any) -> list[dict[str, Any]]:
+        raw_rows = getattr(event, 'f315_emotes', None) or []
+        rows: list[dict[str, Any]] = []
+        for raw in raw_rows:
+            model = getattr(raw, 'emote_model', None)
+            image = getattr(model, 'image', None)
+            urls = getattr(image, 'm_urls', None) or getattr(image, 'url_list', None) or []
+            url = next((str(value).strip() for value in urls if str(value).strip().startswith(('http://', 'https://'))), '')
+            if not url:
+                url = self._gift_image_url(model)
+            if not url:
+                continue
+            rows.append({
+                'index': max(0, int(getattr(raw, 'index', 0) or 0)),
+                'id': str(getattr(model, 'emote_id', None) or getattr(model, 'uuid', None) or 'emote'),
+                'url': url,
+            })
+        return sorted(rows, key=lambda row: row['index'])
+
+    async def _comment_overlay_html(self, event: Any, text: str) -> str:
+        rows = self._comment_emote_rows(event)
+        if not rows:
+            return ''
+        render_text = text
+        if str(text or '').strip().startswith(('http://', 'https://')):
+            # Some TikTok emote-only comments expose the CDN resource as their
+            # content string. It is transport metadata, never chat text.
+            render_text = ''
+        cached = await asyncio.gather(*(
+            asyncio.to_thread(self._cache_chat_emote, row['id'], row['url']) for row in rows
+        ))
+        if any(not source for source in cached):
+            return ''
+        parts: list[str] = []
+        cursor = 0
+        for row, source in zip(rows, cached):
+            index = min(len(render_text), max(cursor, int(row['index'])))
+            parts.append(html.escape(render_text[cursor:index]))
+            safe_source = html.escape(str(source), quote=True)
+            safe_id = html.escape(str(row['id']), quote=True)
+            parts.append(f'<img class="chatEmote" src="{safe_source}" alt="{safe_id}" title="{safe_id}" loading="eager" decoding="async">')
+            cursor = index
+            # TikTok commonly places U+FFFC/U+FFFD as the one-character image
+            # placeholder. Consume it, but never eat real user text.
+            if cursor < len(render_text) and render_text[cursor] in {'\ufffc', '\ufffd'}:
+                cursor += 1
+        parts.append(html.escape(render_text[cursor:]))
+        return ''.join(parts)
+
+    def _looks_like_tiktok_system_comment(self, text: str) -> bool:
+        normalized = ' '.join(str(text or '').strip().lower().split())
+        return any(marker in normalized for marker in (
+            'beliebtheitspfeil', 'popularity arrow', 'popularity ranking',
+        ))
+
+    def _gift_catalog_rows(self, payload: Any) -> list[Any]:
+        rows: list[Any] = []
+        seen: set[int] = set()
+        def walk(value: Any, depth: int = 0) -> None:
+            if value is None or depth > 8 or id(value) in seen:
+                return
+            seen.add(id(value))
+            if isinstance(value, dict):
+                gift_id = self._gift_id(value)
+                gift_name = self._gift_name(value)
+                image_url = self._gift_image_url(value)
+                if gift_id and gift_name != 'Gift' and image_url:
+                    rows.append(value)
+                    return
+                for child in value.values():
+                    walk(child, depth + 1)
+            elif isinstance(value, (list, tuple)):
+                for child in value:
+                    walk(child, depth + 1)
+        walk(payload)
+        return rows
+
+    async def _preload_gift_catalog(self, client: Any, host: PluginHost) -> None:
+        rows = self._gift_catalog_rows(getattr(client, 'gift_info', None))
+        if not rows:
+            with contextlib.suppress(Exception):
+                host.log(self.plugin_id, 'TikTok gift preload: no gift catalog returned for this live room.')
+            return
+        semaphore = asyncio.Semaphore(6)
+        async def cache(row: Any) -> bool:
+            gift_id = self._gift_id(row)
+            gift_name = self._gift_name(row)
+            image_url = self._gift_image_url(row)
+            async with semaphore:
+                result = await asyncio.to_thread(self._cache_gift_image, gift_id, gift_name, image_url)
+            return bool(result and result.startswith('/cached-media/'))
+        results = await asyncio.gather(*(cache(row) for row in rows), return_exceptions=True)
+        saved = sum(result is True for result in results)
+        with contextlib.suppress(Exception):
+            host.log(self.plugin_id, f'TikTok gift preload complete: {saved}/{len(rows)} gifts cached locally.')
 
     def _resolve_event_key(self, *candidate_names: str, fallback: str) -> Any:
         lib_name = 'TikTok' + 'Live'
@@ -3485,6 +3804,10 @@ class TikTokChatPlugin(ThreadedPlugin):
                 self._connected_at_monotonic = time.monotonic()
                 self._emit_is_live(host, resolved_unique_id, True, force=True)
 
+                # TikTok exposes the room's current gift catalog during connect.
+                # Cache it in the background so event processing/chat stays live.
+                asyncio.create_task(self._preload_gift_catalog(client, host))
+
                 viewer_count = await self._fetch_fresh_viewer_count(client)
                 if viewer_count is None:
                     viewer_count = self._extract_viewer_count_from_event(event)
@@ -3503,18 +3826,45 @@ class TikTokChatPlugin(ThreadedPlugin):
                 if text:
                     self._process_chat_command(host, username, text, resolved_unique_id)
 
+                if text and self._looks_like_tiktok_system_comment(text):
+                    self._emit_message(
+                        host,
+                        username=username or 'TikTok',
+                        text=text,
+                        channel=resolved_unique_id,
+                        message_type='alert',
+                        show_in_desktop=True,
+                        show_in_obs=True,
+                        extra={'alert_type': 'popularity', 'event_type': 'popularity'},
+                    )
+                    return
+
                 if not comments_visible_anywhere:
                     return
-                if not text:
-                    return
+                has_chat_emotes = bool(self._comment_emote_rows(event))
+                comment_html = await self._comment_overlay_html(event, text)
+                if not text and not comment_html:
+                    if not has_chat_emotes:
+                        return
+                # Keep emote-only comments alive in the central message bus.
+                # Browser/native renderers prefer overlay_html, so this fallback
+                # is only used by logs, bridges and accessibility clients.
+                visible_text = text
+                if str(visible_text or '').strip().startswith(('http://', 'https://')):
+                    visible_text = ''
+                if not str(visible_text or '').replace('\ufffc', '').replace('\ufffd', '').strip():
+                    visible_text = ''
+                not_found = 'Emote not found' if self.ui_language == 'en' else 'Emote nicht gefunden'
+                transport_text = visible_text or (not_found if has_chat_emotes and not comment_html else '[Emote]')
                 self._emit_message(
                     host,
                     username=username,
-                    text=text,
+                    text=transport_text,
                     channel=resolved_unique_id,
                     message_type='chat',
                     show_in_desktop=show_comments_in_desktop,
                     show_in_obs=show_comments_in_obs,
+                    extra={'overlay_html': comment_html} if comment_html else None,
                 )
 
             async def _on_follow(event: Any):
@@ -3592,6 +3942,7 @@ class TikTokChatPlugin(ThreadedPlugin):
                 user_key = self._user_handle(event)
                 gift_name = self._gift_name(event)
                 gift_id = self._gift_id(event)
+                gift_image_url = self._gift_image_url(event)
 
                 streakable = bool(getattr(getattr(event, 'gift', None), 'streakable', False))
                 streaking = bool(getattr(event, 'streaking', False) or getattr(getattr(event, 'gift', None), 'streaking', False))
@@ -3600,6 +3951,10 @@ class TikTokChatPlugin(ThreadedPlugin):
                     return
 
                 gift_count = self._int_from_paths(event, 'repeat_count', 'gift.repeat_count', default=1)
+                display_text = f'sent {gift_count} x {gift_name}'
+                downloaded_image = await asyncio.to_thread(self._cache_gift_image, gift_id, gift_name, gift_image_url) if gift_image_url else ''
+                gift_image = self._cached_gift_src(gift_id, gift_name) or downloaded_image
+                gift_html = self._gift_overlay_html(display_text, gift_name, gift_image)
                 self._bridge_alert_event(
                     host,
                     username=username,
@@ -3607,7 +3962,7 @@ class TikTokChatPlugin(ThreadedPlugin):
                     channel=resolved_unique_id,
                     message_type='tiktok_gift',
                     count=gift_count,
-                    extra={'user_id': user_key, 'unique_id': user_key, 'alert_type': 'gift', 'gift_name': gift_name, 'gift_id': gift_id, 'gift_count': gift_count},
+                    extra={'user_id': user_key, 'unique_id': user_key, 'alert_type': 'gift', 'gift_name': gift_name, 'gift_id': gift_id, 'gift_count': gift_count, 'gift_image_url': gift_image, 'overlay_html': gift_html},
                 )
                 if not enable_gifts:
                     return
@@ -3617,7 +3972,7 @@ class TikTokChatPlugin(ThreadedPlugin):
                     f'sent {{count}} x {gift_name}',
                     resolved_unique_id,
                     gift_count,
-                    extra={'gift_name': gift_name, 'gift_id': gift_id, 'gift_count': gift_count},
+                    extra={'gift_name': gift_name, 'gift_id': gift_id, 'gift_count': gift_count, 'gift_image_url': gift_image, 'overlay_html': gift_html},
                 )
 
             async def _on_room_user_seq(event: Any):
@@ -3679,7 +4034,7 @@ class TikTokChatPlugin(ThreadedPlugin):
                         return f'@{resolved_unique_id} is currently offline.', True
                     return f'@{resolved_unique_id} is currently offline.', False
 
-                task = asyncio.create_task(client.connect())
+                task = asyncio.create_task(client.connect(fetch_gift_info=True))
 
                 connected_announced = False
                 while not self._stop.is_set():

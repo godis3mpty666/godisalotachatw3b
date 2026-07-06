@@ -243,6 +243,7 @@ class DesktopTkOverlay:
         self.url = url
         parsed = urllib.parse.urlparse(url)
         base = f"{parsed.scheme or 'http'}://{parsed.netloc}"
+        self.base_url = base
         self.runtime_url = f"{base}/api/runtime"
         self.layout_url = f"{base}/api/desktop-chat/layout"
         self.state_url = f"{base}/api/desktop-chat/state"
@@ -297,6 +298,9 @@ class DesktopTkOverlay:
         self._z_order_done = False
         self._last_bg_alpha: float | None = None
         self._platform_images: dict[str, Any] = {}
+        self._chat_media_images: dict[str, Any] = {}
+        self._chat_media_failures: dict[str, float] = {}
+        self._chat_media_retry_scheduled = False
 
         self.canvas.bind("<ButtonPress-1>", self._pointer_down)
         self.canvas.bind("<B1-Motion>", self._pointer_move)
@@ -393,6 +397,7 @@ class DesktopTkOverlay:
         self.layout.setdefault("chatPanel", {"x": 16, "y": 92, "w": 720, "h": 420})
         self.layout.setdefault("alertPanel", {"x": 16, "y": 524, "w": 720, "h": 188})
         self.layout.setdefault("alerts", {"enabled": True, "maxItems": 5, "showTimestamp": True, "platforms": {"twitch": True, "tiktok": True, "youtube": True, "kick": True}})
+        self.layout.setdefault("viewers", {"enabled": True})
         self.layout.setdefault(
             "style",
             {
@@ -567,6 +572,10 @@ class DesktopTkOverlay:
         if self.editing and x >= self.root.winfo_width() - 34 and y >= self.root.winfo_height() - 34:
             return ("window-resize", "window")
         for box_id in ("viewerBar", "chatPanel", "alertPanel"):
+            if box_id == "viewerBar" and not bool((self.layout.get("viewers") or {}).get("enabled", True)):
+                continue
+            if box_id == "alertPanel" and not bool((self.layout.get("alerts") or {}).get("enabled", True)):
+                continue
             box = self.layout.get(box_id) or {}
             bx, by, bw, bh = int(box.get("x", 0)), int(box.get("y", 0)), int(box.get("w", 0)), int(box.get("h", 0))
             if bx <= x <= bx + bw and by <= y <= by + bh:
@@ -672,15 +681,25 @@ class DesktopTkOverlay:
             y,
             x + w - r,
             y,
+            x + w - r,
+            y,
             x + w,
             y,
             x + w,
             y + r,
             x + w,
+            y + r,
+            x + w,
+            y + h - r,
+            x + w,
             y + h - r,
             x + w,
             y + h,
             x + w - r,
+            y + h,
+            x + w - r,
+            y + h,
+            x + r,
             y + h,
             x + r,
             y + h,
@@ -689,8 +708,14 @@ class DesktopTkOverlay:
             x,
             y + h - r,
             x,
+            y + h - r,
+            x,
             y + r,
             x,
+            y + r,
+            x,
+            y,
+            x + r,
             y,
         ]
         c.create_polygon(points, smooth=True, splinesteps=12, **kwargs)
@@ -710,6 +735,242 @@ class DesktopTkOverlay:
         except Exception:
             self._platform_images[key] = None
             return None
+
+    def _chat_media_image(self, source: str, size: int = 24):
+        source = str(source or '').strip()
+        if not source:
+            return None
+        key = f"{source}:{size}"
+        if key in self._chat_media_images:
+            return self._chat_media_images[key]
+        failed_at = self._chat_media_failures.get(key)
+        if failed_at is not None and time.monotonic() - failed_at < 1.25:
+            return None
+        try:
+            media_url = urllib.parse.urljoin(self.base_url + '/', source.lstrip('/'))
+            req = urllib.request.Request(media_url, headers={'User-Agent': 'godisalotachat-desktop'})
+            with urllib.request.urlopen(req, timeout=2.0) as response:
+                data = response.read(20 * 1024 * 1024 + 1)
+            if not data or len(data) > 20 * 1024 * 1024:
+                raise ValueError('chat media is empty or too large')
+            try:
+                from io import BytesIO
+                from PIL import Image, ImageTk
+                pil = Image.open(BytesIO(data)).convert('RGBA')
+                ratio = min(float(size) / max(1, pil.width), float(size) / max(1, pil.height))
+                target = (max(1, int(pil.width * ratio)), max(1, int(pil.height * ratio)))
+                pil = pil.resize(target, Image.Resampling.LANCZOS)
+                image = ImageTk.PhotoImage(pil, master=self.root)
+            except Exception:
+                import base64
+                image = self.tk.PhotoImage(data=base64.b64encode(data).decode('ascii'))
+                scale = max(1, (max(image.width(), image.height()) + size - 1) // size)
+                if scale > 1:
+                    image = image.subsample(scale, scale)
+            self._chat_media_images[key] = image
+            self._chat_media_failures.pop(key, None)
+            return image
+        except Exception as exc:
+            _log(f"Chat-Medium konnte nicht geladen werden: {source}: {exc}")
+            self._chat_media_failures[key] = time.monotonic()
+            self._schedule_chat_media_retry()
+            return None
+
+    def _schedule_chat_media_retry(self) -> None:
+        if self._chat_media_retry_scheduled:
+            return
+        self._chat_media_retry_scheduled = True
+        def retry() -> None:
+            self._chat_media_retry_scheduled = False
+            self.render()
+        self.root.after(1400, retry)
+
+    @staticmethod
+    def _is_emoji_char(char: str) -> bool:
+        if not char:
+            return False
+        cp = ord(char)
+        return (
+            0x1F000 <= cp <= 0x1FAFF
+            or 0x2600 <= cp <= 0x27BF
+            or 0x2300 <= cp <= 0x23FF
+            or 0x2B00 <= cp <= 0x2BFF
+            or cp in {0x00A9, 0x00AE, 0x203C, 0x2049, 0x20E3}
+        )
+
+    def _inline_runs(self, html_value: str | None, fallback: str = "") -> list[tuple[str, str]]:
+        source = str(html_value or "")
+        parts: list[tuple[str, str]] = []
+        if source:
+            cursor = 0
+            for match in re.finditer(r'<img\b[^>]*>', source, flags=re.I):
+                if match.start() > cursor:
+                    parts.append(('text', _strip_html(source[cursor:match.start()])))
+                tag = match.group(0)
+                src_match = re.search(r'\bsrc=["\']([^"\']+)', tag, flags=re.I)
+                if src_match:
+                    parts.append(('image', html.unescape(src_match.group(1))))
+                cursor = match.end()
+            if cursor < len(source):
+                parts.append(('text', _strip_html(source[cursor:])))
+        if not parts:
+            parts = [('text', str(fallback or ''))]
+
+        expanded: list[tuple[str, str]] = []
+        for kind, value in parts:
+            if kind != 'text':
+                expanded.append((kind, value))
+                continue
+            shortcode_emoji = {
+                'heart': '\u2764\ufe0f', 'fire': '\U0001f525', 'congrat': '\U0001f389',
+                'thumb': '\U0001f44d', 'thumbup': '\U0001f44d', 'like': '\U0001f44d',
+                'smile': '\U0001f60a', 'happy': '\U0001f604', 'angry': '\U0001f620',
+                'cry': '\U0001f622', 'surprised': '\U0001f632', 'flushed': '\U0001f633',
+                'laugh': '\U0001f602', 'laughwithtears': '\U0001f602', 'thinking': '\U0001f914',
+                'lovely': '\U0001f970', 'wow': '\U0001f92f', 'cool': '\U0001f60e',
+                'excited': '\U0001f929', 'proud': '\U0001f60c', 'angel': '\U0001f607',
+                'loveface': '\U0001f60d', 'awkward': '\U0001f605', 'shock': '\U0001f631',
+                'tears': '\U0001f62d', 'weep': '\U0001f62d', 'rage': '\U0001f621',
+                'cute': '\U0001f97a', 'blink': '\U0001f609', 'evil': '\U0001f608',
+            }
+            value = re.sub(
+                r'\[([A-Za-z0-9_]+)\]',
+                lambda match: shortcode_emoji.get(match.group(1).lower(), match.group(0)),
+                value,
+            )
+            buffer = ''
+            index = 0
+            while index < len(value):
+                char = value[index]
+                if not self._is_emoji_char(char):
+                    buffer += char
+                    index += 1
+                    continue
+                if buffer:
+                    expanded.append(('text', buffer))
+                    buffer = ''
+                sequence = char
+                index += 1
+                # Country flags are pairs of regional-indicator characters.
+                # Rendering each half separately produces the empty boxes seen
+                # in the native desktop chat.
+                first_cp = ord(char)
+                if 0x1F1E6 <= first_cp <= 0x1F1FF and index < len(value) and 0x1F1E6 <= ord(value[index]) <= 0x1F1FF:
+                    sequence += value[index]
+                    index += 1
+                while index < len(value):
+                    cp = ord(value[index])
+                    if cp in {0xFE0E, 0xFE0F, 0x200D, 0x20E3} or 0x1F3FB <= cp <= 0x1F3FF or (sequence.endswith('\u200d') and self._is_emoji_char(value[index])):
+                        sequence += value[index]
+                        index += 1
+                    else:
+                        break
+                expanded.append(('emoji', sequence))
+            if buffer:
+                expanded.append(('text', buffer))
+        return [(kind, value) for kind, value in expanded if value]
+
+    def _emoji_image(self, emoji_text: str, size: int = 24):
+        key = f"emoji:{emoji_text}:{size}"
+        if key in self._chat_media_images:
+            return self._chat_media_images[key]
+        # Tk cannot display color fonts. Twemoji gives deterministic full-color
+        # glyphs; keep the local Windows color font as an offline fallback.
+        codepoints = '-'.join(f'{ord(char):x}' for char in emoji_text if ord(char) != 0xFE0F)
+        if codepoints:
+            twemoji = f'https://cdn.jsdelivr.net/gh/jdecked/twemoji@latest/assets/72x72/{codepoints}.png'
+            image = self._chat_media_image(twemoji, size=size)
+            if image:
+                self._chat_media_images[key] = image
+                return image
+        try:
+            from PIL import Image, ImageDraw, ImageFont, ImageTk
+            font_path = Path(os.environ.get('WINDIR', r'C:\Windows')) / 'Fonts' / 'seguiemj.ttf'
+            font = ImageFont.truetype(str(font_path), max(16, int(size * .9)))
+            image = Image.new('RGBA', (size * 3, size * 2), (0, 0, 0, 0))
+            draw = ImageDraw.Draw(image)
+            draw.text((2, 0), emoji_text, font=font, embedded_color=True)
+            bbox = image.getbbox()
+            if bbox:
+                image = image.crop(bbox)
+            ratio = min(float(size) / max(1, image.width), float(size) / max(1, image.height))
+            image = image.resize((max(1, int(image.width * ratio)), max(1, int(image.height * ratio))), Image.Resampling.LANCZOS)
+            photo = ImageTk.PhotoImage(image, master=self.root)
+            self._chat_media_images[key] = photo
+            return photo
+        except Exception as exc:
+            _log(f"Farbiges Emoji konnte nicht gerendert werden: {emoji_text}: {exc}")
+            self._chat_media_failures[key] = time.monotonic()
+            self._schedule_chat_media_retry()
+            return None
+
+    def _draw_inline_runs(self, runs: list[tuple[str, str]], x: int, center_y: float, font: Any, color: str, right: int, size: int) -> None:
+        px = x
+        for kind, value in runs:
+            if px >= right:
+                break
+            if kind == 'text':
+                # Runs have already been pixel-wrapped by _wrap_inline_runs.
+                # Calling _wrap_text_px again stripped every whitespace-only
+                # run and glued neighbouring words together.
+                self.canvas.create_text(px, center_y, text=value, fill=color, font=font, anchor='w')
+                px += font.measure(value)
+            else:
+                image = self._chat_media_image(value, size=size) if kind == 'image' else self._emoji_image(value, size=size)
+                if image:
+                    self.canvas.create_image(px + int(image.width() / 2), center_y, image=image, anchor='center')
+                    px += image.width() + 3
+                else:
+                    if kind == 'emoji':
+                        self.canvas.create_text(px, center_y, text=value, fill=color, font=font, anchor='w')
+                        px += font.measure(value)
+                    else:
+                        # Keep the slot empty until the scheduled retry succeeds;
+                        # never flash a misleading square for image emotes.
+                        px += size + 3
+
+    def _inline_runs_width(self, runs: list[tuple[str, str]], font: Any, size: int) -> int:
+        width = 0
+        for kind, value in runs:
+            if kind == 'text':
+                width += font.measure(value)
+            else:
+                image = self._chat_media_image(value, size=size) if kind == 'image' else self._emoji_image(value, size=size)
+                width += (image.width() + 3) if image else font.measure(value)
+        return width
+
+    def _wrap_inline_runs(self, runs: list[tuple[str, str]], font: Any, first_px: int, next_px: int, size: int, max_lines: int = 6) -> list[list[tuple[str, str]]]:
+        lines: list[list[tuple[str, str]]] = [[]]
+        used = 0
+        limit = max(20, first_px)
+        for kind, value in runs:
+            units = [('text', part) for part in re.split(r'(\s+)', value) if part] if kind == 'text' else [(kind, value)]
+            for unit_kind, unit_value in units:
+                if unit_kind == 'text':
+                    unit_width = font.measure(unit_value)
+                else:
+                    image = self._chat_media_image(unit_value, size=size) if unit_kind == 'image' else self._emoji_image(unit_value, size=size)
+                    unit_width = (image.width() + 3) if image else size
+                if used and used + unit_width > limit and not unit_value.isspace():
+                    if len(lines) >= max_lines:
+                        return lines
+                    lines.append([])
+                    used = 0
+                    limit = max(20, next_px)
+                if unit_kind == 'text' and unit_width > limit and not unit_value.isspace():
+                    pieces = self._split_token_to_width(unit_value, font, limit)
+                    for piece_index, piece in enumerate(pieces):
+                        if piece_index and len(lines) < max_lines:
+                            lines.append([])
+                            used = 0
+                            limit = max(20, next_px)
+                        lines[-1].append(('text', piece))
+                        used += font.measure(piece)
+                    continue
+                if not (not lines[-1] and unit_value.isspace()):
+                    lines[-1].append((unit_kind, unit_value))
+                    used += unit_width
+        return [line for line in lines if line] or [[('text', '')]]
 
     def _draw_platform_badge(self, x: int, y: int, platform: str, text: str | None = None, blocked: bool = False, size: int = 21) -> int:
         icon = PLATFORM_ICONS.get(platform, "•")
@@ -844,7 +1105,8 @@ class DesktopTkOverlay:
         if self.editing:
             c.create_rectangle(0, 0, self.root.winfo_width(), self.root.winfo_height(), fill="#020304", outline="")
 
-        self._draw_viewer_bar(bg, bg_stipple, radius, font_family, text_color)
+        if bool((self.layout.get("viewers") or {}).get("enabled", True)):
+            self._draw_viewer_bar(bg, bg_stipple, radius, font_family, text_color)
         self._draw_chat_panel(bg, bg_stipple, radius, font_family, font_size, text_color)
         self._draw_alert_panel(bg, bg_stipple, radius, font_family, font_size, text_color)
 
@@ -905,7 +1167,7 @@ class DesktopTkOverlay:
         # Die Badge ist 24px hoch. Mit mindestens 34px pro Zeile bleibt sichtbar
         # Luft zwischen den farbigen Bereichen, auch bei kleiner Schrift.
         line_h = max(34, int(font_size * 1.8))
-        rows: list[tuple[str, str, str, str]] = []
+        rows: list[tuple[str, str, str, str, list[tuple[str, str]] | None]] = []
         text_font = self.tkfont.Font(family=font_family, size=font_size)
         name_font = self.tkfont.Font(family=font_family, size=font_size, weight="bold")
         left_pad = 12
@@ -916,29 +1178,42 @@ class DesktopTkOverlay:
             platform = str(msg.get("platform") or "")
             user = str(msg.get("user") or "?")
             text = _strip_html(msg.get("html")) or str(msg.get("text") or "")
+            inline_runs = self._inline_runs(msg.get("html"), str(msg.get("text") or ""))
+            has_visual_runs = any(kind in {'image', 'emoji'} for kind, _value in inline_runs)
             badge_w = 22
             first_text_x = x + left_pad + badge_w + 8 + name_font.measure(user) + 10
             first_line_width = max(40, panel_right - first_text_x)
             next_line_width = max(40, panel_right - continuation_x)
-            wrapped = self._wrap_text_px(text, text_font, first_line_width, next_line_width, max_lines=6)
-            for i, line in enumerate(wrapped):
-                rows.append((platform if i == 0 else "", user if i == 0 else "", line, platform))
+            if has_visual_runs:
+                visual_size = max(22, int(font_size * 1.45))
+                wrapped_runs = self._wrap_inline_runs(inline_runs, text_font, first_line_width, next_line_width, visual_size, max_lines=6)
+                for i, line_runs in enumerate(wrapped_runs):
+                    rows.append((platform if i == 0 else "", user if i == 0 else "", "", platform, line_runs))
+            else:
+                wrapped = self._wrap_text_px(text, text_font, first_line_width, next_line_width, max_lines=6)
+                for i, line in enumerate(wrapped):
+                    rows.append((platform if i == 0 else "", user if i == 0 else "", line, platform, None))
         max_rows = max(1, int((h - 24) / line_h))
         rows = rows[-max_rows:]
         cy = y + h - 12 - len(rows) * line_h
-        for platform, user, line, color_platform in rows:
+        for platform, user, line, color_platform, inline_runs in rows:
             px = x + left_pad
             if platform:
                 badge_y = cy + int((line_h - 24) / 2)
                 bw = self._draw_platform_badge(px, badge_y, platform)
                 px += bw + 8
-                self.canvas.create_text(px, cy + line_h / 2, text=user, fill=_user_color(platform, user), font=name_font, anchor="w")
-                px += name_font.measure(user) + 10
+                user_runs = self._inline_runs(None, user)
+                user_size = max(22, int(font_size * 1.35))
+                self._draw_inline_runs(user_runs, px, cy + line_h / 2, name_font, _user_color(platform, user), panel_right, user_size)
+                px += self._inline_runs_width(user_runs, name_font, user_size) + 10
             else:
                 px = continuation_x
             available = max(20, panel_right - px)
-            safe_line = self._wrap_text_px(line, text_font, available, available, max_lines=1)[0]
-            self.canvas.create_text(px, cy + line_h / 2, text=safe_line, fill=text_color, font=text_font, anchor="w")
+            if inline_runs:
+                self._draw_inline_runs(inline_runs, px, cy + line_h / 2, text_font, text_color, panel_right, max(22, int(font_size * 1.45)))
+            else:
+                safe_line = self._wrap_text_px(line, text_font, available, available, max_lines=1)[0]
+                self.canvas.create_text(px, cy + line_h / 2, text=safe_line, fill=text_color, font=text_font, anchor="w")
             cy += line_h
         if self.editing:
             self.canvas.create_rectangle(x, y, x + w, y + h, outline="#936cff", dash=(4, 3))
@@ -970,7 +1245,15 @@ class DesktopTkOverlay:
                 platform = str(item.get("platform") or "")
                 px = x + 12 + self._draw_platform_badge(x + 12, cy + int((line_h - 24) / 2), platform) + 8
                 user = str(item.get("user") or "Unbekannt")
-                line = _strip_html(item.get("html")) or str(item.get("text") or item.get("alert_title") or "Alert")
+                media_source = str(item.get("gift_image_url") or "").strip()
+                media_image = self._chat_media_image(media_source, size=max(22, int(font_size * 1.5))) if media_source else None
+                if media_image:
+                    # The native canvas draws the actual image, so do not retain
+                    # the HTML <img alt> fallback (which previously became "Heart").
+                    html_without_images = re.sub(r"<img\b[^>]*>", "", str(item.get("html") or ""), flags=re.I)
+                    line = _strip_html(html_without_images) or str(item.get("text") or item.get("alert_title") or "Alert")
+                else:
+                    line = _strip_html(item.get("html")) or str(item.get("text") or item.get("alert_title") or "Alert")
                 # Das Event kommt bereits mit einem User-Feld. Einen gleichlautenden
                 # Präfix aus alten Templates entfernen, damit der Name nicht doppelt
                 # erscheint und jede Meldung wirklich nur eine Zeile bleibt.
@@ -979,9 +1262,52 @@ class DesktopTkOverlay:
                 if prefix:
                     self.canvas.create_text(px, cy + line_h / 2, text=prefix, fill="#8f9abe", font=text_font, anchor="w")
                     px += text_font.measure(prefix)
-                self.canvas.create_text(px, cy + line_h / 2, text=user, fill=_user_color(platform, user), font=title_font, anchor="w")
-                px += title_font.measure(user) + 8
+                user_runs = self._inline_runs(None, user)
+                user_size = max(20, int(font_size * 1.25))
+                self._draw_inline_runs(user_runs, px, cy + line_h / 2, title_font, _user_color(platform, user), x + w - 18, user_size)
+                px += self._inline_runs_width(user_runs, title_font, user_size) + 8
                 panel_right = x + w - (36 if self.editing else 18)
+                if media_image:
+                    count = item.get("gift_count") if item.get("gift_count") is not None else item.get("amount")
+                    try:
+                        count_text = str(max(1, int(count or 1)))
+                    except Exception:
+                        count_text = "1"
+                    gift_name = str(item.get("gift_name") or "Gift").strip() or "Gift"
+                    if self.language == "en":
+                        gift_prefix = " sent "
+                        gift_suffix = f" {gift_name} x {count_text}"
+                    else:
+                        gift_prefix = " hat "
+                        gift_suffix = f" {gift_name} x {count_text} gesendet"
+                    self.canvas.create_text(px, cy + line_h / 2, text=gift_prefix, fill=text_color, font=text_font, anchor="w")
+                    px += text_font.measure(gift_prefix)
+                    self.canvas.create_image(px + int(media_image.width() / 2), cy + line_h / 2, image=media_image, anchor="center")
+                    px += media_image.width() + 7
+                    available = max(20, panel_right - px)
+                    safe_suffix = self._wrap_text_px(gift_suffix, text_font, available, available, max_lines=1)[0]
+                    self.canvas.create_text(px, cy + line_h / 2, text=safe_suffix, fill=text_color, font=text_font, anchor="w")
+                    cy += line_h
+                    continue
+                if str(item.get("event_type") or "").lower() == "like":
+                    heart_font = self.tkfont.Font(family="Arial", size=max(12, int(font_size * 1.15)), weight="bold")
+                    like_count = item.get("amount")
+                    try:
+                        like_count_text = str(max(1, int(like_count or 1)))
+                    except Exception:
+                        like_count_text = "1"
+                    like_prefix = " sent " if self.language == "en" else " hat "
+                    self.canvas.create_text(px, cy + line_h / 2, text=like_prefix, fill=text_color, font=text_font, anchor="w")
+                    px += text_font.measure(like_prefix)
+                    self.canvas.create_text(px, cy + line_h / 2, text="♥", fill="#ff2d55", font=heart_font, anchor="w")
+                    px += heart_font.measure("♥") + 6
+                    like_label = "Like" if like_count_text == "1" else "Likes"
+                    like_suffix = f" {like_label} x {like_count_text}" if self.language == "en" else f" {like_label} x {like_count_text} gesendet"
+                    available = max(20, panel_right - px)
+                    safe_like_suffix = self._wrap_text_px(like_suffix, text_font, available, available, max_lines=1)[0]
+                    self.canvas.create_text(px, cy + line_h / 2, text=safe_like_suffix, fill=text_color, font=text_font, anchor="w")
+                    cy += line_h
+                    continue
                 available = max(20, panel_right - px)
                 safe_line = self._wrap_text_px(line, text_font, available, available, max_lines=1)[0]
                 self.canvas.create_text(px, cy + line_h / 2, text=safe_line, fill=text_color, font=text_font, anchor="w")
