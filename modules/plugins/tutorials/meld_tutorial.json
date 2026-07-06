@@ -1,0 +1,11 @@
+{
+  "version": "0.07",
+  "platform": "meld",
+  "title_de": "MELD-Remoteverbindung aktivieren",
+  "title_en": "Enable MELD remote connection",
+  "image_requirements": [
+    {"file": "assets/meld/01_meld_einstellungen_oeffnen_markieren.png", "mark": "In MELD Studio die Einstellungen bzw. Settings markieren."},
+    {"file": "assets/meld/02_meld_erweitert_remote_verbindungen_aktivieren_markieren.png", "mark": "Unter Advanced die Option Allow remote connections markieren."},
+    {"file": "assets/meld/03_meld_speichern_und_verbindung_testen_markieren.png", "mark": "In godisalotachat die vorausgefüllten Werte 127.0.0.1 und 13376 sowie Speichern und Verbindung testen markieren."}
+  ]
+}

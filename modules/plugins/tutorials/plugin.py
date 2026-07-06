@@ -8,7 +8,7 @@ from shared.models import PluginStatus
 from shared.plugin_base import PluginHost, ProviderPlugin
 
 PLUGIN_ID = "tutorials"
-PLUGIN_VERSION = "0.05"
+PLUGIN_VERSION = "0.07"
 PLUGIN_NAME = f"tutorials ver. {PLUGIN_VERSION}"
 SPOTIFY_DEV_URL = "https://developer.spotify.com/dashboard"
 
@@ -36,7 +36,7 @@ class TutorialsPlugin(ProviderPlugin):
             {"key": "spotify_client_id_note", "label": "Client ID Check", "readonly": True, "placeholder": "Im Plattformen-Reiter eintragen oder später über den Tutorial-Reiter verbinden."},
             {"key": "spotify_client_secret_note", "label": "Client Secret Check", "readonly": True, "placeholder": "Im Plattformen-Reiter eintragen oder später über den Tutorial-Reiter verbinden."},
             {"key": "step_5", "label": "5. Connect", "readonly": True, "placeholder": "Save the credentials and connect Spotify."},
-            {"key": "next_platforms", "label": "Tutorial status", "readonly": True, "placeholder": "Spotify, Twitch, KICK, TikTok, and GPT are available. YouTube, OBS, and MELD are planned."},
+            {"key": "next_platforms", "label": "Tutorial status", "readonly": True, "placeholder": "Spotify, Twitch, KICK, TikTok, GPT, OBS, and MELD are available. YouTube is planned separately."},
         ]
 
     def default_settings(self) -> dict[str, Any]:

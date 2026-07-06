@@ -4306,7 +4306,7 @@ class Handler(BaseHTTPRequestHandler):
         if path.startswith("/tutorial-asset/"):
             rel = urllib.parse.unquote(path[len("/tutorial-asset/"):]).replace("\\", "/").strip("/")
             parts = [part for part in rel.split("/") if part]
-            if len(parts) == 2 and parts[0] in {"spotify", "twitch", "kick", "gpt", "tiktok"}:
+            if len(parts) == 2 and parts[0] in {"spotify", "twitch", "kick", "gpt", "tiktok", "obs", "meld"}:
                 name = Path(parts[1]).name
                 asset = st.modules / "plugins" / "tutorials" / "assets" / parts[0] / name
                 if asset.is_file() and asset.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}:

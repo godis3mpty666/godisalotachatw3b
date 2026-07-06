@@ -1,0 +1,13 @@
+{
+  "version": "0.07",
+  "platform": "obs",
+  "title_de": "OBS WebSocket verbinden",
+  "title_en": "Connect OBS WebSocket",
+  "image_requirements": [
+    {"file": "assets/obs/01_obs_werkzeuge_menue_markieren.png", "mark": "In OBS oben das Menü Werkzeuge bzw. Tools markieren."},
+    {"file": "assets/obs/02_obs_websocket_servereinstellungen_markieren.png", "mark": "Im Werkzeuge-Menü den Eintrag WebSocket-Servereinstellungen bzw. WebSocket Server Settings markieren."},
+    {"file": "assets/obs/03_obs_websocket_server_und_authentifizierung_aktivieren_markieren.png", "mark": "WebSocket-Server aktivieren und Authentifizierung aktivieren im OBS-Dialog markieren."},
+    {"file": "assets/obs/04_obs_port_passwort_und_verbindungsinfo_markieren.png", "mark": "Server-Port 4455, Passwort und die Schaltfläche Show Connect Info markieren."},
+    {"file": "assets/obs/05_obs_daten_eintragen_speichern_und_testen_markieren.png", "mark": "In godisalotachat Host, Port, Passwort, Speichern und Verbindung testen markieren."}
+  ]
+}

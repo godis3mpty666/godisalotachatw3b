@@ -1,12 +1,12 @@
 # tutorials
 
-Version: 0.05
+Version: 0.07
 Datum: 2026-07-06
 
 ## Zweck
 Geführter Tutorialbereich für godisalotachat. Start mit Spotify.
 
-## Stand 0.05
+## Stand 0.07
 - Tutorial-Reiter, Route und Wizard in die Hauptoberfläche integriert.
 - Englische Spotify-Anleitung mit sechs einzelnen Schritten umgesetzt.
 - Deutsche Bilddateinamen beschreiben exakt, was im jeweiligen Austauschbild markiert wird.
@@ -16,6 +16,9 @@ Geführter Tutorialbereich für godisalotachat. Start mit Spotify.
 - KICK-Tutorial mit einer App sowie getrenntem Main- und Bot-OAuth ergänzt.
 - GPT/OpenAI-API-Tutorial mit Billing-Hinweis, Projekt-Key und Verbindungstest ergänzt.
 - TikTok-Tutorial mit getrennten Browserprofilen für Main und Bot, optionalem Testkanal und präzisen Bildanforderungen ergänzt.
+- OBS-WebSocket-Tutorial mit Port, Passwort, Speichern und echtem Verbindungstest ergänzt.
+- Gemeinsame Tutorialtexte und Bedienelemente auf Deutsch und Englisch umgestellt.
+- MELD-Kurztutorial für Settings → Advanced → Allow remote connections mit festem lokalen Host/Port ergänzt.
 
 ## Testergebnis
 Python- und JSON-Syntax geprüft. Der vollständige EXE-Build ist der nächste manuelle Test.
