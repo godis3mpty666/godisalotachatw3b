@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>tutorials - Spotify</title>
+  <link rel="stylesheet" href="tutorials.css">
+</head>
+<body>
+  <main class="tutorial-shell">
+    <header class="hero">
+      <div>
+        <p class="eyebrow">godisalotachat tutorials</p>
+        <h1>Connect Spotify</h1>
+        <p>A guided setup with instructions, screenshots, credentials, and sign-in.</p>
+      </div>
+      <div class="platform-tabs">
+        <button class="active">Spotify</button><button disabled>Twitch</button><button disabled>Kick</button><button disabled>YouTube</button><button disabled>TikTok</button><button disabled>OBS</button><button disabled>MELD</button><button disabled>GPT</button>
+      </div>
+    </header>
+
+    <section class="wizard">
+      <aside class="steps" id="steps"></aside>
+      <article class="card">
+        <div class="progress"><span id="progressBar"></span></div>
+        <h2 id="title"></h2>
+        <p id="text"></p>
+        <img id="shot" alt="Spotify Tutorial Screenshot">
+        <div id="formBlock" class="form-block hidden">
+          <label>Client ID <input id="clientId" placeholder="Copy from Spotify"></label>
+          <label>Client Secret <input id="clientSecret" placeholder="Copy from Spotify" type="password"></label>
+          <div class="checks"><span id="idCheck">Client ID is missing</span><span id="secretCheck">Client Secret is missing</span></div>
+          <button class="primary">Save & connect Spotify</button>
+        </div>
+        <footer><button id="prev">Back</button><button id="next" class="primary">Next</button></footer>
+      </article>
+    </section>
+  </main>
+<script src="tutorials.js"></script>
+</body>
+</html>

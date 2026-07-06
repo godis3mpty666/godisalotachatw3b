@@ -2036,8 +2036,39 @@ class AppState:
         url = str(url or "").strip()
         if not (url.startswith("http://") or url.startswith("https://")):
             return False
+        title_hint = ""
         try:
+            host = (urllib.parse.urlparse(url).hostname or "").lower()
+            if "spotify" in host:
+                title_hint = "Spotify"
+            elif host:
+                title_hint = host.removeprefix("www.").split(".", 1)[0]
+        except Exception:
+            pass
+        try:
+            browser = self._find_browser_exe({})
+            if browser:
+                proc = subprocess.Popen(
+                    [browser, "--new-window", url],
+                    cwd=str(Path(tempfile.gettempdir())),
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    creationflags=_win_hidden_flags(),
+                )
+                threading.Thread(
+                    target=self._bring_windows_to_front,
+                    kwargs={"pid": int(getattr(proc, "pid", 0) or 0), "title_hint": title_hint},
+                    daemon=True,
+                    name="external-browser-focus",
+                ).start()
+                return True
             webbrowser.open(url, new=2, autoraise=True)
+            threading.Thread(
+                target=self._bring_windows_to_front,
+                kwargs={"title_hint": title_hint},
+                daemon=True,
+                name="external-browser-focus",
+            ).start()
             return True
         except Exception as exc:
             try: self.log("ui", "external browser open failed", exc)
@@ -4136,6 +4167,11 @@ CHAT_PLATFORM_ICON_PATHS = {
     "tiktok": "tiktok.png",
     "youtube": "youtube.png",
     "kick": "kick.png",
+    "spotify": "spotify.png",
+    "obs": "obs.png",
+    "meld": "meld.png",
+    "openai": "gpt.png",
+    "gpt": "gpt.png",
     "no_entry": "no_entry.png",
     "banhammer": "banhammer.png",
     "unban": "unban.png",
@@ -4267,6 +4303,15 @@ class Handler(BaseHTTPRequestHandler):
                 if icon.is_file():
                     return self._send(200, icon.read_bytes(), _content_type(icon))
             return self._send(404, "Icon missing", "text/plain")
+        if path.startswith("/tutorial-asset/"):
+            rel = urllib.parse.unquote(path[len("/tutorial-asset/"):]).replace("\\", "/").strip("/")
+            parts = [part for part in rel.split("/") if part]
+            if len(parts) == 2 and parts[0] in {"spotify", "twitch", "kick", "gpt", "tiktok"}:
+                name = Path(parts[1]).name
+                asset = st.modules / "plugins" / "tutorials" / "assets" / parts[0] / name
+                if asset.is_file() and asset.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}:
+                    return self._send(200, asset.read_bytes(), _content_type(asset))
+            return self._send(404, "Tutorial asset missing", "text/plain")
         if path.startswith("/sound-asset/"):
             name = Path(urllib.parse.unquote(path[len("/sound-asset/"):])).name
             sound = st.asset_sounds / name
@@ -4322,6 +4367,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._page("overlays.html")
         if path == "/plugins":
             return self._page("plugins.html")
+        if path in ("/tutorials", "/tutorial"):
+            return self._page("tutorials.html")
         if path in ("/einstellungen", "/settings"):
             return self._page("settings.html")
         if path == "/dev":

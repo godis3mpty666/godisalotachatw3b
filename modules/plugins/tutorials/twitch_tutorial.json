@@ -1,0 +1,31 @@
+{
+  "version": "0.05",
+  "platform": "twitch",
+  "title": "Connect Twitch Main and Bot",
+  "steps": [
+    {
+      "title": "Open the Twitch Developer Console",
+      "image": "assets/twitch/01_twitch_entwicklerkonsole_oeffnen_markieren.png"
+    },
+    {
+      "title": "Register one application",
+      "image": "assets/twitch/02_twitch_anwendung_registrieren_markieren.png"
+    },
+    {
+      "title": "Add the OAuth Redirect URL",
+      "image": "assets/twitch/03_twitch_redirect_url_eintragen_markieren.png"
+    },
+    {
+      "title": "Copy Client ID and create a Secret",
+      "image": "assets/twitch/04_twitch_client_id_und_secret_markieren.png"
+    },
+    {
+      "title": "Enter Main and Bot accounts",
+      "image": "assets/twitch/05_twitch_main_und_botnamen_eintragen_markieren.png"
+    },
+    {
+      "title": "Save and connect both accounts",
+      "image": "assets/twitch/06_twitch_main_und_bot_anmelden_markieren.png"
+    }
+  ]
+}

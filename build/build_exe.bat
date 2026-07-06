@@ -98,6 +98,12 @@ if exist "dist\webbased\modules" rmdir /s /q "dist\webbased\modules"
 robocopy "modules" "dist\webbased\modules" /E /XD __pycache__ /NFL /NDL /NJH /NJS /NP >nul
 if errorlevel 8 goto :fail
 
+rem Diagnosehilfe fuer Rechner, auf denen der PyInstaller-Bootloader Python nicht laden kann.
+copy /Y "build\diagnose_embedded_python.ps1" "dist\webbased\diagnose_embedded_python.ps1" >nul
+if errorlevel 1 goto :fail
+copy /Y "build\diagnose_embedded_python.bat" "dist\webbased\diagnose_embedded_python.bat" >nul
+if errorlevel 1 goto :fail
+
 rem Gemeinsame UI-Bilder neben die EXE legen, damit Desktopfenster und WebUI dieselben Symbole nutzen.
 robocopy "assets" "dist\webbased\assets" /E /R:2 /W:1 /NFL /NDL /NJH /NJS /NP >nul
 if errorlevel 8 goto :fail

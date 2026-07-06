@@ -1,0 +1,12 @@
+{
+  "version": "0.05",
+  "platform": "openai",
+  "title": "Connect the OpenAI API",
+  "images": [
+    "assets/gpt/01_gpt_api_plattform_oeffnen_markieren.png",
+    "assets/gpt/02_gpt_api_abrechnung_einrichten_markieren.png",
+    "assets/gpt/03_gpt_projekt_und_api_key_erstellen_markieren.png",
+    "assets/gpt/04_gpt_api_key_kopieren_markieren.png",
+    "assets/gpt/05_gpt_speichern_und_verbinden_markieren.png"
+  ]
+}

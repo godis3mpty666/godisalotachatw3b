@@ -1,0 +1,27 @@
+{
+  "version": "0.05",
+  "platform": "tiktok",
+  "title": "Connect TikTok Main and Bot",
+  "image_requirements": [
+    {
+      "file": "assets/tiktok/01_tiktok_haupt_und_botnamen_eintragen_markieren.png",
+      "mark": "In godisalotachat die Eingabefelder für Hauptkonto und Botkonto markieren."
+    },
+    {
+      "file": "assets/tiktok/02_tiktok_hauptkonto_anmelden_und_qr_code_markieren.png",
+      "mark": "Das TikTok-Anmeldefenster des Hauptkontos samt QR-Code oder Anmeldebereich markieren."
+    },
+    {
+      "file": "assets/tiktok/03_tiktok_botkonto_anmelden_und_qr_code_markieren.png",
+      "mark": "Das getrennte TikTok-Anmeldefenster des Botkontos samt QR-Code oder Anmeldebereich markieren."
+    },
+    {
+      "file": "assets/tiktok/04_tiktok_testkanal_aktivieren_und_namen_markieren.png",
+      "mark": "In godisalotachat den Schalter Testkanal aktiv und das Namensfeld ohne @ markieren."
+    },
+    {
+      "file": "assets/tiktok/05_tiktok_speichern_und_status_pruefen_markieren.png",
+      "mark": "Speichern sowie den TikTok-Verbindungsstatus im Plattformbereich markieren."
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "version": "0.05",
+  "platform": "kick",
+  "title": "Connect KICK Main and Bot",
+  "images": [
+    "assets/kick/01_kick_entwicklerbereich_oeffnen_markieren.png",
+    "assets/kick/02_kick_anwendung_erstellen_markieren.png",
+    "assets/kick/03_kick_redirect_uri_eintragen_markieren.png",
+    "assets/kick/04_kick_client_id_und_secret_markieren.png",
+    "assets/kick/05_kick_main_und_botnamen_eintragen_markieren.png",
+    "assets/kick/06_kick_main_und_bot_anmelden_markieren.png"
+  ]
+}

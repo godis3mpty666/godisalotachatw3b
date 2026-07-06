@@ -54,7 +54,7 @@ const TESTER_CREDITS = [
 function nav(active){
   const items = [
     ["dashboard","Dashboard","/"],["platforms","Plattformen","/plattformen"],["chat","Chat","/chat"],["obs_meld","OBS/Meld Integration","/obs-meld-integration"],
-    ["info3ditor","Info3ditor","/info3ditor"],["chattim3r","Chattim3r","/chattim3r"],["plugins","Plugins","/plugins"],["modalot","Modalot","/modalot"],["spotify","Spotis3mptify","/spotis3mptify"],["easyslider","3asyslid3r","/3asyslid3r"],["settings",L("Einstellungen","Settings"),"/einstellungen"],["dev","DEV","/dev"]
+    ["info3ditor","Info3ditor","/info3ditor"],["chattim3r","Chattim3r","/chattim3r"],["plugins","Plugins","/plugins"],["modalot","Modalot","/modalot"],["spotify","Spotis3mptify","/spotis3mptify"],["easyslider","3asyslid3r","/3asyslid3r"],["settings",L("Einstellungen","Settings"),"/einstellungen"],["tutorials","Tutorials","/tutorials"],["dev","DEV","/dev"]
   ];
   const issueUrl = "https://github.com/godis3mpty666/godisalotachatw3b/issues/new?title=" + encodeURIComponent("[Feedback] ") + "&body=" + encodeURIComponent("**Was ist passiert oder was soll verbessert werden?**\n\n\n**So kann man es nachstellen (bei einem Bug):**\n1. \n2. \n\n**Version:** " + (window.WEB_VERSION || "unbekannt") + "\n\n**Zusätzliche Infos / Screenshots:**\n");
   const credits = [
@@ -616,6 +616,264 @@ async function renderPlatforms(){
     if(!res.ok) alert(res.error || L("OAuth-Anmeldung konnte nicht geöffnet werden","Could not open OAuth login"));
   });
   $$(".disconnect").forEach(b=>b.onclick=async()=>{await api(`/api/disconnect/${b.dataset.platform}/${b.dataset.account}`,{method:"POST"}); location.reload();});
+}
+async function renderTutorials(){
+  const all=await api("/api/settings");
+  const spotify=(all.platforms=all.platforms||{},all.platforms.spotify=all.platforms.spotify||{});
+  const twitch=(all.platforms.twitch=all.platforms.twitch||{});
+  const kick=(all.platforms.kick=all.platforms.kick||{});
+  const openai=(all.platforms.openai=all.platforms.openai||{});
+  const tiktok=(all.platforms.tiktok=all.platforms.tiktok||{});
+  const platforms=[
+    {id:"spotify",name:"Spotify",icon:"spotify",description:"Create an app, enter credentials, and connect Spotify.",ready:true},
+    {id:"twitch",name:"Twitch",icon:"twitch",description:"Developer app, OAuth accounts, and chat connection.",ready:true},
+    {id:"kick",name:"Kick",icon:"kick",description:"Developer app, OAuth, and channel connection.",ready:true},
+    {id:"youtube",name:"YouTube",icon:"youtube",description:"Google Cloud project, OAuth, and live chat."},
+    {id:"tiktok",name:"TikTok",icon:"tiktok",description:"Browser login, channel selection, and chat access.",ready:true},
+    {id:"obs",name:"OBS",icon:"obs",description:"Enable WebSocket and connect your local OBS instance."},
+    {id:"meld",name:"MELD",icon:"meld",description:"Connect MELD Studio through its local WebSocket."},
+    {id:"gpt",name:"GPT",icon:"openai",description:"Create an API key and connect the OpenAI API.",ready:true}
+  ];
+  const steps=[
+    {title:"Open the Spotify Developer Dashboard",text:"Open the Spotify Developer Dashboard and click Create app.",image:"01_spotify_dashboard_app_erstellen_markieren.png"},
+    {title:"Create your app",text:"Enter an app name and a short app description. Then create the app.",image:"02_app_name_und_beschreibung_markieren.png"},
+    {title:"Add the Redirect URI",text:"Open the app settings, add the Redirect URI shown below under Redirect URIs, and save it.",image:"03_redirect_uri_hinzufuegen_markieren.png",redirect:true},
+    {title:"Copy the Client ID",text:"Copy the Client ID from your Spotify app and paste it below.",image:"04_client_id_kopieren_markieren.png",credentials:true},
+    {title:"Copy the Client Secret",text:"Click View client secret, copy the Client Secret, and paste it below.",image:"05_client_secret_anzeigen_und_kopieren_markieren.png",credentials:true},
+    {title:"Save and connect Spotify",text:"Save the app settings, then save your credentials and start the Spotify sign-in.",image:"06_app_einstellungen_speichern_markieren.png",credentials:true,connect:true}
+  ];
+  const twitchSteps=[
+    {title:"Open the Twitch Developer Console",text:"Sign in to the Twitch Developer Console. The account must have a verified email address and two-factor authentication enabled.",image:"01_twitch_entwicklerkonsole_oeffnen_markieren.png"},
+    {title:"Register one application",text:"Open Applications, choose Register Your Application, enter a unique name, and select a suitable category. This application is used for both Main and Bot.",image:"02_twitch_anwendung_registrieren_markieren.png"},
+    {title:"Add the OAuth Redirect URL",text:"Add the Redirect URL shown below under OAuth Redirect URLs and click Add before creating or saving the application.",image:"03_twitch_redirect_url_eintragen_markieren.png",redirect:true},
+    {title:"Copy Client ID and create a Secret",text:"Open Manage for the application, copy the Client ID, click New Secret once, and copy the generated Client Secret.",image:"04_twitch_client_id_und_secret_markieren.png",credentials:true},
+    {title:"Enter Main and Bot accounts",text:"Enter the Twitch login name of your broadcaster account and the separate Twitch login name used by your bot.",image:"05_twitch_main_und_botnamen_eintragen_markieren.png",accounts:true},
+    {title:"Save and connect both accounts",text:"Save the shared application details, then sign in once with Main and once with Bot. Twitch will ask which account should authorize the application.",image:"06_twitch_main_und_bot_anmelden_markieren.png",connect:true}
+  ];
+  const kickSteps=[
+    {title:"Open KICK Dev",text:"Sign in to KICK and open the developer area from your account settings.",image:"01_kick_entwicklerbereich_oeffnen_markieren.png"},
+    {title:"Create one KICK application",text:"Create one application for godisalotachat. The same application is used for both Main and Bot.",image:"02_kick_anwendung_erstellen_markieren.png"},
+    {title:"Add the Redirect URI",text:"Add the Redirect URI shown below to the application. It must match exactly for the OAuth flow.",image:"03_kick_redirect_uri_eintragen_markieren.png",redirect:true},
+    {title:"Copy Client ID and Client Secret",text:"Copy the Client ID and Client Secret generated for your KICK application.",image:"04_kick_client_id_und_secret_markieren.png",credentials:true},
+    {title:"Enter Main and Bot accounts",text:"Enter the KICK channel name used by the broadcaster and the separate account name used by the bot.",image:"05_kick_main_und_botnamen_eintragen_markieren.png",accounts:true},
+    {title:"Save and connect both accounts",text:"Save the shared application details, then authorize Main and Bot separately.",image:"06_kick_main_und_bot_anmelden_markieren.png",connect:true}
+  ];
+  const gptSteps=[
+    {title:"Open the OpenAI API Platform",text:"Sign in to the OpenAI API Platform. ChatGPT subscriptions and API billing are separate products.",image:"01_gpt_api_plattform_oeffnen_markieren.png"},
+    {title:"Check API billing",text:"Open the API billing settings and add billing or prepaid credit if the API account has no available credit.",image:"02_gpt_api_abrechnung_einrichten_markieren.png"},
+    {title:"Select a project and create a key",text:"Select the project that should own the key, open API Keys, and choose Create new secret key.",image:"03_gpt_projekt_und_api_key_erstellen_markieren.png"},
+    {title:"Copy the API key",text:"Copy the secret key immediately. OpenAI shows the full secret only once. Organization and Project IDs are optional here.",image:"04_gpt_api_key_kopieren_markieren.png",credentials:true},
+    {title:"Save and connect the OpenAI API",text:"Save the key locally and test it by loading the available model list. This test does not generate a paid model response.",image:"05_gpt_speichern_und_verbinden_markieren.png",credentials:true,connect:true}
+  ];
+  const tiktokSteps=[
+    {title:"Enter Main and Bot account names",text:"Enter both TikTok usernames without the @ sign. Main is your broadcaster account; Bot is the separate account used for bot actions.",image:"01_tiktok_haupt_und_botnamen_eintragen_markieren.png",accounts:true},
+    {title:"Sign in the Main account",text:"Save the account names, open the Main login window, and sign in with the broadcaster account. If TikTok shows a QR code, scan it with the matching account.",image:"02_tiktok_hauptkonto_anmelden_und_qr_code_markieren.png",mainLogin:true},
+    {title:"Sign in the Bot account",text:"Open the separate Bot login window and sign in with the bot account. Check carefully that the browser is not still using the Main account.",image:"03_tiktok_botkonto_anmelden_und_qr_code_markieren.png",botLogin:true},
+    {title:"Configure an optional test channel",text:"Enable Test channel only when you want to read another live channel for testing. Enter its username without @. The selected channel must currently be live.",image:"04_tiktok_testkanal_aktivieren_und_namen_markieren.png",testChannel:true},
+    {title:"Save and check the connection",text:"Save the settings. The active read channel is the test channel when enabled; otherwise it is your Main account. Check the platform status after the selected channel goes live.",image:"05_tiktok_speichern_und_status_pruefen_markieren.png",accounts:true,testChannel:true,connect:true}
+  ];
+  const showOverview=()=>{
+    shell("tutorials","Tutorials","Choose a platform to start its guided setup.",`<section class="card tutorialOverview"><div class="tutorialOverviewHead"><h3>Choose a platform</h3><p>Each platform has its own step-by-step setup.</p></div><div class="tutorialPlatformGrid">${platforms.map(item=>`<button type="button" class="tutorialPlatformCard ${item.ready?"ready":"coming"}" data-tutorial-platform="${item.id}" ${item.ready?"":"disabled"}><img src="/platform-icon/${encodeURIComponent(item.icon)}" alt="${esc(item.name)}" onerror="this.onerror=null;this.src='/static/img/app.png'"><span><b>${esc(item.name)}</b><small>${esc(item.description)}</small></span><em>${item.ready?"Start tutorial":"Coming soon"}</em></button>`).join("")}</div></section>`);
+    const spotifyButton=$('[data-tutorial-platform="spotify"]');
+    if(spotifyButton)spotifyButton.onclick=showSpotify;
+    const twitchButton=$('[data-tutorial-platform="twitch"]');
+    if(twitchButton)twitchButton.onclick=showTwitch;
+    const kickButton=$('[data-tutorial-platform="kick"]');
+    if(kickButton)kickButton.onclick=showKick;
+    const gptButton=$('[data-tutorial-platform="gpt"]');
+    if(gptButton)gptButton.onclick=showGpt;
+    const tiktokButton=$('[data-tutorial-platform="tiktok"]');
+    if(tiktokButton)tiktokButton.onclick=showTiktok;
+  };
+  const showSpotify=()=>{
+  let index=0;
+  shell("tutorials","Tutorials","Spotify setup — guided step by step.",`<section class="card tutorialWizard"><button type="button" class="secondary tutorialOverviewBack" id="tutorialOverviewBack">← All platforms</button><div class="tutorialLayout"><aside class="tutorialSteps" id="tutorialSteps"></aside><div class="tutorialMain"><div class="tutorialProgress"><span id="tutorialProgressBar"></span></div><div class="tutorialCounter" id="tutorialCounter"></div><h3 id="tutorialTitle"></h3><p id="tutorialText"></p><div class="tutorialImageFrame"><img id="tutorialImage" alt="Spotify setup step"></div><div id="tutorialFields" class="tutorialFields"></div><div class="btnLine tutorialActions"><button type="button" class="secondary" id="tutorialPrev">Back</button><button type="button" class="secondary" id="tutorialDashboard">Open Spotify Dashboard</button><button type="button" id="tutorialNext">Next</button></div><div class="small" id="tutorialResult"></div></div></div></section>`);
+  const render=()=>{
+    const step=steps[index];
+    $("#tutorialSteps").innerHTML=steps.map((item,i)=>`<button type="button" class="tutorialStep ${i===index?"active":""} ${i<index?"done":""}" data-step="${i}"><span>${i+1}</span><b>${esc(item.title)}</b></button>`).join("");
+    $("#tutorialCounter").textContent=`Step ${index+1} of ${steps.length}`;
+    $("#tutorialTitle").textContent=step.title;
+    $("#tutorialText").textContent=step.text;
+    $("#tutorialImage").src=`/tutorial-asset/spotify/${encodeURIComponent(step.image)}`;
+    $("#tutorialImage").alt=step.title;
+    $("#tutorialProgressBar").style.width=`${(index+1)/steps.length*100}%`;
+    const redirect=esc(spotify.redirect_uri||"http://127.0.0.1:5173/callback");
+    $("#tutorialFields").innerHTML=`${step.redirect?`<label><div>Redirect URI</div><input id="tutorialRedirect" value="${redirect}" autocomplete="off"></label>`:""}${step.credentials?`<label><div>Client ID</div><input id="tutorialClientId" value="${esc(spotify.client_id||"")}" autocomplete="off"></label><label><div>Client Secret</div><input id="tutorialClientSecret" type="password" value="${esc(spotify.client_secret||"")}" autocomplete="off"></label>`:""}`;
+    $("#tutorialPrev").disabled=index===0;
+    $("#tutorialNext").textContent=step.connect?"Save & connect Spotify":"Next";
+    $$(".tutorialStep").forEach(button=>button.onclick=()=>{capture();index=Number(button.dataset.step);render();});
+  };
+  const capture=()=>{
+    const redirect=$("#tutorialRedirect"),clientId=$("#tutorialClientId"),clientSecret=$("#tutorialClientSecret");
+    if(redirect)spotify.redirect_uri=redirect.value.trim();
+    if(clientId)spotify.client_id=clientId.value.trim();
+    if(clientSecret)spotify.client_secret=clientSecret.value.trim();
+  };
+  const save=async()=>{
+    capture();spotify.enabled=true;spotify.autoconnect=true;
+    return api("/api/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(all)});
+  };
+  $("#tutorialPrev").onclick=()=>{capture();if(index>0){index--;render();}};
+  $("#tutorialOverviewBack").onclick=showOverview;
+  $("#tutorialDashboard").onclick=()=>openExternal("https://developer.spotify.com/dashboard");
+  $("#tutorialNext").onclick=async()=>{
+    capture();
+    if(index<steps.length-1){index++;render();return;}
+    const result=$("#tutorialResult");result.textContent="Saving Spotify settings...";
+    if(!spotify.client_id||!spotify.client_secret){result.textContent="Client ID and Client Secret are required.";return;}
+    const saved=await save();
+    if(!saved.ok){result.textContent=`Could not save: ${saved.error||"Unknown error"}`;return;}
+    result.textContent="Saved. Opening Spotify sign-in...";
+    const opened=await api("/api/oauth/open/spotify/main",{timeoutMs:2500});
+    if(!opened.ok)result.textContent=`Saved, but Spotify sign-in could not be opened: ${opened.error||"Unknown error"}`;
+  };
+  render();
+  };
+  const showTwitch=()=>{
+    let index=0;
+    shell("tutorials","Tutorials","Twitch setup — one application, two account authorizations.",`<section class="card tutorialWizard"><button type="button" class="secondary tutorialOverviewBack" id="tutorialOverviewBack">← All platforms</button><div class="tutorialLayout"><aside class="tutorialSteps" id="tutorialSteps"></aside><div class="tutorialMain"><div class="tutorialProgress"><span id="tutorialProgressBar"></span></div><div class="tutorialCounter" id="tutorialCounter"></div><h3 id="tutorialTitle"></h3><p id="tutorialText"></p><div class="tutorialImageFrame"><img id="tutorialImage" alt="Twitch setup step"></div><div id="tutorialFields" class="tutorialFields"></div><div class="btnLine tutorialActions"><button type="button" class="secondary" id="tutorialPrev">Back</button><button type="button" class="secondary" id="tutorialDashboard">Open Twitch Developer Console</button><button type="button" id="tutorialNext">Next</button></div><div class="small" id="tutorialResult"></div></div></div></section>`);
+    const capture=()=>{
+      const redirect=$("#tutorialRedirect"),clientId=$("#tutorialClientId"),clientSecret=$("#tutorialClientSecret"),main=$("#tutorialMainAccount"),bot=$("#tutorialBotAccount");
+      if(redirect){twitch.redirect_uri=redirect.value.trim();twitch.redirect_url=twitch.redirect_uri;}
+      if(clientId)twitch.client_id=clientId.value.trim();
+      if(clientSecret)twitch.client_secret=clientSecret.value.trim();
+      if(main){twitch.main=main.value.trim().replace(/^@/,"");twitch.main_account=twitch.main;twitch.channel=twitch.main;}
+      if(bot){twitch.bot=bot.value.trim().replace(/^@/,"");twitch.bot_account=twitch.bot;twitch.bot_username=twitch.bot;}
+    };
+    const save=async()=>{
+      capture();twitch.enabled=true;twitch.autoconnect=true;
+      return api("/api/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(all)});
+    };
+    const saveAndLogin=async account=>{
+      const result=$("#tutorialResult");
+      capture();
+      if(!twitch.client_id||!twitch.client_secret||!twitch.main||!twitch.bot){result.textContent="Client ID, Client Secret, Main account, and Bot account are required.";return;}
+      result.textContent="Saving Twitch settings...";
+      const saved=await save();
+      if(!saved.ok){result.textContent=`Could not save: ${saved.error||"Unknown error"}`;return;}
+      result.textContent=`Saved. Opening Twitch ${account==='main'?"Main":"Bot"} sign-in...`;
+      const opened=await api(`/api/oauth/open/twitch/${account}`,{timeoutMs:2500});
+      if(!opened.ok)result.textContent=`Saved, but Twitch sign-in could not be opened: ${opened.error||"Unknown error"}`;
+    };
+    const render=()=>{
+      const step=twitchSteps[index],redirect=esc(twitch.redirect_uri||twitch.redirect_url||"http://localhost:17564/callback/");
+      $("#tutorialSteps").innerHTML=twitchSteps.map((item,i)=>`<button type="button" class="tutorialStep ${i===index?"active":""} ${i<index?"done":""}" data-step="${i}"><span>${i+1}</span><b>${esc(item.title)}</b></button>`).join("");
+      $("#tutorialCounter").textContent=`Step ${index+1} of ${twitchSteps.length}`;
+      $("#tutorialTitle").textContent=step.title;$("#tutorialText").textContent=step.text;
+      $("#tutorialImage").src=`/tutorial-asset/twitch/${encodeURIComponent(step.image)}`;$("#tutorialImage").alt=step.title;
+      $("#tutorialProgressBar").style.width=`${(index+1)/twitchSteps.length*100}%`;
+      const credentials=step.credentials||step.connect,accounts=step.accounts||step.connect;
+      $("#tutorialFields").innerHTML=`${step.redirect||step.connect?`<label><div>OAuth Redirect URL</div><input id="tutorialRedirect" value="${redirect}" autocomplete="off"></label>`:""}${credentials?`<label><div>Client ID</div><input id="tutorialClientId" value="${esc(twitch.client_id||"")}" autocomplete="off"></label><label><div>Client Secret</div><input id="tutorialClientSecret" type="password" value="${esc(twitch.client_secret||"")}" autocomplete="off"></label>`:""}${accounts?`<label><div>Main account name</div><input id="tutorialMainAccount" value="${esc(twitch.main_account||twitch.main||"")}" autocomplete="off"></label><label><div>Bot account name</div><input id="tutorialBotAccount" value="${esc(twitch.bot_account||twitch.bot||"")}" autocomplete="off"></label>`:""}${step.connect?`<div class="tutorialConnectChoices"><button type="button" id="tutorialConnectMain">Save & sign in Main</button><button type="button" id="tutorialConnectBot">Save & sign in Bot</button></div>`:""}`;
+      $("#tutorialPrev").disabled=index===0;$("#tutorialNext").hidden=!!step.connect;
+      $$(".tutorialStep").forEach(button=>button.onclick=()=>{capture();index=Number(button.dataset.step);render();});
+      if(step.connect){$("#tutorialConnectMain").onclick=()=>saveAndLogin("main");$("#tutorialConnectBot").onclick=()=>saveAndLogin("bot");}
+    };
+    $("#tutorialOverviewBack").onclick=showOverview;
+    $("#tutorialPrev").onclick=()=>{capture();if(index>0){index--;render();}};
+    $("#tutorialDashboard").onclick=()=>openExternal("https://dev.twitch.tv/console/apps");
+    $("#tutorialNext").onclick=()=>{capture();if(index<twitchSteps.length-1){index++;render();}};
+    render();
+  };
+  const showKick=()=>{
+    let index=0;
+    shell("tutorials","Tutorials","KICK setup — one application, two account authorizations.",`<section class="card tutorialWizard"><button type="button" class="secondary tutorialOverviewBack" id="tutorialOverviewBack">← All platforms</button><div class="tutorialLayout"><aside class="tutorialSteps" id="tutorialSteps"></aside><div class="tutorialMain"><div class="tutorialProgress"><span id="tutorialProgressBar"></span></div><div class="tutorialCounter" id="tutorialCounter"></div><h3 id="tutorialTitle"></h3><p id="tutorialText"></p><div class="tutorialImageFrame"><img id="tutorialImage" alt="KICK setup step"></div><div id="tutorialFields" class="tutorialFields"></div><div class="btnLine tutorialActions"><button type="button" class="secondary" id="tutorialPrev">Back</button><button type="button" class="secondary" id="tutorialDashboard">Open KICK Dev</button><button type="button" id="tutorialNext">Next</button></div><div class="small" id="tutorialResult"></div></div></div></section>`);
+    const capture=()=>{
+      const redirect=$("#tutorialRedirect"),clientId=$("#tutorialClientId"),clientSecret=$("#tutorialClientSecret"),main=$("#tutorialMainAccount"),bot=$("#tutorialBotAccount");
+      if(redirect){kick.redirect_uri=redirect.value.trim();kick.redirect_url=kick.redirect_uri;}
+      if(clientId)kick.client_id=clientId.value.trim();if(clientSecret)kick.client_secret=clientSecret.value.trim();
+      if(main){kick.main=main.value.trim().replace(/^@/,"");kick.main_account=kick.main;kick.channel=kick.main;}
+      if(bot){kick.bot=bot.value.trim().replace(/^@/,"");kick.bot_account=kick.bot;kick.bot_username=kick.bot;}
+    };
+    const save=async()=>{capture();kick.enabled=true;kick.autoconnect=true;return api("/api/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(all)});};
+    const saveAndLogin=async account=>{
+      const result=$("#tutorialResult");capture();
+      if(!kick.client_id||!kick.client_secret||!kick.main||!kick.bot){result.textContent="Client ID, Client Secret, Main account, and Bot account are required.";return;}
+      result.textContent="Saving KICK settings...";const saved=await save();
+      if(!saved.ok){result.textContent=`Could not save: ${saved.error||"Unknown error"}`;return;}
+      result.textContent=`Saved. Opening KICK ${account==='main'?"Main":"Bot"} sign-in...`;
+      const opened=await api(`/api/oauth/open/kick/${account}`,{timeoutMs:2500});
+      if(!opened.ok)result.textContent=`Saved, but KICK sign-in could not be opened: ${opened.error||"Unknown error"}`;
+    };
+    const render=()=>{
+      const step=kickSteps[index],redirect=esc(kick.redirect_uri||kick.redirect_url||"http://localhost:17865/kick/callback");
+      $("#tutorialSteps").innerHTML=kickSteps.map((item,i)=>`<button type="button" class="tutorialStep ${i===index?"active":""} ${i<index?"done":""}" data-step="${i}"><span>${i+1}</span><b>${esc(item.title)}</b></button>`).join("");
+      $("#tutorialCounter").textContent=`Step ${index+1} of ${kickSteps.length}`;$("#tutorialTitle").textContent=step.title;$("#tutorialText").textContent=step.text;
+      $("#tutorialImage").src=`/tutorial-asset/kick/${encodeURIComponent(step.image)}`;$("#tutorialImage").alt=step.title;$("#tutorialProgressBar").style.width=`${(index+1)/kickSteps.length*100}%`;
+      const credentials=step.credentials||step.connect,accounts=step.accounts||step.connect;
+      $("#tutorialFields").innerHTML=`${step.redirect||step.connect?`<label><div>Redirect URI</div><input id="tutorialRedirect" value="${redirect}" autocomplete="off"></label>`:""}${credentials?`<label><div>Client ID</div><input id="tutorialClientId" value="${esc(kick.client_id||"")}" autocomplete="off"></label><label><div>Client Secret</div><input id="tutorialClientSecret" type="password" value="${esc(kick.client_secret||"")}" autocomplete="off"></label>`:""}${accounts?`<label><div>Main account name</div><input id="tutorialMainAccount" value="${esc(kick.main_account||kick.main||"")}" autocomplete="off"></label><label><div>Bot account name</div><input id="tutorialBotAccount" value="${esc(kick.bot_account||kick.bot||"")}" autocomplete="off"></label>`:""}${step.connect?`<div class="tutorialConnectChoices"><button type="button" id="tutorialConnectMain">Save & sign in Main</button><button type="button" id="tutorialConnectBot">Save & sign in Bot</button></div>`:""}`;
+      $("#tutorialPrev").disabled=index===0;$("#tutorialNext").hidden=!!step.connect;
+      $$(".tutorialStep").forEach(button=>button.onclick=()=>{capture();index=Number(button.dataset.step);render();});
+      if(step.connect){$("#tutorialConnectMain").onclick=()=>saveAndLogin("main");$("#tutorialConnectBot").onclick=()=>saveAndLogin("bot");}
+    };
+    $("#tutorialOverviewBack").onclick=showOverview;$("#tutorialPrev").onclick=()=>{capture();if(index>0){index--;render();}};
+    $("#tutorialDashboard").onclick=()=>openExternal("https://dev.kick.com/");$("#tutorialNext").onclick=()=>{capture();if(index<kickSteps.length-1){index++;render();}};render();
+  };
+  const showGpt=()=>{
+    let index=0;
+    shell("tutorials","Tutorials","OpenAI API setup — create a project key and verify the connection.",`<section class="card tutorialWizard"><button type="button" class="secondary tutorialOverviewBack" id="tutorialOverviewBack">← All platforms</button><div class="tutorialLayout"><aside class="tutorialSteps" id="tutorialSteps"></aside><div class="tutorialMain"><div class="tutorialProgress"><span id="tutorialProgressBar"></span></div><div class="tutorialCounter" id="tutorialCounter"></div><h3 id="tutorialTitle"></h3><p id="tutorialText"></p><div class="tutorialImageFrame"><img id="tutorialImage" alt="OpenAI API setup step"></div><div id="tutorialFields" class="tutorialFields"></div><div class="btnLine tutorialActions"><button type="button" class="secondary" id="tutorialPrev">Back</button><button type="button" class="secondary" id="tutorialDashboard">Open OpenAI API Keys</button><button type="button" id="tutorialNext">Next</button></div><div class="small" id="tutorialResult"></div></div></div></section>`);
+    const capture=()=>{const key=$("#tutorialApiKey"),org=$("#tutorialOrganization"),project=$("#tutorialProject");if(key)openai.api_key=key.value.trim();if(org)openai.organization=org.value.trim();if(project)openai.project=project.value.trim();};
+    const saveAndConnect=async()=>{
+      const result=$("#tutorialResult");capture();if(!openai.api_key){result.textContent="An OpenAI API key is required.";return;}
+      openai.enabled=true;openai.autoconnect=true;delete openai.model;result.textContent="Saving the OpenAI API key...";
+      const saved=await api("/api/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(all)});
+      if(!saved.ok){result.textContent=`Could not save: ${saved.error||"Unknown error"}`;return;}
+      result.textContent="Saved. Checking the OpenAI API connection...";const checked=await api("/api/test-platform/openai",{timeoutMs:15000});
+      result.textContent=checked.ok?`Connected: ${checked.detail||"OpenAI API key verified"}`:`Connection failed: ${checked.detail||checked.error||"Unknown error"}`;
+    };
+    const render=()=>{
+      const step=gptSteps[index];$("#tutorialSteps").innerHTML=gptSteps.map((item,i)=>`<button type="button" class="tutorialStep ${i===index?"active":""} ${i<index?"done":""}" data-step="${i}"><span>${i+1}</span><b>${esc(item.title)}</b></button>`).join("");
+      $("#tutorialCounter").textContent=`Step ${index+1} of ${gptSteps.length}`;$("#tutorialTitle").textContent=step.title;$("#tutorialText").textContent=step.text;
+      $("#tutorialImage").src=`/tutorial-asset/gpt/${encodeURIComponent(step.image)}`;$("#tutorialImage").alt=step.title;$("#tutorialProgressBar").style.width=`${(index+1)/gptSteps.length*100}%`;
+      $("#tutorialFields").innerHTML=step.credentials?`<label><div>API key</div><input id="tutorialApiKey" type="password" value="${esc(openai.api_key||"")}" autocomplete="off"></label><label><div>Organization ID (optional)</div><input id="tutorialOrganization" value="${esc(openai.organization||"")}" autocomplete="off"></label><label><div>Project ID (optional)</div><input id="tutorialProject" value="${esc(openai.project||"")}" autocomplete="off"></label>`:"";
+      $("#tutorialPrev").disabled=index===0;$("#tutorialNext").textContent=step.connect?"Save & connect OpenAI API":"Next";
+      $$(".tutorialStep").forEach(button=>button.onclick=()=>{capture();index=Number(button.dataset.step);render();});
+    };
+    $("#tutorialOverviewBack").onclick=showOverview;$("#tutorialPrev").onclick=()=>{capture();if(index>0){index--;render();}};
+    $("#tutorialDashboard").onclick=()=>openExternal("https://platform.openai.com/api-keys");$("#tutorialNext").onclick=()=>{capture();if(index<gptSteps.length-1){index++;render();}else saveAndConnect();};render();
+  };
+  const showTiktok=()=>{
+    let index=0;
+    shell("tutorials","Tutorials","TikTok setup — separate browser profiles for Main and Bot.",`<section class="card tutorialWizard"><button type="button" class="secondary tutorialOverviewBack" id="tutorialOverviewBack">← All platforms</button><div class="tutorialLayout"><aside class="tutorialSteps" id="tutorialSteps"></aside><div class="tutorialMain"><div class="tutorialProgress"><span id="tutorialProgressBar"></span></div><div class="tutorialCounter" id="tutorialCounter"></div><h3 id="tutorialTitle"></h3><p id="tutorialText"></p><div class="tutorialImageFrame"><img id="tutorialImage" alt="TikTok setup step"></div><div id="tutorialFields" class="tutorialFields"></div><div class="btnLine tutorialActions"><button type="button" class="secondary" id="tutorialPrev">Back</button><button type="button" id="tutorialNext">Next</button></div><div class="small" id="tutorialResult"></div></div></div></section>`);
+    const capture=()=>{
+      const main=$("#tutorialMainAccount"),bot=$("#tutorialBotAccount"),testEnabled=$("#tutorialTestEnabled"),testChannel=$("#tutorialTestChannel");
+      if(main){tiktok.main=main.value.trim().replace(/^@/,"");tiktok.main_account=tiktok.main;tiktok.unique_id=tiktok.main;}
+      if(bot){tiktok.bot=bot.value.trim().replace(/^@/,"");tiktok.bot_account=tiktok.bot;}
+      if(testEnabled)tiktok.test_channel_enabled=testEnabled.checked;
+      if(testChannel)tiktok.test_channel=testChannel.value.trim().replace(/^@/,"");
+      const useTest=!!tiktok.test_channel_enabled&&!!tiktok.test_channel;
+      tiktok.active_read_channel=useTest?tiktok.test_channel:(tiktok.main_account||"");
+      tiktok.live_url=tiktok.active_read_channel?`https://www.tiktok.com/@${tiktok.active_read_channel}/live`:"";
+      tiktok.resolved_live_url=tiktok.live_url;
+    };
+    const save=async()=>{capture();tiktok.enabled=true;tiktok.autoconnect=true;return api("/api/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(all)});};
+    const saveAndOpen=async account=>{
+      const result=$("#tutorialResult");capture();const accountName=account==="main"?tiktok.main:tiktok.bot;
+      if(!accountName){result.textContent=`Enter the ${account==='main'?"Main":"Bot"} account name first.`;return;}
+      result.textContent="Saving TikTok settings...";const saved=await save();if(!saved.ok){result.textContent=`Could not save: ${saved.error||"Unknown error"}`;return;}
+      result.textContent=`Opening the separate ${account==='main'?"Main":"Bot"} login window...`;
+      const opened=await api(`/api/tiktok/open/${account}`,{timeoutMs:10000});
+      result.textContent=opened.ok?(opened.already_logged_in?`${account==='main'?"Main":"Bot"} is already signed in.`:`${account==='main'?"Main":"Bot"} login window opened. Complete the login there.`):`Could not open TikTok: ${opened.error||"Unknown error"}`;
+    };
+    const saveFinal=async()=>{
+      const result=$("#tutorialResult");capture();if(!tiktok.main||!tiktok.bot){result.textContent="Main and Bot account names are required.";return;}
+      if(tiktok.test_channel_enabled&&!tiktok.test_channel){result.textContent="Enter a test channel or disable Test channel.";return;}
+      const saved=await save();if(!saved.ok){result.textContent=`Could not save: ${saved.error||"Unknown error"}`;return;}
+      const status=await api("/api/status");const state=status.platforms?.tiktok||{};
+      result.textContent=`Saved. Active read channel: ${tiktok.active_read_channel||"none"}. Status: ${localizedPlatformStatus(state,true)}.`;
+    };
+    const render=()=>{
+      const step=tiktokSteps[index];$("#tutorialSteps").innerHTML=tiktokSteps.map((item,i)=>`<button type="button" class="tutorialStep ${i===index?"active":""} ${i<index?"done":""}" data-step="${i}"><span>${i+1}</span><b>${esc(item.title)}</b></button>`).join("");
+      $("#tutorialCounter").textContent=`Step ${index+1} of ${tiktokSteps.length}`;$("#tutorialTitle").textContent=step.title;$("#tutorialText").textContent=step.text;
+      $("#tutorialImage").src=`/tutorial-asset/tiktok/${encodeURIComponent(step.image)}`;$("#tutorialImage").alt=step.title;$("#tutorialProgressBar").style.width=`${(index+1)/tiktokSteps.length*100}%`;
+      $("#tutorialFields").innerHTML=`${step.accounts?`<label><div>Main account name (without @)</div><input id="tutorialMainAccount" value="${esc(tiktok.main_account||tiktok.main||"")}" autocomplete="off"></label><label><div>Bot account name (without @)</div><input id="tutorialBotAccount" value="${esc(tiktok.bot_account||tiktok.bot||"")}" autocomplete="off"></label>`:""}${step.testChannel?`<label class="tutorialCheckbox"><input id="tutorialTestEnabled" type="checkbox" ${tiktok.test_channel_enabled?"checked":""}><span>Enable test channel</span></label><label><div>Test channel name (without @)</div><input id="tutorialTestChannel" value="${esc(tiktok.test_channel||"")}" autocomplete="off"></label>`:""}${step.mainLogin?`<div class="tutorialConnectChoices one"><button type="button" id="tutorialLoginMain">Save & open Main login</button></div>`:""}${step.botLogin?`<div class="tutorialConnectChoices one"><button type="button" id="tutorialLoginBot">Save & open Bot login</button></div>`:""}`;
+      $("#tutorialPrev").disabled=index===0;$("#tutorialNext").textContent=step.connect?"Save TikTok settings":"Next";
+      $$(".tutorialStep").forEach(button=>button.onclick=()=>{capture();index=Number(button.dataset.step);render();});
+      if(step.mainLogin)$("#tutorialLoginMain").onclick=()=>saveAndOpen("main");if(step.botLogin)$("#tutorialLoginBot").onclick=()=>saveAndOpen("bot");
+    };
+    $("#tutorialOverviewBack").onclick=showOverview;$("#tutorialPrev").onclick=()=>{capture();if(index>0){index--;render();}};
+    $("#tutorialNext").onclick=()=>{capture();if(index<tiktokSteps.length-1){index++;render();}else saveFinal();};render();
+  };
+  showOverview();
 }
 async function renderChat(){
   const [layout,state]=await Promise.all([api("/api/desktop-chat/layout"),api("/api/desktop-chat/state")]);
@@ -1443,7 +1701,7 @@ async function pollIncomingSounds(){
 }
 async function bootPage(){
   try{
-    await (({dashboard:renderDashboard,platforms:renderPlatforms,chat:renderChat,obs_meld:renderObsMeld,spotify:renderSpotify,easyslider:renderEasyslider,overlays:renderOverlays,plugins:renderPlugins,settings:renderSettings,chattim3r:renderChattim3r,modalot:()=>renderDedicatedPlugin("modalot","Modalot",L("Moderation und Regeln zentral verwalten.","Manage moderation and rules centrally.")),info3ditor:()=>renderDedicatedPlugin("info3ditor","Info3ditor",L("Streaminformationen und Vorlagen verwalten.","Manage stream information and presets.")),dev:renderDev}[page]||renderDashboard)());
+    await (({dashboard:renderDashboard,platforms:renderPlatforms,chat:renderChat,obs_meld:renderObsMeld,spotify:renderSpotify,easyslider:renderEasyslider,overlays:renderOverlays,tutorials:renderTutorials,plugins:renderPlugins,settings:renderSettings,chattim3r:renderChattim3r,modalot:()=>renderDedicatedPlugin("modalot","Modalot",L("Moderation und Regeln zentral verwalten.","Manage moderation and rules centrally.")),info3ditor:()=>renderDedicatedPlugin("info3ditor","Info3ditor",L("Streaminformationen und Vorlagen verwalten.","Manage stream information and presets.")),dev:renderDev}[page]||renderDashboard)());
   }catch(e){
     try{
       await api("/api/client-error",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({level:"error",message:String(e&&e.stack||e)})});

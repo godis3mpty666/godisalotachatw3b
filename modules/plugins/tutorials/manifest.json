@@ -1,0 +1,10 @@
+{
+  "id": "tutorials",
+  "name": "tutorials ver. 0.05",
+  "version": "0.05",
+  "description": "Geführte Setup-Tutorials für godisalotachat. Start: Spotify.",
+  "description_de": "Geführte Setup-Tutorials für godisalotachat. Start: Spotify.",
+  "description_en": "Guided setup tutorials for godisalotachat. Start: Spotify.",
+  "entry": "plugin.py",
+  "display_name": "tutorials ver. 0.05"
+}

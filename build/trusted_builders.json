@@ -4,6 +4,16 @@
       "name": "godis3mpty",
       "role": "Main",
       "thumbprint": "D6C4F0A45164D41DAEB680B49E543BC913CA2943"
+    },
+    {
+      "name": "godis3mpty-laptop",
+      "role": "Main",
+      "thumbprint": "E7E18AB534D8E1F9DE48A2FB64CF1E685B6EA761"
+    },
+    {
+      "name": "godis3mpty",
+      "role": "Contributor",
+      "thumbprint": "C42706AA5F1DA4C9FC6AD0DF292A07C6B69FD9F6"
     }
   ]
 }

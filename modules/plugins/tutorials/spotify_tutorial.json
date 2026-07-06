@@ -1,0 +1,37 @@
+{
+  "version": "0.05",
+  "platform": "spotify",
+  "title": "Connect Spotify",
+  "steps": [
+    {
+      "title": "Open the Spotify Developer Dashboard",
+      "text": "Open the Spotify Developer Dashboard and click Create app.",
+      "image": "assets/spotify/01_spotify_dashboard_app_erstellen_markieren.png"
+    },
+    {
+      "title": "Create your app",
+      "text": "Enter an app name and a short app description. Then create the app.",
+      "image": "assets/spotify/02_app_name_und_beschreibung_markieren.png"
+    },
+    {
+      "title": "Add the Redirect URI",
+      "text": "Add the Redirect URI from godisalotachat under Redirect URIs and save it.",
+      "image": "assets/spotify/03_redirect_uri_hinzufuegen_markieren.png"
+    },
+    {
+      "title": "Copy the Client ID",
+      "text": "Copy the Client ID from your Spotify app.",
+      "image": "assets/spotify/04_client_id_kopieren_markieren.png"
+    },
+    {
+      "title": "Copy the Client Secret",
+      "text": "Click View client secret and copy the Client Secret.",
+      "image": "assets/spotify/05_client_secret_anzeigen_und_kopieren_markieren.png"
+    },
+    {
+      "title": "Save and connect Spotify",
+      "text": "Save the app settings, then save your credentials and start the Spotify sign-in.",
+      "image": "assets/spotify/06_app_einstellungen_speichern_markieren.png"
+    }
+  ]
+}
