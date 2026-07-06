@@ -2,6 +2,19 @@
 setlocal
 cd /d "%~dp0.."
 
+set "SIGNING_THUMBPRINT_FILE=build\.signing-thumbprint"
+if not exist "%SIGNING_THUMBPRINT_FILE%" goto :unauthorized
+set /p SIGNING_THUMBPRINT=<"%SIGNING_THUMBPRINT_FILE%"
+if not defined SIGNING_THUMBPRINT goto :unauthorized
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$thumb=$env:SIGNING_THUMBPRINT.Trim(); $cert=Get-Item ('Cert:\CurrentUser\My\'+$thumb) -ErrorAction SilentlyContinue; if(-not $cert -or -not $cert.HasPrivateKey -or $cert.Subject -notmatch 'OU=(Main|Contributor)'){ exit 1 }"
+if errorlevel 1 goto :unauthorized
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$thumb=$env:SIGNING_THUMBPRINT.Trim(); try{$trusted=Get-Content 'build\trusted_builders.json' -Raw | ConvertFrom-Json}catch{exit 1}; $entry=@($trusted.builders | Where-Object { [string]$_.thumbprint -eq $thumb })[0]; if(-not $entry -or @('Main','Contributor') -notcontains [string]$entry.role){exit 1}; Write-Host ('Autorisierter Build: '+$entry.name+' ('+$entry.role+')')"
+if errorlevel 1 goto :unauthorized
+
+rem Dieser nur waehrend des autorisierten Builds vorhandene Marker wird von
+rem PyInstaller eingebettet. Quellstarts und andere Buildwege zeigen kein -original.
+>"shared\build_provenance.py" echo BUILD_SUFFIX = "-original"
+
 set DATA_EXCLUDE_DIRS=__pycache__ ui_browser_profile Cache "Code Cache" GPUCache GrShaderCache ShaderCache BrowserMetrics optimization_guide_model_store Crashpad DawnCache blob_storage
 set DATA_EXCLUDE_FILES=__init__.py paths.py .gitkeep ui_browser_profile.zip
 
@@ -66,7 +79,18 @@ if errorlevel 1 goto :fail
 ".venv\Scripts\python.exe" -m pip install -r build\requirements.txt
 if errorlevel 1 goto :fail
 
+powershell -NoProfile -ExecutionPolicy Bypass -File "build\bump_build_version.ps1" -Bump
+if errorlevel 1 goto :fail
+
 ".venv\Scripts\python.exe" -m PyInstaller --noconfirm --clean --workpath temp --distpath dist build\webbased.spec
+if errorlevel 1 (
+    if exist "shared\build_provenance.py" del /q "shared\build_provenance.py"
+    goto :fail
+)
+if exist "shared\build_provenance.py" del /q "shared\build_provenance.py"
+
+rem Nur mit dem privaten lokalen Build-Zertifikat erzeugte EXEs gelten als unsere Builds.
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$thumb=$env:SIGNING_THUMBPRINT.Trim(); $cert=Get-Item ('Cert:\CurrentUser\My\'+$thumb) -ErrorAction Stop; $exe=(Resolve-Path 'dist\webbased\webbased.exe').Path; $null=Set-AuthenticodeSignature -FilePath $exe -Certificate $cert -HashAlgorithm SHA256; $sig=Get-AuthenticodeSignature -FilePath $exe; if(-not $sig.SignerCertificate -or $sig.SignerCertificate.Thumbprint -ne $thumb){ Write-Error 'EXE-Signatur konnte nicht verifiziert werden.'; exit 1 }"
 if errorlevel 1 goto :fail
 
 rem Module bleiben neben der EXE erweiterbar; die Kopie in _internal ist nur der gebuendelte Fallback.
@@ -84,6 +108,9 @@ robocopy "data" "dist\webbased\data" /E /R:5 /W:1 /XD %DATA_EXCLUDE_DIRS% /XF %D
 if errorlevel 8 goto :fail
 if not exist "dist\webbased\data\plugins" mkdir "dist\webbased\data\plugins"
 
+rem Nur auf dem Main-Rechner vorhanden: privaten Drive-Uploader nach dist legen.
+if exist "build\private\upload_to_google_drive.bat" copy /Y "build\private\upload_to_google_drive.bat" "dist\upload_to_google_drive.bat" >nul
+
 rem Das isolierte Chrome/Edge-Profil fuer die Haupt-UI wird sehr schnell gross.
 rem Fuer die WebUI reichen Local State und die Default-Preferences; alles andere
 rem wird von Chromium beim naechsten Start neu erzeugt.
@@ -91,6 +118,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "$src=Join-Path (Resolve-
 
 rem Safety net fuer andere Chromium-Laufzeitdaten ausserhalb des UI-Profils.
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$data=(Resolve-Path 'dist\webbased\data').Path; $names=@('Cache','Code Cache','GPUCache','GrShaderCache','ShaderCache','BrowserMetrics','optimization_guide_model_store','Crashpad','blob_storage','Safe Browsing','extensions_crx_cache','component_crx_cache','GPUPersistentCache','DawnCache','DawnGraphiteCache','DawnWebGPUCache'); Get-ChildItem -LiteralPath $data -Directory -Recurse -Force | Where-Object { $names -contains $_.Name } | Sort-Object FullName -Descending | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue; Get-ChildItem -LiteralPath $data -File -Recurse -Force -Filter '*.pma' | Remove-Item -Force -ErrorAction SilentlyContinue"
+
+powershell -NoProfile -ExecutionPolicy Bypass -File "build\bump_build_version.ps1" -Finalize
+if errorlevel 1 goto :fail
 
 if exist temp rmdir /s /q temp
 set ERRORLEVEL=0
@@ -102,7 +132,18 @@ echo Starte dist\webbased\webbased.exe
 start "" "%CD%\dist\webbased\webbased.exe"
 exit /b 0
 
+:unauthorized
+if exist "shared\build_provenance.py" del /q "shared\build_provenance.py"
+echo.
+echo Build nicht autorisiert: Das private Build-Zertifikat fehlt.
+echo Einmalig ausfuehren: powershell -ExecutionPolicy Bypass -File build\setup_build_signing.ps1
+echo Der private Schluessel bleibt im Windows-Zertifikatsspeicher dieses Benutzerkontos.
+pause
+exit /b 1
+
 :fail
+if exist "shared\build_provenance.py" del /q "shared\build_provenance.py"
+powershell -NoProfile -ExecutionPolicy Bypass -File "build\bump_build_version.ps1" -Restore >nul 2>nul
 echo.
 echo Build fehlgeschlagen.
 echo Temporaere Build-Daten bleiben zur Fehlersuche unter temp erhalten.

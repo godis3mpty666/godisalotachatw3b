@@ -14,6 +14,11 @@ data/*
 *.pfx
 *.crt
 *.cer
+build/.signing-thumbprint
+build/.version-before-build
+build/contributor_passwords.txt
+build/private/
+shared/build_provenance.py
 *credentials*.json
 *oauth_cache*.json
 *tokens*.json

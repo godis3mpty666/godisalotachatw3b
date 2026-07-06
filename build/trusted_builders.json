@@ -1,0 +1,9 @@
+{
+  "builders": [
+    {
+      "name": "godis3mpty",
+      "role": "Main",
+      "thumbprint": "D6C4F0A45164D41DAEB680B49E543BC913CA2943"
+    }
+  ]
+}
