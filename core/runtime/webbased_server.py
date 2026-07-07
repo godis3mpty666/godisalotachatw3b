@@ -4359,6 +4359,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._page("modalot.html")
         if path == "/info3ditor":
             return self._page("info3ditor.html")
+        if path == "/gam3pick3r":
+            return self._page("gam3pick3r.html")
         if path == "/obs-meld-integration":
             return self._page("obs_meld_integration.html")
         if path in ("/spotis3mptify", "/spotify"):

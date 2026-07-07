@@ -54,7 +54,7 @@ const TESTER_CREDITS = [
 function nav(active){
   const items = [
     ["dashboard","Dashboard","/"],["platforms","Plattformen","/plattformen"],["chat","Chat","/chat"],["obs_meld","OBS/Meld Integration","/obs-meld-integration"],
-    ["info3ditor","Info3ditor","/info3ditor"],["chattim3r","Chattim3r","/chattim3r"],["plugins","Plugins","/plugins"],["modalot","Modalot","/modalot"],["easyslider","3asyslid3r","/3asyslid3r"],["settings",L("Einstellungen","Settings"),"/einstellungen"],["tutorials","Tutorials","/tutorials"],["dev","DEV","/dev"]
+    ["info3ditor","Info3ditor","/info3ditor"],["gam3pick3r","gam3pick3r","/gam3pick3r"],["chattim3r","Chattim3r","/chattim3r"],["plugins","Plugins","/plugins"],["modalot","Modalot","/modalot"],["easyslider","3asyslid3r","/3asyslid3r"],["settings",L("Einstellungen","Settings"),"/einstellungen"],["tutorials","Tutorials","/tutorials"],["dev","DEV","/dev"]
   ];
   const issueUrl = "https://github.com/godis3mpty666/godisalotachatw3b/issues/new?title=" + encodeURIComponent("[Feedback] ") + "&body=" + encodeURIComponent("**Was ist passiert oder was soll verbessert werden?**\n\n\n**So kann man es nachstellen (bei einem Bug):**\n1. \n2. \n\n**Version:** " + (window.WEB_VERSION || "unbekannt") + "\n\n**Zusätzliche Infos / Screenshots:**\n");
   const credits = [
@@ -1083,7 +1083,23 @@ function schemaLocalized(field, name, fallback=""){
   return (english?(field[`${name}_en`]??field[name]):(field[`${name}_de`]??field[name]))??fallback;
 }
 function schemaLabel(field){return schemaLocalized(field,"label",field.name||field.key||"");}
-function schemaTab(field){return schemaLocalized(field,"tab",schemaLocalized(field,"ui_tab",L("Allgemein","General")));}
+function schemaTab(field){
+  const raw=schemaLocalized(field,"tab",schemaLocalized(field,"ui_tab",L("Allgemein","General")));
+  if(window.APP_LANGUAGE==="en")return raw;
+  return ({
+    Main:"Allgemein",
+    Games:"Spiele",
+    Delete:"Löschen",
+    Stream:"Stream",
+    Vote:"Abstimmung",
+    Picker:"Picker",
+    Chat:"Chat",
+    Twitch:"Twitch",
+    YouTube:"YouTube",
+    Kick:"Kick",
+    Overlay:"Overlay"
+  })[raw]||raw;
+}
 function renderPluginField(field, values){
   const key=String(field.key||field.name||"");
   const type=String(field.type||field.kind||"text").toLowerCase();
@@ -1761,7 +1777,7 @@ async function pollIncomingSounds(){
 }
 async function bootPage(){
   try{
-    await (({dashboard:renderDashboard,platforms:renderPlatforms,chat:renderChat,obs_meld:renderObsMeld,spotify:renderSpotify,easyslider:renderEasyslider,overlays:renderOverlays,tutorials:renderTutorials,plugins:renderPlugins,settings:renderSettings,chattim3r:renderChattim3r,modalot:()=>renderDedicatedPlugin("modalot","Modalot",L("Moderation und Regeln zentral verwalten.","Manage moderation and rules centrally.")),info3ditor:()=>renderDedicatedPlugin("info3ditor","Info3ditor",L("Streaminformationen und Vorlagen verwalten.","Manage stream information and presets.")),dev:renderDev}[page]||renderDashboard)());
+    await (({dashboard:renderDashboard,platforms:renderPlatforms,chat:renderChat,obs_meld:renderObsMeld,spotify:renderSpotify,easyslider:renderEasyslider,overlays:renderOverlays,tutorials:renderTutorials,plugins:renderPlugins,settings:renderSettings,chattim3r:renderChattim3r,modalot:()=>renderDedicatedPlugin("modalot","Modalot",L("Moderation und Regeln zentral verwalten.","Manage moderation and rules centrally.")),info3ditor:()=>renderDedicatedPlugin("info3ditor","Info3ditor",L("Streaminformationen und Vorlagen verwalten.","Manage stream information and presets.")),gam3pick3r:()=>renderDedicatedPlugin("gam3pick3r","gam3pick3r",L("Spielauswahl, Voting und Picker verwalten.","Manage game selection, voting and picker.")),dev:renderDev}[page]||renderDashboard)());
   }catch(e){
     try{
       await api("/api/client-error",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({level:"error",message:String(e&&e.stack||e)})});

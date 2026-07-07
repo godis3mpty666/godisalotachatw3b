@@ -485,7 +485,7 @@ class Gam3Pick3rPlugin(ThreadedPlugin):
                     # button labels without the left label after a settings refresh.
                     schema.append({'key': f'button_delete_game__{gid}', 'tab': 'Delete', 'type': 'button', 'label': '', 'button_text': f'{title} löschen', 'button_text_en': f'Delete {title}', 'show_label': False})
         else:
-            schema.append({'key': 'delete_empty', 'tab': 'Delete', 'type': 'separator', 'label': 'Keine Spiele gespeichert.'})
+            schema.append({'key': 'delete_empty', 'tab': 'Delete', 'type': 'separator', 'label': 'Keine Spiele gespeichert.', 'label_en': 'No games saved.'})
 
         if games:
             for idx, g in enumerate(games[:120], start=1):
@@ -501,7 +501,7 @@ class Gam3Pick3rPlugin(ThreadedPlugin):
                     {'key': f'tags__{gid}', 'tab': 'Stream', 'label': f'{title} · Tags', 'label_en': f'{title} · Tags', 'placeholder': 'tag1, tag2', 'default': ', '.join([str(x) for x in (g.get('tags') or [])])},
                 ])
         else:
-            schema.append({'key': 'streaminfo_empty', 'tab': 'Stream', 'type': 'separator', 'label': 'Noch keine Spiele gespeichert.'})
+            schema.append({'key': 'streaminfo_empty', 'tab': 'Stream', 'type': 'separator', 'label': 'Noch keine Spiele gespeichert.', 'label_en': 'No games saved yet.'})
 
         schema.extend([
             {'key': 'vote_command', 'tab': 'Vote', 'label': 'Vote-Befehl', 'label_en': 'Vote command', 'placeholder': '!vote'},
