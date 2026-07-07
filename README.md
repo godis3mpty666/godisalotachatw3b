@@ -47,6 +47,13 @@ OBS und Meld.
 Die aktuelle Web- und Anwendungsversion wird zentral in
 `shared/version.py` gepflegt.
 
+Beim EXE-Build bleibt diese App-Version gleich, solange seit dem letzten
+`v*`-Tag keine Core-Dateien geaendert wurden. Der konkrete Build bekommt
+stattdessen temporaer einen Suffix aus Datum und Git-Hash, z.B.
+`0.94-original+20260707-1623.11d6a44`. Eine Core-Versionserhoehung laesst
+sich per Commit-Text mit `[core]` oder `[version]` erzwingen; mit
+`[no-version]` wird sie uebersprungen.
+
 ## Sicherheit
 
 Das Verzeichnis `data/` enthaelt lokale Einstellungen, OAuth-Tokens,

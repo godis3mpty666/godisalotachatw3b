@@ -12,8 +12,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "$thumb=$env:SIGNING_THUM
 if errorlevel 1 goto :unauthorized
 
 rem Dieser nur waehrend des autorisierten Builds vorhandene Marker wird von
-rem PyInstaller eingebettet. Quellstarts und andere Buildwege zeigen kein -original.
->"shared\build_provenance.py" echo BUILD_SUFFIX = "-original"
+rem PyInstaller eingebettet. Quellstarts und andere Buildwege zeigen keinen Build-Suffix.
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$hash='nogit'; try{$hash=(git rev-parse --short HEAD).Trim()}catch{}; $stamp=Get-Date -Format 'yyyyMMdd-HHmm'; Set-Content -Path 'shared\build_provenance.py' -Encoding utf8 -NoNewline -Value ('BUILD_SUFFIX = ''-original+'+$stamp+'.'+$hash+'''')"
 
 set DATA_EXCLUDE_DIRS=__pycache__ ui_browser_profile Cache "Code Cache" GPUCache GrShaderCache ShaderCache BrowserMetrics optimization_guide_model_store Crashpad DawnCache blob_storage
 set DATA_EXCLUDE_FILES=__init__.py paths.py .gitkeep ui_browser_profile.zip
