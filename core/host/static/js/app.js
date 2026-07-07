@@ -637,12 +637,12 @@ async function renderTutorials(){
     {id:"gpt",name:"GPT",icon:"openai",description:"Create an API key and connect the OpenAI API.",ready:true}
   ];
   const steps=[
-    {title:"Open the Spotify Developer Dashboard",text:"Open the Spotify Developer Dashboard and click Create app.",image:"01_spotify_dashboard_app_erstellen_markieren.png"},
-    {title:"Create your app",text:"Enter an app name and a short app description. Then create the app.",image:"02_app_name_und_beschreibung_markieren.png"},
-    {title:"Copy Client ID and Client Secret",text:"Copy the Client ID and Client Secret from your Spotify app and paste them below.",image:"04_spotify_client_id_secret_blur_markieren.png",credentials:true},
-    {title:"Copy the Redirect URL",text:"Copy the Redirect URL shown below and add it under Redirect URIs in Spotify.",image:"05_spotify_redirect_url_kopieren_markieren.png",redirect:true},
-    {title:"Save the Spotify app",text:"Save the Spotify app settings after the Redirect URL is added.",image:"06_spotify_save_markieren.png",redirect:true},
-    {title:"Save and connect Spotify",text:"Save the app settings, then save your credentials and start the Spotify sign-in.",image:"06_app_einstellungen_speichern_markieren.png",credentials:true,connect:true}
+    {title:"Open the Spotify Developer Dashboard",text:"Open the Spotify Developer Dashboard and click Create app.",image:"01_spotify_dashboard_create_app_crop.png"},
+    {title:"Create your app",text:"Enter an app name and a short app description. Then create the app.",image:"02_spotify_create_app_form_context.png"},
+    {title:"Copy Client ID and Client Secret",text:"Copy the Client ID and Client Secret from your Spotify app and paste them below.",image:"03_spotify_client_credentials_crop.png",credentials:true},
+    {title:"Paste the Redirect URI in Spotify",text:"Copy the Redirect URI shown below, paste it into Redirect URIs in Spotify, and click Add.",image:"04_spotify_redirect_uri_crop.png",redirect:true},
+    {title:"Save the Spotify app",text:"Save the Spotify app settings after the Redirect URI is added.",image:"05_spotify_save_button_crop.png",redirect:true},
+    {title:"Save and connect Spotify",text:"Paste the Spotify credentials into godisalotachat, save them, and start the Spotify sign-in.",image:"06_spotify_webbased_save_connect_context.png",credentials:true,redirect:true,connect:true}
   ];
   const twitchSteps=[
     {title:"Open the Twitch Developer Console",text:"Sign in to the Twitch Developer Console. The account must have a verified email address and two-factor authentication enabled.",image:"01_twitch_entwicklerkonsole_oeffnen_markieren.png"},
@@ -699,10 +699,11 @@ async function renderTutorials(){
   Object.assign(tutorialDe,{
     "Copy Client ID and Client Secret":"Client ID und Client Secret kopieren",
     "Copy the Client ID and Client Secret from your Spotify app and paste them below.":"Kopiere Client ID und Client Secret aus deiner Spotify-App und fuege beide unten ein.",
-    "Copy the Redirect URL":"Redirect-URL kopieren",
-    "Copy the Redirect URL shown below and add it under Redirect URIs in Spotify.":"Kopiere die unten angezeigte Redirect-URL und trage sie in Spotify unter Redirect URIs ein.",
+    "Paste the Redirect URI in Spotify":"Redirect URI in Spotify einfuegen",
+    "Copy the Redirect URI shown below, paste it into Redirect URIs in Spotify, and click Add.":"Kopiere die unten angezeigte Redirect URI, fuege sie in Spotify unter Redirect URIs ein und klicke auf Add.",
     "Save the Spotify app":"Spotify-App speichern",
-    "Save the Spotify app settings after the Redirect URL is added.":"Speichere die Spotify-App-Einstellungen, nachdem die Redirect-URL hinzugefuegt wurde."
+    "Save the Spotify app settings after the Redirect URI is added.":"Speichere die Spotify-App-Einstellungen, nachdem die Redirect URI hinzugefuegt wurde.",
+    "Paste the Spotify credentials into godisalotachat, save them, and start the Spotify sign-in.":"Fuege die Spotify-Zugangsdaten in godisalotachat ein, speichere sie und starte die Spotify-Anmeldung."
   });
   const tutorialCopy=value=>L(tutorialDe[String(value)]||String(value),String(value));
   const tutorialCounter=(index,total)=>L(`Schritt ${index+1} von ${total}`,`Step ${index+1} of ${total}`);

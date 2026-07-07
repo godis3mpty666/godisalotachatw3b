@@ -1,9 +1,9 @@
 const steps=[
- {t:'Open the Spotify Developer Dashboard',txt:'Open the Spotify Developer Dashboard and click Create app.',img:'../assets/spotify/01_spotify_dashboard_app_erstellen_markieren.png'},
- {t:'Create your app',txt:'Enter an app name and a short app description. Then create the app.',img:'../assets/spotify/02_app_name_und_beschreibung_markieren.png'},
- {t:'Add the Redirect URI',txt:'Add the Redirect URI from godisalotachat under Redirect URIs and save it.',img:'../assets/spotify/03_redirect_uri_hinzufuegen_markieren.png'},
- {t:'Copy the Client ID',txt:'Copy the Client ID from your Spotify app.',img:'../assets/spotify/04_client_id_kopieren_markieren.png',form:true},
- {t:'Copy the Client Secret',txt:'Click View client secret and copy the Client Secret.',img:'../assets/spotify/05_client_secret_anzeigen_und_kopieren_markieren.png',form:true},
- {t:'Save and connect Spotify',txt:'Save the app settings, then save your credentials and start the Spotify sign-in.',img:'../assets/spotify/06_app_einstellungen_speichern_markieren.png',form:true}
+ {t:'Open the Spotify Developer Dashboard',txt:'Open the Spotify Developer Dashboard and click Create app.',img:'../assets/spotify/01_spotify_dashboard_create_app_crop.png'},
+ {t:'Create your app',txt:'Enter an app name and a short app description. Then create the app.',img:'../assets/spotify/02_spotify_create_app_form_context.png'},
+ {t:'Copy Client ID and Client Secret',txt:'Copy the Client ID and Client Secret from your Spotify app.',img:'../assets/spotify/03_spotify_client_credentials_crop.png',form:true},
+ {t:'Paste the Redirect URI in Spotify',txt:'Copy the Redirect URI from godisalotachat, paste it into Redirect URIs in Spotify, and click Add.',img:'../assets/spotify/04_spotify_redirect_uri_crop.png'},
+ {t:'Save the Spotify app',txt:'Save the Spotify app settings.',img:'../assets/spotify/05_spotify_save_button_crop.png'},
+ {t:'Save and connect Spotify',txt:'Paste the Spotify credentials into godisalotachat, save them, and start the Spotify sign-in.',img:'../assets/spotify/06_spotify_webbased_save_connect_context.png',form:true}
 ];
 let i=0;const $=id=>document.getElementById(id);function render(){const s=steps[i];$('title').textContent=s.t;$('text').textContent=s.txt;$('shot').src=s.img;$('progressBar').style.width=((i+1)/steps.length*100)+'%';$('formBlock').classList.toggle('hidden',!s.form);$('prev').disabled=i===0;$('next').textContent=i===steps.length-1?'Finish':'Next';$('steps').innerHTML=steps.map((x,n)=>`<div class="step ${n===i?'active':''}">${n+1}. ${x.t}</div>`).join('');}function checks(){let a=$('clientId').value.trim(),b=$('clientSecret').value.trim();$('idCheck').textContent=a?'✓ Client ID present':'Client ID is missing';$('secretCheck').textContent=b?'✓ Client Secret present':'Client Secret is missing';}['clientId','clientSecret'].forEach(id=>$(id).addEventListener('input',checks));$('prev').onclick=()=>{if(i>0)i--;render()};$('next').onclick=()=>{if(i<steps.length-1)i++;render()};render();checks();

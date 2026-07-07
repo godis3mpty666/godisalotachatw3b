@@ -1,37 +1,37 @@
 {
-  "version": "0.08",
+  "version": "0.09",
   "platform": "spotify",
   "title": "Connect Spotify",
   "steps": [
     {
       "title": "Open the Spotify Developer Dashboard",
       "text": "Open the Spotify Developer Dashboard and click Create app.",
-      "image": "assets/spotify/01_spotify_dashboard_app_erstellen_markieren.png"
+      "image": "assets/spotify/01_spotify_dashboard_create_app_crop.png"
     },
     {
       "title": "Create your app",
       "text": "Enter an app name and a short app description. Then create the app.",
-      "image": "assets/spotify/02_app_name_und_beschreibung_markieren.png"
+      "image": "assets/spotify/02_spotify_create_app_form_context.png"
     },
     {
       "title": "Copy Client ID and Client Secret",
       "text": "Copy the Client ID and Client Secret from your Spotify app.",
-      "image": "assets/spotify/04_spotify_client_id_secret_blur_markieren.png"
+      "image": "assets/spotify/03_spotify_client_credentials_crop.png"
     },
     {
-      "title": "Copy the Redirect URL",
-      "text": "Copy the Redirect URL from godisalotachat.",
-      "image": "assets/spotify/05_spotify_redirect_url_kopieren_markieren.png"
+      "title": "Paste the Redirect URI in Spotify",
+      "text": "Copy the Redirect URI from godisalotachat, paste it into Redirect URIs in Spotify, and click Add.",
+      "image": "assets/spotify/04_spotify_redirect_uri_crop.png"
     },
     {
       "title": "Save the Spotify app",
       "text": "Save the Spotify app settings.",
-      "image": "assets/spotify/06_spotify_save_markieren.png"
+      "image": "assets/spotify/05_spotify_save_button_crop.png"
     },
     {
       "title": "Save and connect Spotify",
-      "text": "Save the app settings, then save your credentials and start the Spotify sign-in.",
-      "image": "assets/spotify/06_app_einstellungen_speichern_markieren.png"
+      "text": "Paste the Spotify credentials into godisalotachat, save them, and start the Spotify sign-in.",
+      "image": "assets/spotify/06_spotify_webbased_save_connect_context.png"
     }
   ]
 }
