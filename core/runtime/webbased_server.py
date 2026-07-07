@@ -332,10 +332,15 @@ def default_easyslider_settings() -> dict:
             {"id": "dashboard", "label": "Dashboard", "path": "/", "enabled": True},
             {"id": "platforms", "label": "Plattformen", "path": "/plattformen", "enabled": True},
             {"id": "chat", "label": "Chat", "path": "/chat", "enabled": True},
-            {"id": "obs_meld", "label": "OBS/Meld Integration", "path": "/obs-meld-integration", "enabled": False},
-            {"id": "spotify", "label": "Spotis3mptify", "path": "/spotis3mptify", "enabled": False},
-            {"id": "modalot", "label": "Modalot", "path": "/modalot", "enabled": True},
+            {"id": "obs_meld", "label": "OBS/Meld Integration", "path": "/obs-meld-integration", "enabled": True},
+            {"id": "info3ditor", "label": "Info3ditor", "path": "/info3ditor", "enabled": True},
+            {"id": "gam3pick3r", "label": "gam3pick3r", "path": "/gam3pick3r", "enabled": True},
+            {"id": "chattim3r", "label": "Chattim3r", "path": "/chattim3r", "enabled": True},
             {"id": "plugins", "label": "Plugins", "path": "/plugins", "enabled": True},
+            {"id": "modalot", "label": "Modalot", "path": "/modalot", "enabled": True},
+            {"id": "easyslider", "label": "3asyslid3r", "path": "/3asyslid3r", "enabled": True},
+            {"id": "settings", "label": "Einstellungen", "path": "/einstellungen", "enabled": True},
+            {"id": "tutorials", "label": "Tutorials", "path": "/tutorials", "enabled": True},
             {"id": "dev", "label": "DEV", "path": "/dev", "enabled": True},
         ],
     }
@@ -357,11 +362,11 @@ def normalize_easyslider_settings(raw_settings) -> dict:
         opacity = default["opacity"]
     raw_buttons = raw_settings.get("buttons")
     if not isinstance(raw_buttons, list):
-        raw_buttons = default["buttons"]
-    buttons = []
-    for item in raw_buttons:
+        raw_buttons = []
+
+    def clean_button(item: dict) -> dict | None:
         if not isinstance(item, dict):
-            continue
+            return None
         button_id = re.sub(r"[^a-z0-9_-]+", "", str(item.get("id") or "").strip().lower())[:40]
         label = str(item.get("label") or button_id or "Button").strip()[:80]
         path = str(item.get("path") or "/").strip()
@@ -370,9 +375,27 @@ def normalize_easyslider_settings(raw_settings) -> dict:
         if not path.startswith("/"):
             path = "/" + path
         if button_id:
-            buttons.append({"id": button_id, "label": label, "path": path[:180], "enabled": bool(item.get("enabled", True))})
-    if not buttons:
-        buttons = list(default["buttons"])
+            return {"id": button_id, "label": label, "path": path[:180], "enabled": bool(item.get("enabled", True))}
+        return None
+
+    saved_by_id = {}
+    for item in raw_buttons:
+        clean = clean_button(item)
+        if clean:
+            saved_by_id[clean["id"]] = clean
+    buttons = []
+    seen = set()
+    for item in default["buttons"]:
+        merged = {**item, **saved_by_id.get(item["id"], {})}
+        clean = clean_button(merged)
+        if clean:
+            buttons.append(clean)
+            seen.add(clean["id"])
+    for item in raw_buttons:
+        clean = clean_button(item)
+        if clean and clean["id"] not in seen:
+            buttons.append(clean)
+            seen.add(clean["id"])
     return {
         "enabled": bool(raw_settings.get("enabled", default["enabled"])),
         "edge": edge,

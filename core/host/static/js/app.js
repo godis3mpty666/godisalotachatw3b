@@ -51,11 +51,15 @@ const TESTER_CREDITS = [
   ]}
 ];
 
-function nav(active){
-  const items = [
+function dashboardNavItems(){
+  return [
     ["dashboard","Dashboard","/"],["platforms","Plattformen","/plattformen"],["chat","Chat","/chat"],["obs_meld","OBS/Meld Integration","/obs-meld-integration"],
     ["info3ditor","Info3ditor","/info3ditor"],["gam3pick3r","gam3pick3r","/gam3pick3r"],["chattim3r","Chattim3r","/chattim3r"],["plugins","Plugins","/plugins"],["modalot","Modalot","/modalot"],["easyslider","3asyslid3r","/3asyslid3r"],["settings",L("Einstellungen","Settings"),"/einstellungen"],["tutorials","Tutorials","/tutorials"],["dev","DEV","/dev"]
   ];
+}
+
+function nav(active){
+  const items = dashboardNavItems();
   const issueUrl = "https://github.com/godis3mpty666/godisalotachatw3b/issues/new?title=" + encodeURIComponent("[Feedback] ") + "&body=" + encodeURIComponent("**Was ist passiert oder was soll verbessert werden?**\n\n\n**So kann man es nachstellen (bei einem Bug):**\n1. \n2. \n\n**Version:** " + (window.WEB_VERSION || "unbekannt") + "\n\n**Zusätzliche Infos / Screenshots:**\n");
   const credits = [
     ["Twitch","https://twitch.tv/godis3mpty","twitch"],
@@ -228,24 +232,20 @@ function userColor(platform,user){let h=2166136261;for(const c of `${platform}:$
 function platformMark(p){return ({twitch:"Twitch",tiktok:"TikTok",youtube:"YouTube",kick:"Kick"}[p]||p);}
 function platformBadge(p){return `<span class="chatPlatform"><img src="/platform-icon/${esc(p)}" alt="${esc(platformMark(p))}"></span>`;}
 function platformLabel(p){return ({twitch:"Twitch",tiktok:"TikTok",youtube:"YouTube",kick:"Kick",spotify:"Spotify",openai:"ChatGPT / OpenAI",meld:"Meld",obs:"OBS"}[p]||p);}
-function defaultEasysliderSettings(){return {enabled:true,edge:"left",delaySeconds:2,opacity:82,buttons:[
-  {id:"dashboard",label:"Dashboard",path:"/",enabled:true},
-  {id:"platforms",label:"Plattformen",path:"/plattformen",enabled:true},
-  {id:"chat",label:"Chat",path:"/chat",enabled:true},
-  {id:"obs_meld",label:"OBS/Meld Integration",path:"/obs-meld-integration",enabled:false},
-  {id:"spotify",label:"Spotis3mptify",path:"/spotis3mptify",enabled:false},
-  {id:"modalot",label:"Modalot",path:"/modalot",enabled:true},
-  {id:"plugins",label:"Plugins",path:"/plugins",enabled:true},
-  {id:"dev",label:"DEV",path:"/dev",enabled:true}
-]};}
+function defaultEasysliderSettings(){return {enabled:true,edge:"left",delaySeconds:2,opacity:82,buttons:dashboardNavItems().map(([id,label,path])=>({id,label,path,enabled:true}))};}
 function normalizeEasysliderClient(cfg){
   const d=defaultEasysliderSettings();
   cfg=cfg&&typeof cfg==="object"?cfg:{};
   const edge=["left","right","top","bottom"].includes(cfg.edge)?cfg.edge:d.edge;
   const delay=Math.max(0,Math.min(120,Number(cfg.delaySeconds??d.delaySeconds)||0));
   const opacity=Math.max(0,Math.min(100,Number(cfg.opacity??d.opacity)||0));
-  const buttons=Array.isArray(cfg.buttons)&&cfg.buttons.length?cfg.buttons:d.buttons;
-  return {enabled:cfg.enabled!==false,edge,delaySeconds:delay,opacity,buttons:buttons.map(b=>{const id=String(b.id||"").trim()||"dashboard";let path=String(b.path||"/").trim()||"/";if(id==="modalot"&&path==="/plugins?plugin=modalot")path="/modalot";return {id,label:String(b.label||b.id||"Dashboard").trim(),path,enabled:b.enabled!==false};})};
+  const rawButtons=Array.isArray(cfg.buttons)?cfg.buttons:[];
+  const savedById=new Map(rawButtons.map(b=>[String(b.id||"").trim(),b]).filter(([id])=>id));
+  const seen=new Set();
+  const cleanButton=b=>{const id=String(b.id||"").trim()||"dashboard";let path=String(b.path||"/").trim()||"/";if(id==="modalot"&&path==="/plugins?plugin=modalot")path="/modalot";return {id,label:String(b.label||b.id||"Dashboard").trim(),path,enabled:b.enabled!==false};};
+  const buttons=d.buttons.map(base=>{seen.add(base.id);return cleanButton({...base,...(savedById.get(base.id)||{})});});
+  rawButtons.forEach(raw=>{const b=cleanButton(raw);if(!seen.has(b.id)){seen.add(b.id);buttons.push(b);}});
+  return {enabled:cfg.enabled!==false,edge,delaySeconds:delay,opacity,buttons};
 }
 async function mountEasysliderRail(){
   const old=$("#easysliderRail");
@@ -1446,13 +1446,13 @@ async function renderEasyslider(){
       <form id="easysliderForm" class="platformForm">
         <label><div>${L("Aktiv","Enabled")}</div><select name="enabled"><option value="true" ${settings.enabled?"selected":""}>${L("Ja","Yes")}</option><option value="false" ${!settings.enabled?"selected":""}>${L("Nein","No")}</option></select></label>
         <label><div>${L("Bildschirmrand","Screen edge")}</div><select name="edge">${[["left",L("Links","Left")],["right",L("Rechts","Right")],["top",L("Oben","Top")],["bottom",L("Unten","Bottom")]].map(([v,l])=>`<option value="${v}" ${settings.edge===v?"selected":""}>${l}</option>`).join("")}</select></label>
-        <label><div>${L("VerzÃ¶gerung bis zum Ã–ffnen (Sekunden)","Delay before opening (seconds)")}</div><input name="delaySeconds" type="number" min="0" max="120" step="0.5" value="${esc(settings.delaySeconds)}"></label>
+        <label><div>${L("Verzögerung bis zum Öffnen (Sekunden)","Delay before opening (seconds)")}</div><input name="delaySeconds" type="number" min="0" max="120" step="0.5" value="${esc(settings.delaySeconds)}"></label>
         <label><div>${L("Transparenz","Opacity")}</div><input name="opacity" type="range" min="0" max="100" value="${esc(settings.opacity)}"></label>
         <div class="hint">${L("PNG-Ordner","PNG folder")}: assets\\pics\\3asyslid3r</div>
       </form>
     </section>
     <section class="card easysliderSettings">
-      <h3>${L("SchaltflÃ¤chen","Buttons")}</h3>
+      <h3>${L("Schaltflächen","Buttons")}</h3>
       <div id="easysliderButtons" class="easysliderButtonList"></div>
       <div class="btnLine"><button id="easysliderSave" type="button">${L("Speichern","Save")}</button><button id="easysliderTest" type="button" class="secondary">${L("Dashboard testen","Test dashboard")}</button><span id="easysliderResult" class="small"></span></div>
     </section>`);
@@ -1460,7 +1460,7 @@ async function renderEasyslider(){
   const defaults=defaultEasysliderSettings().buttons;
   const byId=new Map((settings.buttons||[]).map(b=>[b.id,b]));
   const buttons=defaults.map(d=>({...d,...(byId.get(d.id)||{})}));
-  $("#easysliderButtons").innerHTML=buttons.map((b,i)=>`<label class="easysliderButtonRow"><input type="checkbox" data-index="${i}" ${b.enabled!==false?"checked":""}><div><b>${esc(b.label)}</b><span>${esc(b.path)}</span></div><img src="/slider-asset/${encodeURIComponent(b.id)}.png?v=${encodeURIComponent(window.WEB_VERSION||"")}" alt="" onerror="this.remove()"></label>`).join("");
+  $("#easysliderButtons").innerHTML=buttons.map((b,i)=>`<label class="easysliderButtonRow"><input type="checkbox" data-index="${i}" ${b.enabled!==false?"checked":""}><span class="easysliderCheckmark" aria-hidden="true"></span><span class="easysliderButtonIcon"><img src="/slider-asset/${encodeURIComponent(b.id)}.png?v=${encodeURIComponent(window.WEB_VERSION||"")}" alt="" onerror="this.remove()"></span><span class="easysliderButtonMeta"><b>${esc(b.label)}</b><small>${esc(b.path)}</small></span></label>`).join("");
   const collect=()=>normalizeEasysliderClient({
     enabled:form.elements.enabled.value==="true",
     edge:form.elements.edge.value,
