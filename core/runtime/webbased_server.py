@@ -4710,17 +4710,33 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/overlay-urls":
             base = f"http://127.0.0.1:{st.port}"
+            spotify_overlay_url = f"http://127.0.0.1:17891/customoverlay"
+            try:
+                spotify_plugin = st.plugin_instances.get("spotis3mptify")
+                plugin_url = getattr(spotify_plugin, "overlay_url", None)
+                if callable(plugin_url):
+                    spotify_overlay_url = str(plugin_url() or spotify_overlay_url)
+                else:
+                    spotify_cfg = st.settings().get("plugins", {}).get("spotis3mptify", {})
+                    if isinstance(spotify_cfg, dict):
+                        port = int(str(spotify_cfg.get("port") or 17891).strip())
+                        if port == 5173:
+                            port = 17891
+                        spotify_overlay_url = f"http://127.0.0.1:{port}/customoverlay"
+            except Exception:
+                pass
             self._json({
                 "main": [
                     {"name":"Chat Browser", "url":base + "/chat-browser"},
-                    {"name":"Spotis3mptify Overlay", "url":base + "/overlay/spotify"}
+                    {"name":"Spotis3mptify Overlay", "url":spotify_overlay_url}
                 ],
                 "groups": [
                     {"title": "Wichtige Browserquellen", "items": [
                         {"name":"Chat Browser", "url":base + "/chat-browser"},
-                        {"name":"Spotis3mptify Overlay", "url":base + "/overlay/spotify"}
+                        {"name":"Spotis3mptify Overlay", "url":spotify_overlay_url}
                     ]},
                     {"title": "Spotis3mptify Kompatibilität", "items": [
+                        {"name":"Komplettes Overlay (stabil)", "url":spotify_overlay_url},
                         {"name":"Titel", "url":base + "/browser/title"},
                         {"name":"Artist", "url":base + "/browser/artist"},
                         {"name":"Song Alias", "url":base + "/browser/song"},
@@ -5064,6 +5080,11 @@ class Handler(BaseHTTPRequestHandler):
                 current["platforms"] = incoming["platforms"]
             if "plugins" in incoming and isinstance(incoming["plugins"], dict):
                 current["plugins"] = incoming["plugins"]
+            if "platforms" in incoming and isinstance(incoming["platforms"], dict):
+                for platform, plugin_id in {"meld": "meld_control", "obs": "obs_control"}.items():
+                    cfg = current.get("platforms", {}).get(platform, {})
+                    if platform in incoming["platforms"] and isinstance(cfg, dict) and bool(cfg.get("enabled", False)) and bool(cfg.get("autoconnect", True)):
+                        current.setdefault("plugins", {}).setdefault(plugin_id, {})["enabled"] = True
             if "ui" in incoming and isinstance(incoming["ui"], dict):
                 current.setdefault("ui", {})
                 current["ui"].update(incoming["ui"])
@@ -5081,6 +5102,9 @@ class Handler(BaseHTTPRequestHandler):
                     if platform not in changed_platforms:
                         continue
                     st.plugin_manager.restart_plugin_async(plugin_id, f"{platform} gespeichert; Neustart laeuft")
+                for platform, plugin_id in {"meld": "meld_control", "obs": "obs_control"}.items():
+                    if platform in changed_platforms:
+                        st.plugin_manager.restart_plugin_async(plugin_id, f"{platform} gespeichert; Neustart laeuft")
             except Exception as exc:
                 st.log("chat-plugins", "restart after settings failed", exc)
             try:

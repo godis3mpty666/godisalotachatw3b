@@ -1,5 +1,5 @@
 {
-  "version": "0.07",
+  "version": "0.08",
   "platform": "spotify",
   "title": "Connect Spotify",
   "steps": [
@@ -14,19 +14,19 @@
       "image": "assets/spotify/02_app_name_und_beschreibung_markieren.png"
     },
     {
-      "title": "Add the Redirect URI",
-      "text": "Add the Redirect URI from godisalotachat under Redirect URIs and save it.",
-      "image": "assets/spotify/03_redirect_uri_hinzufuegen_markieren.png"
+      "title": "Copy Client ID and Client Secret",
+      "text": "Copy the Client ID and Client Secret from your Spotify app.",
+      "image": "assets/spotify/04_spotify_client_id_secret_blur_markieren.png"
     },
     {
-      "title": "Copy the Client ID",
-      "text": "Copy the Client ID from your Spotify app.",
-      "image": "assets/spotify/04_client_id_kopieren_markieren.png"
+      "title": "Copy the Redirect URL",
+      "text": "Copy the Redirect URL from godisalotachat.",
+      "image": "assets/spotify/05_spotify_redirect_url_kopieren_markieren.png"
     },
     {
-      "title": "Copy the Client Secret",
-      "text": "Click View client secret and copy the Client Secret.",
-      "image": "assets/spotify/05_client_secret_anzeigen_und_kopieren_markieren.png"
+      "title": "Save the Spotify app",
+      "text": "Save the Spotify app settings.",
+      "image": "assets/spotify/06_spotify_save_markieren.png"
     },
     {
       "title": "Save and connect Spotify",

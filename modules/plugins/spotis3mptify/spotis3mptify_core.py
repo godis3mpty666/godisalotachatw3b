@@ -1291,6 +1291,7 @@ NOWPLAYING = {"ok": False, "provider": "spotify", "accent": "#1DB954", "is_playi
 _NP_LOCK = threading.Lock()
 _NP_LAST_ID = ""
 _NP_LAST_PROGRESS = 0
+_MAIN_UI_NP_CACHE = {"ts": 0.0, "last_sig": ""}
 
 def _download_to(path, url):
     if not url: return False
@@ -1405,6 +1406,71 @@ def _update_nowplaying_files(meta, download_cover: bool):
         
     except Exception as e:
         _log_throttled("WARN", "np_file_export_failed", f"nowplaying file export failed: {e}", 30)
+
+def _sync_nowplaying_from_main_ui(force=False):
+    """Keep the standalone overlay in step with the main dashboard source."""
+    global NOWPLAYING, _MAIN_UI_NP_CACHE
+    base = (MAIN_UI_BASE or "").strip().rstrip("/")
+    if not base:
+        return False
+    try:
+        parsed = urllib.parse.urlparse(base)
+        if int(parsed.port or 80) == int(PORT):
+            return False
+    except Exception:
+        pass
+    now = time.time()
+    if not force and now - float(_MAIN_UI_NP_CACHE.get("ts") or 0.0) < 0.75:
+        return False
+    _MAIN_UI_NP_CACHE["ts"] = now
+    try:
+        req = urllib.request.Request(base + "/api/nowplaying?_=" + str(int(now * 1000)), method="GET", headers={"Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=1.2) as resp:
+            data = json.loads(resp.read().decode("utf-8", "ignore") or "{}")
+    except Exception as e:
+        _log_throttled("WARN", "main_ui_np_sync_failed", f"main ui nowplaying sync failed: {e}", 30)
+        return False
+    if not isinstance(data, dict):
+        return False
+    title = str(data.get("title") or data.get("name") or "").strip()
+    if not title or title == "Kein Song aktiv":
+        return False
+    cover = str(data.get("cover") or data.get("cover_url") or "").strip()
+    provider = str(data.get("provider") or data.get("source") or "spotify").strip().lower()
+    if provider not in ("youtube", "ytmusic"):
+        provider = "spotify"
+    meta = {
+        "ok": True,
+        "provider": provider,
+        "accent": "#FF0033" if provider in ("youtube", "ytmusic") else "#1DB954",
+        "is_playing": bool(data.get("is_playing", data.get("active", True))),
+        "id": str(data.get("id") or data.get("video_id") or data.get("url") or cover or title),
+        "title": title,
+        "artist": str(data.get("artist") or data.get("artists") or "").strip(),
+        "album": str(data.get("album") or "").strip(),
+        "url": str(data.get("url") or "").strip(),
+        "progress_ms": int(data.get("progress_ms") or 0),
+        "duration_ms": int(data.get("duration_ms") or 0),
+        "covers": {"url_640": cover, "url_300": cover, "url_64": cover},
+    }
+    sig = "|".join([meta["provider"], meta["id"], meta["title"], meta["artist"], cover])
+    with _NP_LOCK:
+        current_cover = ((NOWPLAYING.get("covers") or {}).get("url_640") or "")
+        old_sig = "|".join([
+            str(NOWPLAYING.get("provider") or ""),
+            str(NOWPLAYING.get("id") or ""),
+            str(NOWPLAYING.get("title") or ""),
+            str(NOWPLAYING.get("artist") or ""),
+            current_cover,
+        ])
+        if not force and sig == old_sig:
+            return False
+        NOWPLAYING.update(meta)
+        NOWPLAYING["updated_at"] = _now()
+        NOWPLAYING["files"] = {"artist": _p_np_artist(), "title": _p_np_title(), "album": _p_np_album(), "combo": _p_np_combo(), "url": _p_np_url(), f"cover_{COVER_IMAGE_SIZE}": _p_cover(COVER_IMAGE_SIZE)}
+    _MAIN_UI_NP_CACHE["last_sig"] = sig
+    _update_nowplaying_files(meta, download_cover=bool(cover and cover != current_cover))
+    return True
 
 def _extract_nowplaying_from_state(st):
     item = st.get("item") or {}
@@ -1568,6 +1634,7 @@ def _overlay_current():
         yt_active_for_overlay = False
     if not yt_active_for_overlay:
         _promote_spotify_if_really_playing("overlay_current")
+        _sync_nowplaying_from_main_ui()
     with _NP_LOCK:
         cur = dict(NOWPLAYING)
     try:
@@ -3106,7 +3173,7 @@ function provider(){return String(np.provider||np.source||'spotify').toLowerCase
 function providerColor(){return state.colors?.[provider()]||(provider()==='youtube'?'#FF0033':'#1DB954')}
 function bindValue(el){if(el.bind==='artist')return provider()==='youtube'?(np.artist||'powered by spotis3mptify'):(np.artist||'');if(el.bind==='song'||el.bind==='title')return provider()==='youtube'?(np.title||np.song||'YouTube Music'):(np.title||np.song||'');if(el.bind==='providerColor')return providerColor();return el.text||''}
 function fitText(n,el,force=false){if(!n||el.type!=='text')return;let sp=n.querySelector('.textInner');if(!sp)return;let boxW=n.clientWidth||(+el.w||1), textW=sp.scrollWidth||1, overflow=Math.max(0,textW-boxW);let c=canvas();let mode=(el.marqueeMode&&el.marqueeMode!=='global')?el.marqueeMode:(c.marqueeMode||'bounce');let speed=+(el.marqueeSpeed||c.marqueeSpeed||45);if(!isFinite(speed)||speed<10)speed=45;let sig=[sp.textContent,boxW,textW,overflow,mode,speed,el.font,el.fontSize,el.align].join('|');if(!force&&sp.dataset.marqueeSig===sig)return;sp.dataset.marqueeSig=sig;sp.style.animation='none';sp.style.transform='translateX(0)';n.classList.remove('marquee-on');sp.style.setProperty('--box-width',boxW+'px');sp.style.setProperty('--text-width',textW+'px');sp.style.setProperty('--marquee-distance',overflow+'px');if(mode==='off'||overflow<2)return;n.classList.add('marquee-on');if(mode==='scroll-rtl'){let dur=Math.max(3,(textW+boxW)/speed);sp.style.animation='s3scrollrtl '+dur+'s linear infinite'}else if(mode==='scroll-ltr'){let dur=Math.max(3,(textW+boxW)/speed);sp.style.animation='s3scrollltr '+dur+'s linear infinite'}else{let dur=Math.max(2.2,overflow/speed);sp.style.animation='s3bounce '+dur+'s ease-in-out infinite alternate'}}
-function coverKey(){return String(np.cover_version||np.id||np.video_id||np.url||np.updated_at||'none')}
+function coverKey(){let c=np.covers||{};return String(c.url_640||c.url_300||c.url_64||np.thumbnail||np.cover||np.cover_url||np.video_id||np.id||'none')}
 function coverUrl(){let key=encodeURIComponent(coverKey());return '/cover/latest?size=640&s3v='+key}
 function applyStyle(n,el){n.style.left=(+el.x||0)+'px';n.style.top=(+el.y||0)+'px';n.style.width=(+el.w||80)+'px';n.style.height=(+el.h||30)+'px';n.style.opacity=el.opacity??1;n.style.zIndex=el.z||1;n.style.borderRadius=(+el.radius||0)+'px';if(el.type==='text'){n.style.fontFamily=el.font||'Arial';n.style.fontSize=(+el.fontSize||32)+'px';n.style.fontWeight=el.bold?'900':'400';n.style.color=el.color||'#fff';n.style.justifyContent=el.align==='center'?'center':el.align==='right'?'flex-end':'flex-start'}if(el.type==='shape'||el.type==='line'){n.style.background=el.bind==='providerColor'?providerColor():(el.color||'#fff')}} 
 function animate(n,fx){if(!fx||fx==='none')return;n.classList.remove('fx-'+fx);void n.offsetWidth;n.classList.add('fx-'+fx);setTimeout(()=>n.classList.remove('fx-'+fx),700)}
