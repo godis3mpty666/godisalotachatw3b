@@ -1,7 +1,7 @@
 {
   "id": "botalot",
   "name": "botalot ver. 1.22",
-  "version": "1.22",
+  "version": "0.06",
   "description": "AI chat bot for godisalotachat using central OpenAI and platform send paths.",
   "description_de": "KI-Chatbot für godisalotachat mit zentraler OpenAI- und Plattformanbindung.",
   "description_en": "AI chatbot for godisalotachat using the central OpenAI and platform connections.",

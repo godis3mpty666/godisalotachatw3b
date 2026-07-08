@@ -1,7 +1,7 @@
 {
   "id": "bridg3alot",
   "name": "bridg3alot ver. 1.0.2",
-  "version": "1.0.2",
+  "version": "0.05",
   "description": "Standalone cross-platform chat bridge for Twitch, TikTok, YouTube and Kick. Split out from botalot without changing bridge behavior.",
   "description_de": "Eigenständige plattformübergreifende Chatbrücke für Twitch, TikTok, YouTube und Kick.",
   "description_en": "Standalone cross-platform chat bridge for Twitch, TikTok, YouTube and Kick.",

@@ -76,7 +76,7 @@ _TWITCH_JOIN_BOT_LOGINS = {
 class TwitchChatPlugin(ThreadedPlugin):
     plugin_id = 'twitch_chat'
     display_name = 'Twitch Chat'
-    version = '1.8.1'
+    version = '0.08'
     description = 'Twitch chat via IRC with OAuth, viewer count polling, and inline emote rendering for Twitch/7TV/BTTV/FFZ.'
     def __init__(self) -> None:
         super().__init__()

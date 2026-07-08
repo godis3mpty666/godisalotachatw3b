@@ -106,7 +106,7 @@ def _now_ms():
 def _json_load(path: Path, default):
     try:
         if path.exists():
-            return json.loads(path.read_text(encoding="utf-8"))
+            return json.loads(path.read_text(encoding="utf-8-sig"))
     except Exception:
         pass
     return default
@@ -1004,6 +1004,13 @@ class WebbasedPluginManager:
         if not hasattr(module, "create_plugin"):
             raise RuntimeError(f"create_plugin fehlt: {plugin_id}")
         plugin = module.create_plugin()
+        manifest = _json_load(folder / "manifest.json", {})
+        manifest_version = str(manifest.get("version") or "").strip() if isinstance(manifest, dict) else ""
+        if manifest_version:
+            try:
+                setattr(plugin, "version", manifest_version)
+            except Exception:
+                pass
         self.state.plugin_instances[plugin_id] = plugin
         return plugin
 
