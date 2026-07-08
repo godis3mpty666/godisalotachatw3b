@@ -38,9 +38,9 @@ html,body{
 }
 .oMsg .p img{width:18px;height:18px;object-fit:contain;vertical-align:middle}
 .oMsg .chatText,.oMsg .chatText span{display:inline}
-.oMsg img{max-height:1.4em;width:auto;vertical-align:middle}
-.oMsg .chatEmote{display:inline-block;height:1.4em;max-height:1.4em;width:auto;vertical-align:-.25em;object-fit:contain}
-.oMsg .chatGift{display:inline-block;height:1.4em;max-height:1.4em;width:auto;vertical-align:-.25em;object-fit:contain}
+.oMsg img{max-height:1.68em;width:auto;vertical-align:middle}
+.oMsg .chatEmote{display:inline-block;height:1.68em;max-height:1.68em;width:auto;vertical-align:-.32em;object-fit:contain}
+.oMsg .chatGift{display:inline-block;height:1.68em;max-height:1.68em;width:auto;vertical-align:-.32em;object-fit:contain}
 .oMsg .t{font-family:var(--chat-font,"Segoe UI"),"Segoe UI Emoji","Apple Color Emoji","Noto Color Emoji",sans-serif;font-variant-emoji:emoji}
 .chatLikeHeart{display:inline-block;color:#ff2d55;font-family:Arial,sans-serif;font-weight:900;font-size:1.2em;line-height:1;vertical-align:-.05em}
 .disc{

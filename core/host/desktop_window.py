@@ -301,6 +301,7 @@ class DesktopTkOverlay:
         self._chat_media_images: dict[str, Any] = {}
         self._chat_media_failures: dict[str, float] = {}
         self._chat_media_retry_scheduled = False
+        self._chat_media_animation_scheduled = False
 
         self.canvas.bind("<ButtonPress-1>", self._pointer_down)
         self.canvas.bind("<B1-Motion>", self._pointer_move)
@@ -742,7 +743,7 @@ class DesktopTkOverlay:
             return None
         key = f"{source}:{size}"
         if key in self._chat_media_images:
-            return self._chat_media_images[key]
+            return self._chat_media_frame(self._chat_media_images[key])
         failed_at = self._chat_media_failures.get(key)
         if failed_at is not None and time.monotonic() - failed_at < 1.25:
             return None
@@ -753,28 +754,116 @@ class DesktopTkOverlay:
                 data = response.read(20 * 1024 * 1024 + 1)
             if not data or len(data) > 20 * 1024 * 1024:
                 raise ValueError('chat media is empty or too large')
+            if data[:6] in {b'GIF87a', b'GIF89a'}:
+                import base64
+                image = self._tk_gif_animation(base64.b64encode(data).decode('ascii'), size)
+                self._chat_media_images[key] = image
+                self._chat_media_failures.pop(key, None)
+                return self._chat_media_frame(image)
             try:
                 from io import BytesIO
-                from PIL import Image, ImageTk
-                pil = Image.open(BytesIO(data)).convert('RGBA')
-                ratio = min(float(size) / max(1, pil.width), float(size) / max(1, pil.height))
-                target = (max(1, int(pil.width * ratio)), max(1, int(pil.height * ratio)))
-                pil = pil.resize(target, Image.Resampling.LANCZOS)
-                image = ImageTk.PhotoImage(pil, master=self.root)
+                from PIL import Image, ImageSequence, ImageTk
+                pil = Image.open(BytesIO(data))
+                is_animated = bool(getattr(pil, "is_animated", False)) and int(getattr(pil, "n_frames", 1) or 1) > 1
+                if is_animated:
+                    frames = []
+                    durations = []
+                    for frame in ImageSequence.Iterator(pil):
+                        frame_rgba = frame.convert('RGBA')
+                        ratio = min(float(size) / max(1, frame_rgba.width), float(size) / max(1, frame_rgba.height))
+                        target = (max(1, int(frame_rgba.width * ratio)), max(1, int(frame_rgba.height * ratio)))
+                        frame_rgba = frame_rgba.resize(target, Image.Resampling.LANCZOS)
+                        frames.append(ImageTk.PhotoImage(frame_rgba, master=self.root))
+                        durations.append(max(40, min(1000, int(frame.info.get('duration') or pil.info.get('duration') or 100))))
+                        if len(frames) >= 180:
+                            break
+                    if frames:
+                        image = {
+                            'frames': frames,
+                            'durations': durations or [100] * len(frames),
+                            'total_ms': max(40, sum(durations or [100] * len(frames))),
+                            'started_at': time.monotonic(),
+                        }
+                    else:
+                        raise ValueError('animated chat media has no frames')
+                else:
+                    pil = pil.convert('RGBA')
+                    ratio = min(float(size) / max(1, pil.width), float(size) / max(1, pil.height))
+                    target = (max(1, int(pil.width * ratio)), max(1, int(pil.height * ratio)))
+                    pil = pil.resize(target, Image.Resampling.LANCZOS)
+                    image = ImageTk.PhotoImage(pil, master=self.root)
             except Exception:
                 import base64
-                image = self.tk.PhotoImage(data=base64.b64encode(data).decode('ascii'))
-                scale = max(1, (max(image.width(), image.height()) + size - 1) // size)
-                if scale > 1:
-                    image = image.subsample(scale, scale)
+                encoded = base64.b64encode(data).decode('ascii')
+                if data[:6] in {b'GIF87a', b'GIF89a'}:
+                    image = self._tk_gif_animation(encoded, size)
+                else:
+                    image = self.tk.PhotoImage(data=encoded)
+                if not isinstance(image, dict):
+                    scale = max(1, (max(image.width(), image.height()) + size - 1) // size)
+                    if scale > 1:
+                        image = image.subsample(scale, scale)
             self._chat_media_images[key] = image
             self._chat_media_failures.pop(key, None)
-            return image
+            return self._chat_media_frame(image)
         except Exception as exc:
             _log(f"Chat-Medium konnte nicht geladen werden: {source}: {exc}")
             self._chat_media_failures[key] = time.monotonic()
             self._schedule_chat_media_retry()
             return None
+
+    def _tk_gif_animation(self, encoded_data: str, size: int = 24):
+        frames = []
+        index = 0
+        while index < 180:
+            try:
+                frame = self.tk.PhotoImage(data=encoded_data, format=f'gif -index {index}')
+            except Exception:
+                break
+            scale = max(1, (max(frame.width(), frame.height()) + size - 1) // size)
+            if scale > 1:
+                frame = frame.subsample(scale, scale)
+            frames.append(frame)
+            index += 1
+        if len(frames) > 1:
+            return {
+                'frames': frames,
+                'durations': [100] * len(frames),
+                'total_ms': max(100, 100 * len(frames)),
+                'started_at': time.monotonic(),
+            }
+        if frames:
+            return frames[0]
+        raise ValueError('gif chat media has no readable frames')
+
+    def _chat_media_frame(self, image: Any):
+        if not isinstance(image, dict):
+            return image
+        frames = image.get('frames') if isinstance(image.get('frames'), list) else []
+        if not frames:
+            return None
+        durations = image.get('durations') if isinstance(image.get('durations'), list) else []
+        total_ms = max(40, int(image.get('total_ms') or sum(durations or [100] * len(frames)) or 100))
+        elapsed_ms = int((time.monotonic() - float(image.get('started_at') or time.monotonic())) * 1000) % total_ms
+        acc = 0
+        index = 0
+        for i, duration in enumerate(durations or [100] * len(frames)):
+            acc += max(40, int(duration or 100))
+            if elapsed_ms < acc:
+                index = min(i, len(frames) - 1)
+                break
+        self._schedule_chat_media_animation()
+        return frames[index]
+
+    def _schedule_chat_media_animation(self) -> None:
+        if self._chat_media_animation_scheduled:
+            return
+        self._chat_media_animation_scheduled = True
+        def tick() -> None:
+            self._chat_media_animation_scheduled = False
+            if any(isinstance(item, dict) for item in self._chat_media_images.values()):
+                self.render()
+        self.root.after(80, tick)
 
     def _schedule_chat_media_retry(self) -> None:
         if self._chat_media_retry_scheduled:
@@ -1185,7 +1274,7 @@ class DesktopTkOverlay:
             first_line_width = max(40, panel_right - first_text_x)
             next_line_width = max(40, panel_right - continuation_x)
             if has_visual_runs:
-                visual_size = max(22, int(font_size * 1.45))
+                visual_size = max(26, int(font_size * 1.74))
                 wrapped_runs = self._wrap_inline_runs(inline_runs, text_font, first_line_width, next_line_width, visual_size, max_lines=6)
                 for i, line_runs in enumerate(wrapped_runs):
                     rows.append((platform if i == 0 else "", user if i == 0 else "", "", platform, line_runs))
@@ -1210,7 +1299,7 @@ class DesktopTkOverlay:
                 px = continuation_x
             available = max(20, panel_right - px)
             if inline_runs:
-                self._draw_inline_runs(inline_runs, px, cy + line_h / 2, text_font, text_color, panel_right, max(22, int(font_size * 1.45)))
+                self._draw_inline_runs(inline_runs, px, cy + line_h / 2, text_font, text_color, panel_right, max(26, int(font_size * 1.74)))
             else:
                 safe_line = self._wrap_text_px(line, text_font, available, available, max_lines=1)[0]
                 self.canvas.create_text(px, cy + line_h / 2, text=safe_line, fill=text_color, font=text_font, anchor="w")
@@ -1246,7 +1335,7 @@ class DesktopTkOverlay:
                 px = x + 12 + self._draw_platform_badge(x + 12, cy + int((line_h - 24) / 2), platform) + 8
                 user = str(item.get("user") or "Unbekannt")
                 media_source = str(item.get("gift_image_url") or "").strip()
-                media_image = self._chat_media_image(media_source, size=max(22, int(font_size * 1.5))) if media_source else None
+                media_image = self._chat_media_image(media_source, size=max(26, int(font_size * 1.8))) if media_source else None
                 if media_image:
                     # The native canvas draws the actual image, so do not retain
                     # the HTML <img alt> fallback (which previously became "Heart").

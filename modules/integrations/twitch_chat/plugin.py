@@ -52,7 +52,7 @@ def _main_data_dir(plugin_name: str) -> Path:
     return Path(__file__).resolve().parent / 'data'
 DEFAULT_SCOPES = 'chat:read chat:edit user:read:chat user:write:chat moderator:read:chatters moderator:manage:banned_users moderator:manage:chat_messages channel:manage:broadcast'
 EMOTE_REFRESH_SECONDS = 900.0
-IMG_STYLE = 'display:inline;vertical-align:-0.10em;height:1em;max-height:1em;width:auto;margin:0;padding:0;border:0;'
+IMG_STYLE = 'display:inline;vertical-align:-0.16em;height:1.2em;max-height:1.2em;width:auto;margin:0;padding:0;border:0;'
 _TOKEN_RE = re.compile(r'(\s+)')
 _BOUNDARY_SPLIT_RE = re.compile(r'(\s+|[^\w]+)', re.UNICODE)
 _COLON_EMOTE_RE = re.compile(r':([A-Za-z0-9_]+):')
@@ -1436,11 +1436,20 @@ class TwitchChatPlugin(ThreadedPlugin):
                 if start < 0 or end < start or end >= len(message_text):
                     continue
                 token = message_text[start:end + 1]
+                named_emote = self._get_named_emote(token) or {}
+                animated = bool(named_emote.get('animated'))
+                emote_url = str(named_emote.get('url') or '').strip()
+                if not emote_url:
+                    # IRC gives us reliable emote IDs but no format metadata. Prefer
+                    # Twitch's animated endpoint here; static emotes still render,
+                    # while animated ones do not get frozen into the static variant.
+                    animated = True
+                    emote_url = self._twitch_emote_url(emote_id, animated=True)
                 results.append({
                     'start': start,
                     'end': end,
                     'token': token,
-                    'html': self._build_img_html((self._get_named_emote(token) or {}).get('url') or self._twitch_emote_url(emote_id), token, bool((self._get_named_emote(token) or {}).get('animated'))),
+                    'html': self._build_img_html(emote_url, token, animated),
                 })
         results.sort(key=lambda item: (item['start'], item['end']))
         return results
