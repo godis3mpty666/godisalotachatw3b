@@ -15,7 +15,7 @@ html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent
 .desktopMsgMeta b{min-width:0;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .desktopMsgText{display:inline;min-width:0;padding-left:0}
 .desktopMsgText span{display:inline}
-.desktopMsg img{max-height:1.68em;width:auto;vertical-align:middle}
+.desktopMsg img{max-height:2.18em;width:auto;vertical-align:middle}
 .desktopMsg .platformIcon img{width:18px;height:18px;max-height:none}
 #desktopHint{display:none;position:fixed;left:12px;bottom:12px;color:#b9c2e2}
 .editing #desktopHint{display:block}

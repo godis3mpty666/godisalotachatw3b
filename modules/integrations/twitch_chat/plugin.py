@@ -52,7 +52,7 @@ def _main_data_dir(plugin_name: str) -> Path:
     return Path(__file__).resolve().parent / 'data'
 DEFAULT_SCOPES = 'chat:read chat:edit user:read:chat user:write:chat moderator:read:chatters moderator:manage:banned_users moderator:manage:chat_messages channel:manage:broadcast'
 EMOTE_REFRESH_SECONDS = 900.0
-IMG_STYLE = 'display:inline;vertical-align:-0.16em;height:1.2em;max-height:1.2em;width:auto;margin:0;padding:0;border:0;'
+IMG_STYLE = 'display:inline;vertical-align:-0.42em;height:2.18em;max-height:2.18em;width:auto;margin:0;padding:0;border:0;'
 _TOKEN_RE = re.compile(r'(\s+)')
 _BOUNDARY_SPLIT_RE = re.compile(r'(\s+|[^\w]+)', re.UNICODE)
 _COLON_EMOTE_RE = re.compile(r':([A-Za-z0-9_]+):')
@@ -76,7 +76,7 @@ _TWITCH_JOIN_BOT_LOGINS = {
 class TwitchChatPlugin(ThreadedPlugin):
     plugin_id = 'twitch_chat'
     display_name = 'Twitch Chat'
-    version = '0.08'
+    version = '0.10'
     description = 'Twitch chat via IRC with OAuth, viewer count polling, and inline emote rendering for Twitch/7TV/BTTV/FFZ.'
     def __init__(self) -> None:
         super().__init__()
@@ -104,6 +104,7 @@ class TwitchChatPlugin(ThreadedPlugin):
         self._processed_join_names: set[str] = set()
         self._processed_join_seen_at: dict[str, float] = {}
         self._active_chatters: set[str] = set()
+        self._chatter_display_names: dict[str, str] = {}
         self._chatters_initialized = False
         self._last_chatters_poll = 0.0
         self._last_chatters_error_log = 0.0
@@ -140,7 +141,7 @@ class TwitchChatPlugin(ThreadedPlugin):
                 'key': 'viewer_join_poll_seconds',
                 'label': 'Join-Fallback Poll Sekunden',
                 'type': 'number',
-                'min': 3,
+                'min': 1,
                 'max': 60,
                 'help': 'Fragt Twitch Chatters als Fallback ab. Beim Start wird nur eine Baseline gemerkt; danach werden neue Chat-Betreter gemeldet.'
             },
@@ -152,7 +153,7 @@ class TwitchChatPlugin(ThreadedPlugin):
             'autoconnect': False,
             'viewer_count_enabled': True,
             'viewer_join_alerts': True,
-            'viewer_join_poll_seconds': 5,
+            'viewer_join_poll_seconds': 2,
         }
     def on_settings_button(self, key: str, host: PluginHost | None = None, parent: Any = None) -> bool:
         if key == 'test_twitch_sr_export':
@@ -726,20 +727,42 @@ class TwitchChatPlugin(ThreadedPlugin):
         except Exception:
             return ''
 
-    def _emit_viewer_join_once(self, host: PluginHost, channel: str, joined_name: str) -> None:
-        joined_name = (joined_name or '').strip()
-        joined_key = joined_name.lower()
+    def _remember_chatter_name(self, login: str, display_name: str = '') -> str:
+        key = self._clean_username(login or display_name)
+        name = str(display_name or login or '').strip()
+        if key and name:
+            self._chatter_display_names[key] = name
+        return key
+
+    def _display_name_for_chatter(self, login: str, fallback: str = '') -> str:
+        key = self._clean_username(login or fallback)
+        if key:
+            cached = str(self._chatter_display_names.get(key) or '').strip()
+            if cached:
+                return cached
+        return str(fallback or login or key).strip()
+
+    def _emit_viewer_join_once(self, host: PluginHost, channel: str, joined_name: str, joined_login: str = '') -> None:
+        joined_key = self._remember_chatter_name(joined_login or joined_name, joined_name)
         if not joined_key:
             return
         self._active_chatters.add(joined_key)
 
-        if joined_key in _TWITCH_JOIN_BOT_LOGINS or self._is_own_twitch_account(joined_key, channel):
+        if joined_key in _TWITCH_JOIN_BOT_LOGINS:
             self._processed_join_names.add(joined_key)
             self._processed_join_seen_at[joined_key] = time.monotonic()
             return
+        if self._is_own_twitch_account(joined_key, channel):
+            self._processed_join_names.add(joined_key)
+            self._processed_join_seen_at[joined_key] = time.monotonic()
+            try:
+                display_name = self._display_name_for_chatter(joined_key, joined_name)
+                host.log(self.plugin_id, f'Own Twitch join suppressed: {display_name} ({joined_key})')
+            except Exception:
+                pass
+            return
 
-        # Mainaccount und der eigene Botaccount sollen sichtbar bleiben, weil das
-        # beim Testen hilft. Service-Bots werden oben weiterhin unterdrückt.
+        # Eigene Accounts werden oben geloggt, aber nicht als Alert angezeigt.
         now = time.monotonic()
         last_seen = self._processed_join_seen_at.get(joined_key, 0.0)
         if joined_key in self._processed_join_names and (now - last_seen) < 300.0:
@@ -751,7 +774,8 @@ class TwitchChatPlugin(ThreadedPlugin):
             self._processed_join_names = set(keep)
             self._processed_join_seen_at = {k: self._processed_join_seen_at.get(k, now) for k in keep}
 
-        self._emit_alert(host, channel, joined_name, 'ist dem Stream beigetreten', 'twitch_join')
+        display_name = self._display_name_for_chatter(joined_key, joined_name)
+        self._emit_alert(host, channel, display_name, 'ist dem Stream beigetreten', 'twitch_join')
 
     def _is_own_twitch_account(self, username: str, channel: str = '') -> bool:
         key = self._clean_username(username)
@@ -779,14 +803,11 @@ class TwitchChatPlugin(ThreadedPlugin):
         }
         return key in own
 
-    def _mark_viewer_seen_without_alert(self, username: str) -> None:
+    def _mark_active_chatter(self, username: str) -> None:
         key = self._clean_username(username)
         if not key:
             return
-        now = time.monotonic()
         self._active_chatters.add(key)
-        self._processed_join_names.add(key)
-        self._processed_join_seen_at[key] = now
 
     def _handle_join_event(self, host: PluginHost, settings: dict, channel: str, login_username: str, line: str) -> None:
         if not self._settings_bool(settings.get('viewer_join_alerts'), True):
@@ -795,6 +816,24 @@ class TwitchChatPlugin(ThreadedPlugin):
         if not joined_name:
             return
         self._emit_viewer_join_once(host, channel, joined_name)
+
+    def _handle_part_event(self, line: str, channel: str) -> None:
+        raw = (line or '').strip()
+        if not raw or ' PART ' not in raw:
+            return
+        try:
+            _prefix, rest = raw[1:].split(' ', 1) if raw.startswith(':') else ('', raw)
+            nick = self._clean_username(_prefix.split('!', 1)[0]) if _prefix else ''
+            parts = rest.split()
+            if len(parts) < 2 or parts[0].upper() != 'PART':
+                return
+            parted_channel = parts[1].lstrip('#').strip().lower()
+            if parted_channel and parted_channel != (channel or '').strip().lower():
+                return
+            if nick:
+                self._active_chatters.discard(nick)
+        except Exception:
+            return
 
     def _handle_test_alert_command(self, host: PluginHost, channel: str, sender: str, message_text: str) -> bool:
         raw = self._normalize_chat_text(message_text)
@@ -910,15 +949,21 @@ class TwitchChatPlugin(ThreadedPlugin):
         moderator_id = self._moderator_id_for_chatters(settings, cache, channel)
         if not moderator_id:
             raise RuntimeError('Moderator-ID fuer Twitch Chatters fehlt.')
-        qs = urllib.parse.urlencode({
-            'broadcaster_id': broadcaster_id,
-            'moderator_id': moderator_id,
-            'first': 1000,
-        })
-        data = self._helix_get(f'{HELIX_CHATTERS_URL}?{qs}', headers)
-        rows = data.get('data') if isinstance(data, dict) else None
         out: dict[str, str] = {}
-        if isinstance(rows, list):
+        after = ''
+        while True:
+            params = {
+                'broadcaster_id': broadcaster_id,
+                'moderator_id': moderator_id,
+                'first': 1000,
+            }
+            if after:
+                params['after'] = after
+            qs = urllib.parse.urlencode(params)
+            data = self._helix_get(f'{HELIX_CHATTERS_URL}?{qs}', headers)
+            rows = data.get('data') if isinstance(data, dict) else None
+            if not isinstance(rows, list):
+                break
             for row in rows:
                 if not isinstance(row, dict):
                     continue
@@ -926,15 +971,20 @@ class TwitchChatPlugin(ThreadedPlugin):
                 name = str(row.get('user_name') or row.get('user_login') or '').strip()
                 if login and name:
                     out[login] = name
+                    self._remember_chatter_name(login, name)
+            pagination = data.get('pagination') if isinstance(data, dict) else None
+            after = str((pagination or {}).get('cursor') or '').strip() if isinstance(pagination, dict) else ''
+            if not after:
+                break
         return out
 
     def _maybe_poll_join_fallback(self, host: PluginHost, settings: dict, cache: dict, channel: str, *, force: bool = False) -> None:
         if not self._settings_bool(settings.get('viewer_join_alerts'), True):
             return
         try:
-            poll_seconds = max(3.0, min(60.0, float(settings.get('viewer_join_poll_seconds') or 5)))
+            poll_seconds = max(1.0, min(60.0, float(settings.get('viewer_join_poll_seconds') or 2)))
         except Exception:
-            poll_seconds = 5.0
+            poll_seconds = 2.0
         now = time.monotonic()
         if not force and (now - self._last_chatters_poll) < poll_seconds:
             return
@@ -943,13 +993,10 @@ class TwitchChatPlugin(ThreadedPlugin):
         current = set(chatters.keys())
         if not self._chatters_initialized:
             self._active_chatters = set(current)
-            for key in current:
-                self._processed_join_names.add(key)
-                self._processed_join_seen_at[key] = now
             self._chatters_initialized = True
             return
         for key in sorted(current - self._active_chatters):
-            self._emit_viewer_join_once(host, channel, chatters.get(key) or key)
+            self._emit_viewer_join_once(host, channel, chatters.get(key) or key, key)
         self._active_chatters = current
 
     def _log_join_fallback_warning(self, host: PluginHost, exc: Exception) -> None:
@@ -1083,12 +1130,12 @@ class TwitchChatPlugin(ThreadedPlugin):
         raw = socket.create_connection((IRC_HOST, IRC_PORT_SSL), timeout=10)
         sock = ssl.create_default_context().wrap_socket(raw, server_hostname=IRC_HOST)
         sock.settimeout(2.0)
-        sock.sendall(b'CAP REQ :twitch.tv/tags twitch.tv/commands twitch.tv/membership\r\n')
         sock.sendall(f'PASS oauth:{self._clean_token(token)}\r\n'.encode('utf-8'))
         sock.sendall(f'NICK {username}\r\n'.encode('utf-8'))
+        sock.sendall(b'CAP REQ :twitch.tv/tags twitch.tv/commands twitch.tv/membership\r\n')
         sock.sendall(f'JOIN #{channel}\r\n'.encode('utf-8'))
         return sock
-    def _handshake(self, sock: socket.socket) -> tuple[bool, str]:
+    def _handshake(self, sock: socket.socket) -> tuple[bool, str, str]:
         buffer = ''
         deadline = time.time() + 12.0
         while time.time() < deadline:
@@ -1107,16 +1154,16 @@ class TwitchChatPlugin(ThreadedPlugin):
                         continue
                     low = line.lower()
                     if 'authentication failed' in low or 'improperly formatted auth' in low or 'login authentication failed' in low:
-                        return False, 'IRC login failed. Check token / OAuth app.'
+                        return False, 'IRC login failed. Check token / OAuth app.', ''
                     if 'msg_channel_suspended' in low:
-                        return False, 'Channel is suspended.'
+                        return False, 'Channel is suspended.', ''
                     if ' no such nick/channel' in low or ' no such channel' in low:
-                        return False, 'Channel not found.'
+                        return False, 'Channel not found.', ''
                     if ' 001 ' in line:
-                        return True, 'IRC connected.'
+                        return True, 'IRC connected.', buffer
             except socket.timeout:
                 continue
-        return False, 'Timed out while connecting to Twitch IRC.'
+        return False, 'Timed out while connecting to Twitch IRC.', ''
     def _get_named_emote(self, token: str) -> dict[str, Any] | None:
         raw = (token or '').strip()
         if not raw:
@@ -1529,7 +1576,7 @@ class TwitchChatPlugin(ThreadedPlugin):
         sock = None
         try:
             sock = self._connect_socket(username, token, channel)
-            ok2, msg2 = self._handshake(sock)
+            ok2, msg2, _buffer = self._handshake(sock)
             if ok2:
                 return True, f'{auth_msg} {msg2} | {metric_text}'
             return False, msg2
@@ -1608,6 +1655,7 @@ class TwitchChatPlugin(ThreadedPlugin):
         self._processed_usernotice_ids = set()
         self._processed_join_names = set()
         self._processed_join_seen_at = {}
+        self._chatter_display_names = {}
         def load_emotes() -> None:
             self._emote_load_in_progress = True
             try:
@@ -1642,9 +1690,10 @@ class TwitchChatPlugin(ThreadedPlugin):
                     raise RuntimeError('Missing username or access token.')
                 host.set_status(self.plugin_id, PluginStatus('connecting', f'Connecting to #{channel}...'))
                 self._sock = self._connect_socket(username, token, channel)
-                ok2, message = self._handshake(self._sock)
+                ok2, message, handshake_buffer = self._handshake(self._sock)
                 if not ok2:
                     raise RuntimeError(message)
+                buffer = handshake_buffer or ''
                 reconnect_delay = 3.0
                 if not self._third_party_emotes_loaded_for and not self._emote_load_in_progress:
                     threading.Thread(target=load_emotes, daemon=True, name='twitch-emote-loader').start()
@@ -1663,15 +1712,16 @@ class TwitchChatPlugin(ThreadedPlugin):
                             self._maybe_poll_join_fallback(host, settings, cache, channel)
                         except Exception as exc:
                             self._log_join_fallback_warning(host, exc)
-                        data = self._sock.recv(4096)
-                        if not data:
-                            empty_reads += 1
-                            if empty_reads >= 3:
-                                raise ConnectionError('Twitch IRC closed the socket.')
-                            time.sleep(0.2)
-                            continue
-                        empty_reads = 0
-                        buffer += data.decode('utf-8', errors='ignore')
+                        if '\r\n' not in buffer:
+                            data = self._sock.recv(4096)
+                            if not data:
+                                empty_reads += 1
+                                if empty_reads >= 3:
+                                    raise ConnectionError('Twitch IRC closed the socket.')
+                                time.sleep(0.2)
+                                continue
+                            empty_reads = 0
+                            buffer += data.decode('utf-8', errors='ignore')
                         while '\r\n' in buffer:
                             line, buffer = buffer.split('\r\n', 1)
                             if not line:
@@ -1690,6 +1740,12 @@ class TwitchChatPlugin(ThreadedPlugin):
                                 except Exception as exc:
                                     host.log(self.plugin_id, f'JOIN parse warning: {exc}')
                                 continue
+                            if ' PART ' in line:
+                                try:
+                                    self._handle_part_event(line, channel)
+                                except Exception as exc:
+                                    host.log(self.plugin_id, f'PART parse warning: {exc}')
+                                continue
                             if ' USERNOTICE ' in line:
                                 try:
                                     tags, _line_no_tags = self._parse_irc_tags(line)
@@ -1703,7 +1759,7 @@ class TwitchChatPlugin(ThreadedPlugin):
                                     prefix, rest = line_no_tags[1:].split(' ', 1)
                                     sender = prefix.split('!', 1)[0]
                                     display_name = self._unescape_tag(tags.get('display-name') or sender) or sender
-                                    self._mark_viewer_seen_without_alert(sender)
+                                    self._mark_active_chatter(sender)
                                     message_text = rest.split(' :', 1)[1] if ' :' in rest else ''
                                     message_text = self._normalize_chat_text(message_text)
                                     bits = self._to_int(tags.get('bits'))

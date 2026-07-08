@@ -17,8 +17,8 @@ html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent
 .desktopMsgUser{font-weight:700;white-space:nowrap;margin-right:6px}
 .desktopMsgText{display:inline;white-space:pre-wrap;overflow-wrap:normal;word-break:normal;word-wrap:normal;hyphens:none}
 .desktopMsgText span{display:inline;white-space:inherit;overflow-wrap:inherit;word-break:inherit}
-.desktopMsg img,.desktopAlert img{max-height:1.68em;width:auto;vertical-align:middle}
-.desktopMsg .chatEmote,.desktopAlert .chatEmote,.desktopAlert .chatGift{display:inline-block;height:1.68em;max-height:1.68em;width:auto;vertical-align:-.32em;object-fit:contain}
+.desktopMsg img,.desktopAlert img{max-height:2.18em;width:auto;vertical-align:middle}
+.desktopMsg .chatEmote,.desktopAlert .chatEmote,.desktopAlert .chatGift{display:inline-block;height:2.18em;max-height:2.18em;width:auto;vertical-align:-.42em;object-fit:contain}
 .desktopMsg .platformIcon img{width:18px;height:18px;max-height:none}
 .desktopMsgText{font-family:var(--chat-font),"Segoe UI Emoji","Apple Color Emoji","Noto Color Emoji",sans-serif;font-variant-emoji:emoji}
 .desktopMsgLongToken{overflow-wrap:anywhere;word-break:break-word}

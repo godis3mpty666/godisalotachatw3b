@@ -1274,7 +1274,7 @@ class DesktopTkOverlay:
             first_line_width = max(40, panel_right - first_text_x)
             next_line_width = max(40, panel_right - continuation_x)
             if has_visual_runs:
-                visual_size = max(26, int(font_size * 1.74))
+                visual_size = max(34, int(font_size * 2.26))
                 wrapped_runs = self._wrap_inline_runs(inline_runs, text_font, first_line_width, next_line_width, visual_size, max_lines=6)
                 for i, line_runs in enumerate(wrapped_runs):
                     rows.append((platform if i == 0 else "", user if i == 0 else "", "", platform, line_runs))
@@ -1299,7 +1299,7 @@ class DesktopTkOverlay:
                 px = continuation_x
             available = max(20, panel_right - px)
             if inline_runs:
-                self._draw_inline_runs(inline_runs, px, cy + line_h / 2, text_font, text_color, panel_right, max(26, int(font_size * 1.74)))
+                self._draw_inline_runs(inline_runs, px, cy + line_h / 2, text_font, text_color, panel_right, max(34, int(font_size * 2.26)))
             else:
                 safe_line = self._wrap_text_px(line, text_font, available, available, max_lines=1)[0]
                 self.canvas.create_text(px, cy + line_h / 2, text=safe_line, fill=text_color, font=text_font, anchor="w")
@@ -1335,7 +1335,7 @@ class DesktopTkOverlay:
                 px = x + 12 + self._draw_platform_badge(x + 12, cy + int((line_h - 24) / 2), platform) + 8
                 user = str(item.get("user") or "Unbekannt")
                 media_source = str(item.get("gift_image_url") or "").strip()
-                media_image = self._chat_media_image(media_source, size=max(26, int(font_size * 1.8))) if media_source else None
+                media_image = self._chat_media_image(media_source, size=max(34, int(font_size * 2.34))) if media_source else None
                 if media_image:
                     # The native canvas draws the actual image, so do not retain
                     # the HTML <img alt> fallback (which previously became "Heart").
