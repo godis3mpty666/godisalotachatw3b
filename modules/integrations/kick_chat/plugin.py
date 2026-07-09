@@ -1575,6 +1575,7 @@ class KickChatPlugin(ThreadedPlugin):
             'emotes': emotes,
             'fragments': fragments,
             'parts': fragments,
+            'raw': item,
         })
 
     def _handle_ws_message(self, raw: str, host: PluginHost, channel: str, seen: dict[str, float], ws_send=None):

@@ -27,6 +27,8 @@ HELIX_FOLLOWERS_URL = 'https://api.twitch.tv/helix/channels/followers'
 HELIX_CHATTERS_URL = 'https://api.twitch.tv/helix/chat/chatters'
 HELIX_CHANNEL_EMOTES_URL = 'https://api.twitch.tv/helix/chat/emotes?broadcaster_id={channel_id}'
 HELIX_GLOBAL_EMOTES_URL = 'https://api.twitch.tv/helix/chat/emotes/global'
+HELIX_GLOBAL_BADGES_URL = 'https://api.twitch.tv/helix/chat/badges/global'
+HELIX_CHANNEL_BADGES_URL = 'https://api.twitch.tv/helix/chat/badges?broadcaster_id={channel_id}'
 BTTV_GLOBAL_URL = 'https://api.betterttv.net/3/cached/emotes/global'
 BTTV_USER_URL = 'https://api.betterttv.net/3/cached/users/twitch/{channel_id}'
 FFZ_GLOBAL_URL = 'https://api.frankerfacez.com/v1/set/global'
@@ -94,6 +96,9 @@ class TwitchChatPlugin(ThreadedPlugin):
         self._third_party_emotes_loaded_for: str = ''
         self._third_party_emotes_loaded_at: float = 0.0
         self._emote_load_in_progress: bool = False
+        self._badge_images: dict[tuple[str, str], dict[str, str]] = {}
+        self._badges_loaded_for: str = ''
+        self._badges_loaded_at: float = 0.0
         self._image_data_uri_cache: dict[str, str] = {}
         self._media_dir = _main_data_dir('twitch_chat') / 'media'
         self._media_downloads: set[str] = set()
@@ -475,9 +480,9 @@ class TwitchChatPlugin(ThreadedPlugin):
         finally:
             with self._media_lock:
                 self._media_downloads.discard(url)
-    def _http_get_json(self, url: str, headers: dict[str, str] | None = None) -> Any:
+    def _http_get_json(self, url: str, headers: dict[str, str] | None = None, timeout: float = 20) -> Any:
         req = urllib.request.Request(url, headers=headers or {}, method='GET')
-        with urllib.request.urlopen(req, timeout=20) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             txt = resp.read().decode('utf-8', errors='ignore')
         return json.loads(txt or '{}')
     def _http_json(self, url: str, *, method='GET', data: dict | None = None, headers: dict | None = None) -> dict:
@@ -1238,6 +1243,115 @@ class TwitchChatPlugin(ThreadedPlugin):
                 animated = isinstance(fmt, list) and 'animated' in [str(x).strip().lower() for x in fmt]
                 if code and url_value:
                     self._remember_official_emote(code, url_value, 'twitch', animated)
+    def _pick_twitch_badge_url(self, row: dict[str, Any]) -> str:
+        for key in ('image_url_4x', 'image_url_2x', 'image_url_1x'):
+            value = row.get(key) if isinstance(row, dict) else ''
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return ''
+    def _store_twitch_badge_rows(self, data: Any) -> int:
+        sets = data.get('badge_sets') if isinstance(data, dict) else None
+        count = 0
+        if isinstance(sets, dict):
+            rows = [{'set_id': set_id, 'versions': list((set_data.get('versions') or {}).values())} for set_id, set_data in sets.items() if isinstance(set_data, dict)]
+        else:
+            rows = data.get('data') if isinstance(data, dict) else None
+        if not isinstance(rows, list):
+            return 0
+        for set_data in rows:
+            if not isinstance(set_data, dict):
+                continue
+            set_id = str(set_data.get('set_id') or set_data.get('id') or '').strip()
+            versions = set_data.get('versions') if isinstance(set_data, dict) else None
+            if not isinstance(versions, dict):
+                if not isinstance(versions, list):
+                    continue
+                version_items = [(str(row.get('id') or ''), row) for row in versions if isinstance(row, dict)]
+            else:
+                version_items = [(str(version_id), row) for version_id, row in versions.items()]
+            for version_id, row in version_items:
+                if not isinstance(row, dict):
+                    continue
+                version_id = str(row.get('id') or version_id or '').strip()
+                url = self._pick_twitch_badge_url(row)
+                if not set_id or not version_id or not url:
+                    continue
+                title = str(row.get('title') or row.get('description') or set_id or 'Twitch Badge').strip()
+                self._badge_images[(str(set_id), str(version_id))] = {
+                    'kind': str(set_id),
+                    'title': title,
+                    'url': url,
+                }
+                count += 1
+        return count
+    def _ensure_twitch_badges(self, host: PluginHost | None, channel_id: str, headers: dict[str, str] | None = None) -> None:
+        now = time.time()
+        if self._badges_loaded_for == channel_id and (now - self._badges_loaded_at) < 3600:
+            return
+        if not self._badge_images and (now - self._badges_loaded_at) < 30:
+            return
+        total = 0
+        headers = dict(headers or {})
+        for url in (HELIX_GLOBAL_BADGES_URL, HELIX_CHANNEL_BADGES_URL.format(channel_id=urllib.parse.quote(channel_id)) if channel_id else ''):
+            if not url:
+                continue
+            try:
+                total += self._store_twitch_badge_rows(self._http_get_json(url, headers=headers, timeout=5))
+            except Exception as exc:
+                if host is not None:
+                    try:
+                        host.log(self.plugin_id, f'Twitch badge fetch failed: {exc}')
+                    except Exception:
+                        pass
+        self._badges_loaded_at = now
+        if total:
+            self._badges_loaded_for = channel_id
+        if host is not None and total:
+            try:
+                host.log(self.plugin_id, f'Loaded Twitch badge images for channel {channel_id or "global"}: {total}')
+            except Exception:
+                pass
+    def _badges_from_twitch_tags(self, tags: dict[str, str], host: PluginHost | None = None, headers: dict[str, str] | None = None) -> list[dict[str, str]]:
+        rows: list[dict[str, str]] = []
+        seen: set[tuple[str, str]] = set()
+        room_id = str(tags.get('room-id') or '').strip()
+        needs_load = bool(str(tags.get('badges') or '').strip()) and not self._badge_images
+        if room_id and (needs_load or self._badges_loaded_for not in {'', room_id}):
+            try:
+                self._ensure_twitch_badges(host, room_id, headers)
+            except Exception:
+                pass
+        for part in str(tags.get('badges') or '').split(','):
+            if '/' not in part:
+                continue
+            set_id, version_id = [p.strip() for p in part.split('/', 1)]
+            key = (set_id, version_id)
+            if not set_id or not version_id or key in seen:
+                continue
+            seen.add(key)
+            item = self._badge_images.get(key)
+            if item is None:
+                item = self._fallback_twitch_badge(set_id, version_id)
+            if item and item.get('url'):
+                rows.append(dict(item))
+        return rows
+    def _fallback_twitch_badge(self, set_id: str, version_id: str) -> dict[str, str] | None:
+        candidates = [(ver, item) for (sid, ver), item in self._badge_images.items() if sid == set_id and item.get('url')]
+        if not candidates:
+            return None
+        try:
+            wanted = int(version_id)
+            numeric = sorted((int(ver), item) for ver, item in candidates if str(ver).isdigit())
+            lower = [item for ver, item in numeric if ver <= wanted]
+            if lower:
+                return lower[-1]
+            if numeric:
+                return numeric[0][1]
+        except Exception:
+            pass
+        for _ver, item in candidates:
+            return item
+        return None
     def _remember_emote(self, name: str, url: str, source: str, animated: bool = False) -> None:
         key = (name or '').strip()
         url = (url or '').strip()
@@ -1668,6 +1782,7 @@ class TwitchChatPlugin(ThreadedPlugin):
                 broadcaster_id, _ = self._resolve_broadcaster(settings, cache, channel)
                 headers = self._helix_headers(settings, cache)
                 self._ensure_third_party_emotes(host, headers, broadcaster_id)
+                self._ensure_twitch_badges(host, broadcaster_id, headers)
             except Exception as exc:
                 host.log(self.plugin_id, f'Emote cache warning: {exc}')
             finally:
@@ -1701,7 +1816,7 @@ class TwitchChatPlugin(ThreadedPlugin):
                     raise RuntimeError(message)
                 buffer = handshake_buffer or ''
                 reconnect_delay = 3.0
-                if not self._third_party_emotes_loaded_for and not self._emote_load_in_progress:
+                if (not self._third_party_emotes_loaded_for or not self._badges_loaded_for) and not self._emote_load_in_progress:
                     threading.Thread(target=load_emotes, daemon=True, name='twitch-emote-loader').start()
                 self._current_channel = channel
                 self._maybe_poll_metrics(host, settings, cache, channel, force=True)
@@ -1777,6 +1892,7 @@ class TwitchChatPlugin(ThreadedPlugin):
                                     if self._looks_like_placeholder_chat(message_text):
                                         continue
                                     overlay_html = self._build_overlay_html(message_text, tags)
+                                    chat_badges = self._badges_from_twitch_tags(tags, host, self._helix_headers(settings, cache))
                                     host.emit_message(self.plugin_id, {
                                         'platform': 'twitch',
                                         'username': display_name,
@@ -1789,6 +1905,7 @@ class TwitchChatPlugin(ThreadedPlugin):
                                         'message_id': tags.get('id') or '',
                                         'user_id': tags.get('user-id') or '',
                                         'raw_tags': dict(tags),
+                                        'badges': chat_badges,
                                         'message_type': 'chat',
                                         'type': 'chat',
                                         # Normale Chatnachrichten bleiben Chat fuer Bridge/AI/Desktop,

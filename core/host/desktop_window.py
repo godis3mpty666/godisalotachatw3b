@@ -1105,6 +1105,42 @@ class DesktopTkOverlay:
                 width += (image.width() + 3) if image else font.measure(value)
         return width
 
+    def _chat_badge_urls(self, msg: dict[str, Any]) -> list[str]:
+        badges = msg.get("badges") if isinstance(msg, dict) else None
+        if not isinstance(badges, list):
+            return []
+        urls: list[str] = []
+        for badge in badges[:12]:
+            if not isinstance(badge, dict):
+                continue
+            url = str(badge.get("url") or "").strip()
+            if url:
+                urls.append(url)
+        return urls
+
+    def _chat_badges_width(self, urls: list[str], size: int) -> int:
+        width = 0
+        for url in urls:
+            image = self._chat_media_image(url, size=size)
+            if image:
+                width += image.width() + 4
+        return width
+
+    def _draw_chat_badges(self, urls: list[str], x: int, center_y: float, size: int, right: int) -> int:
+        px = x
+        for url in urls:
+            if px >= right:
+                break
+            image = self._chat_media_image(url, size=size)
+            if image:
+                self.canvas.create_image(px + int(image.width() / 2), center_y, image=image, anchor="center")
+                px += image.width() + 4
+            else:
+                # Badge images are optional; keep chat readable while the image
+                # cache retries in the background.
+                px += 0
+        return max(0, px - x)
+
     def _wrap_inline_runs(self, runs: list[tuple[str, str]], font: Any, first_px: int, next_px: int, size: int, max_lines: int = 6) -> list[list[tuple[str, str]]]:
         lines: list[list[tuple[str, str]]] = [[]]
         used = 0
@@ -1395,7 +1431,7 @@ class DesktopTkOverlay:
         # Die Badge ist 24px hoch. Mit mindestens 34px pro Zeile bleibt sichtbar
         # Luft zwischen den farbigen Bereichen, auch bei kleiner Schrift.
         line_h = max(34, int(font_size * 1.8))
-        rows: list[tuple[str, str, str, str, list[tuple[str, str]] | None]] = []
+        rows: list[tuple[str, str, str, str, list[str], list[tuple[str, str]] | None]] = []
         text_font = self.tkfont.Font(family=font_family, size=font_size)
         name_font = self.tkfont.Font(family=font_family, size=font_size, weight="bold")
         left_pad = 12
@@ -1405,31 +1441,36 @@ class DesktopTkOverlay:
         for msg in messages:
             platform = str(msg.get("platform") or "")
             user = str(msg.get("user") or "?")
+            badge_urls = self._chat_badge_urls(msg)
+            chat_badge_size = max(11, int(font_size * .95))
+            chat_badges_w = self._chat_badges_width(badge_urls, chat_badge_size)
             text = _strip_html(msg.get("html")) or str(msg.get("text") or "")
             inline_runs = self._inline_runs(msg.get("html"), str(msg.get("text") or ""))
             has_visual_runs = any(kind in {'image', 'emoji'} for kind, _value in inline_runs)
             badge_w = 22
-            first_text_x = x + left_pad + badge_w + 8 + name_font.measure(user) + 10
+            first_text_x = x + left_pad + badge_w + 8 + chat_badges_w + name_font.measure(user) + 10
             first_line_width = max(40, panel_right - first_text_x)
             next_line_width = max(40, panel_right - continuation_x)
             if has_visual_runs:
                 visual_size = max(34, int(font_size * 2.26))
                 wrapped_runs = self._wrap_inline_runs(inline_runs, text_font, first_line_width, next_line_width, visual_size, max_lines=6)
                 for i, line_runs in enumerate(wrapped_runs):
-                    rows.append((platform if i == 0 else "", user if i == 0 else "", "", platform, line_runs))
+                    rows.append((platform if i == 0 else "", user if i == 0 else "", "", platform, badge_urls if i == 0 else [], line_runs))
             else:
                 wrapped = self._wrap_text_px(text, text_font, first_line_width, next_line_width, max_lines=6)
                 for i, line in enumerate(wrapped):
-                    rows.append((platform if i == 0 else "", user if i == 0 else "", line, platform, None))
+                    rows.append((platform if i == 0 else "", user if i == 0 else "", line, platform, badge_urls if i == 0 else [], None))
         max_rows = max(1, int((h - 24) / line_h))
         rows = rows[-max_rows:]
         cy = y + h - 12 - len(rows) * line_h
-        for platform, user, line, color_platform, inline_runs in rows:
+        for platform, user, line, color_platform, badge_urls, inline_runs in rows:
             px = x + left_pad
             if platform:
                 badge_y = cy + int((line_h - 24) / 2)
                 bw = self._draw_platform_badge(px, badge_y, platform)
                 px += bw + 8
+                chat_badge_size = max(11, int(font_size * .95))
+                px += self._draw_chat_badges(badge_urls, px, cy + line_h / 2, chat_badge_size, panel_right)
                 user_runs = self._inline_runs(None, user)
                 user_size = max(22, int(font_size * 1.35))
                 self._draw_inline_runs(user_runs, px, cy + line_h / 2, name_font, _user_color(platform, user), panel_right, user_size)

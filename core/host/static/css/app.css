@@ -373,6 +373,20 @@ h2{
   vertical-align:middle;
 }
 .chatPlatform img{width:18px;height:18px;object-fit:contain;display:block}
+.chatRoleBadge{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  margin-right:4px;
+  vertical-align:middle;
+}
+.chatRoleBadge img{
+  height:.92em;
+  max-height:.92em;
+  width:auto;
+  object-fit:contain;
+  display:block;
+}
 .sendRow{
   display:flex;
   gap:clamp(6px,1vw,10px);

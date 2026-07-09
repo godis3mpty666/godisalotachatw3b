@@ -87,6 +87,49 @@ DEFAULT_REDIRECTS = {
 
 CALLBACK_PORTS = (5173, 17564, 17566, 17865)
 
+def _normalize_chat_badges(payload: dict) -> list[dict]:
+    badges: list[dict] = []
+    seen: set[str] = set()
+
+    def add(kind: str, title: str = "", url: str = "") -> None:
+        clean_url = str(url or "").strip()[:500]
+        if not clean_url:
+            return
+        key = re.sub(r"[^a-z0-9_-]+", "_", str(kind or title or "badge").strip().lower()).strip("_") or "badge"
+        clean_title = str(title or key).strip()[:80]
+        sig = (key + "\x1f" + clean_url).lower()
+        if not sig or sig in seen:
+            return
+        seen.add(sig)
+        badges.append({"id": key, "kind": key, "title": clean_title, "url": clean_url})
+
+    raw_badges = payload.get("badges")
+    if isinstance(raw_badges, list):
+        for entry in raw_badges[:12]:
+            if isinstance(entry, dict):
+                add(
+                    str(entry.get("kind") or entry.get("id") or entry.get("name") or entry.get("type") or ""),
+                    str(entry.get("title") or entry.get("name") or ""),
+                    str(entry.get("url") or entry.get("image_url") or entry.get("imageUrl") or ""),
+                )
+
+    raw = payload.get("raw") if isinstance(payload.get("raw"), dict) else {}
+    sender = raw.get("sender") if isinstance(raw.get("sender"), dict) else {}
+    for source in (raw, sender):
+        if not isinstance(source, dict):
+            continue
+        values = source.get("badges") or source.get("roles")
+        if isinstance(values, list):
+            for value in values[:12]:
+                if isinstance(value, dict):
+                    add(
+                        str(value.get("type") or value.get("id") or value.get("name") or ""),
+                        str(value.get("title") or value.get("label") or value.get("name") or ""),
+                        str(value.get("url") or value.get("image_url") or value.get("imageUrl") or ""),
+                    )
+
+    return badges[:12]
+
 AUTH_URLS = {
     "twitch": "https://id.twitch.tv/oauth2/authorize",
     "youtube": "https://accounts.google.com/o/oauth2/v2/auth",
@@ -672,6 +715,7 @@ class WebbasedPluginHost:
                 "gift_image_url": str(payload.get("gift_image_url") or payload.get("giftImageUrl") or ""),
                 "color": str(payload.get("color") or payload.get("accent_color") or ""),
                 "raw": payload.get("raw") if isinstance(payload.get("raw"), dict) else {},
+                "badges": _normalize_chat_badges(payload),
                 "source_plugin_id": str(payload.get("source_plugin_id") or plugin_id),
                 "source": str(payload.get("source") or payload.get("source_plugin_id") or plugin_id),
                 "dispatch_to_plugins": bool(payload.get("dispatch_to_plugins") or payload.get("bridge_to_platforms")),

@@ -1177,6 +1177,7 @@ class YouTubeChatPlugin(ThreadedPlugin):
             'overlay_html': f'<div style="text-align:left;white-space:normal;line-height:1.08;margin:0;padding:0;">{safe_text}</div>',
             'channel': channel,
             'message_id': msg_id,
+            'raw': item,
             'message_type': 'chat',
             'type': 'chat',
             # Normale Chatnachrichten bleiben Chat fuer Bridge/AI/Desktop,

@@ -8,6 +8,8 @@ html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent
 .viewer.blocked{opacity:1;background:rgba(92,20,30,.78);border:1px solid rgba(255,75,96,.6)}
 .platformIcon{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;flex:none;vertical-align:-3px;margin-right:6px}
 .platformIcon img,.statusIcon{width:18px;height:18px;object-fit:contain;display:block}
+.chatRoleBadge{display:inline-flex;align-items:center;justify-content:center;margin-right:5px;vertical-align:middle}
+.chatRoleBadge img{height:.92em;max-height:.92em;width:auto;object-fit:contain;display:block}
 #spotifyPanel{display:flex;align-items:center;gap:12px;padding:10px 14px;overflow:hidden}
 .spotifyCoverWrap{width:56px;height:56px;flex:none;border-radius:8px;overflow:hidden;background:rgba(255,255,255,.08);box-shadow:0 6px 18px rgba(0,0,0,.24)}
 #spotifyCover{display:block;width:100%;height:100%;object-fit:cover}
