@@ -1,9 +1,9 @@
-{
+﻿{
   "id": "youtube_chat",
   "name": "YouTube Chat",
-  "version": "0.12",
+  "version": "0.22",
   "description": "YouTube Live chat reader/writer using central godisalotachat YouTube OAuth data. Keeps API liveChatId for sending while reading can use web fallback; logs exact Google send errors.",
-  "description_de": "Liest und schreibt den YouTube-Livechat über die zentrale YouTube-Anmeldung und protokolliert genaue Sendefehler.",
+  "description_de": "Liest und schreibt den YouTube-Livechat Ã¼ber die zentrale YouTube-Anmeldung und protokolliert genaue Sendefehler.",
   "description_en": "Reads and writes YouTube live chat using central YouTube authentication and logs exact sending errors.",
   "entry": "plugin.py",
   "display_name": "YouTube Chat"
