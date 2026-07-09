@@ -390,6 +390,7 @@ def default_easyslider_settings() -> dict:
             {"id": "info3ditor", "label": "Info3ditor", "path": "/info3ditor", "enabled": True},
             {"id": "gam3pick3r", "label": "gam3pick3r", "path": "/gam3pick3r", "enabled": True},
             {"id": "chattim3r", "label": "Chattim3r", "path": "/chattim3r", "enabled": True},
+            {"id": "commands", "label": "Commands", "path": "/commands", "enabled": True},
             {"id": "plugins", "label": "Plugins", "path": "/plugins", "enabled": True},
             {"id": "modalot", "label": "Modalot", "path": "/modalot", "enabled": True},
             {"id": "easyslider", "label": "3asyslid3r", "path": "/3asyslid3r", "enabled": True},
@@ -1035,7 +1036,7 @@ class WebbasedPluginManager:
         if self.started:
             return
         self.started = True
-        for plugin_id in ("twitch_chat", "tiktok_chat", "youtube_chat", "kick_chat", "spotis3mptify", "al3rtalot", "gam3pick3r", "botalot", "bridg3alot", "modalot", "meld_control", "obs_control"):
+        for plugin_id in ("twitch_chat", "tiktok_chat", "youtube_chat", "kick_chat", "spotis3mptify", "al3rtalot", "gam3pick3r", "botalot", "bridg3alot", "modalot", "commands", "meld_control", "obs_control"):
             self.start_plugin(plugin_id)
 
     def load_plugin(self, plugin_id: str):
@@ -3487,6 +3488,8 @@ class AppState:
                 return any(bool(platforms.get(key, {}).get("enabled", False)) for key in ("twitch", "tiktok", "youtube", "kick"))
             if plugin_id == "modalot" and "enabled" not in pcfg:
                 return any(bool(platforms.get(key, {}).get("enabled", False)) for key in ("twitch", "youtube", "kick"))
+            if plugin_id == "commands" and "enabled" not in pcfg:
+                return any(bool(platforms.get(key, {}).get("enabled", False)) for key in ("twitch", "tiktok", "youtube", "kick"))
             if plugin_id == "al3rtalot" and "enabled" not in pcfg:
                 return any(bool(platforms.get(key, {}).get("enabled", False)) for key in ("twitch", "tiktok", "youtube", "kick"))
             return bool(pcfg.get("enabled", False))
@@ -4309,7 +4312,7 @@ def _chat_platform_state(st, settings):
             "online": online,
             "viewer_count": int(viewer) if has_viewer else None,
             "is_live": bool(is_live) if is_live is not None else None,
-            "blocked": not online or viewer_error or plugin_error,
+            "blocked": not online or plugin_error,
             "detail": detail,
             "metric_fresh": metric_fresh,
             "viewer_fresh": viewer_fresh,
@@ -4389,6 +4392,11 @@ class Handler(BaseHTTPRequestHandler):
                 if icon.is_file():
                     return self._send(200, icon.read_bytes(), _content_type(icon))
             return self._send(404, "Icon missing", "text/plain")
+        if path == "/spotify-cover/latest":
+            cover_file = self._spotify_latest_cover_file()
+            if cover_file is not None:
+                return self._send(200, cover_file.read_bytes(), _content_type(cover_file), {"Cache-Control": "no-store"})
+            return self._send(404, "Spotify cover missing", "text/plain")
         if path.startswith("/tutorial-asset/"):
             rel = urllib.parse.unquote(path[len("/tutorial-asset/"):]).replace("\\", "/").strip("/")
             parts = [part for part in rel.split("/") if part]
@@ -4441,6 +4449,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._page("chat.html")
         if path == "/chattim3r":
             return self._page("chattim3r.html")
+        if path == "/commands":
+            return self._page("commands.html")
         if path == "/modalot":
             return self._page("modalot.html")
         if path == "/info3ditor":
@@ -5110,8 +5120,12 @@ class Handler(BaseHTTPRequestHandler):
                         result = handler(key, st.plugin_manager.host)
                     except TypeError:
                         result = handler(key)
-                ok = bool(result)
-                detail = "Aktion ausgeführt." if ok else "Aktion fehlgeschlagen. Details stehen im DEV-Log."
+                if isinstance(result, (list, tuple)) and result:
+                    ok = bool(result[0])
+                    detail = str(result[1]) if len(result) > 1 else ("Aktion ausgeführt." if ok else "Aktion fehlgeschlagen. Details stehen im DEV-Log.")
+                else:
+                    ok = bool(result)
+                    detail = "Aktion ausgeführt." if ok else "Aktion fehlgeschlagen. Details stehen im DEV-Log."
                 self._json({"ok": ok, "plugin_id": plugin_id, "key": key, "detail": detail, "values": st.plugin_settings(plugin_id, plugin)})
             except Exception as exc:
                 st.log(plugin_id or "plugins", "settings action failed", exc)
@@ -5751,8 +5765,34 @@ class Handler(BaseHTTPRequestHandler):
         title = data.get("title") or data.get("name") or read_txt("nowplaying_title.txt")
         artist = data.get("artist") or data.get("artists") or read_txt("nowplaying_artist.txt")
         album = data.get("album") or read_txt("nowplaying_album.txt")
-        cover = data.get("cover") or data.get("cover_url") or read_txt("nowplaying_cover.txt", "nowplaying_url.txt")
+        cover = data.get("cover") or data.get("cover_url") or read_txt("nowplaying_cover.txt")
+        if not cover:
+            cover = self._spotify_latest_cover_url()
         return {"title": title or "Kein Song aktiv", "artist": artist or "", "album": album or "", "cover": cover or "", "active": bool(title and title != "Kein Song aktiv"), "source":"Spotify"}
+
+    def _spotify_latest_cover_file(self):
+        global STATE
+        try:
+            covers = STATE.data / "spotis3mptify" / "covers"
+            candidates = []
+            for name in ("cover_latest_640.jpg", "cover_latest_300.jpg", "cover_latest_64.jpg", "youtube_thumbnail.jpg"):
+                path = covers / name
+                if path.is_file() and path.stat().st_size > 0:
+                    candidates.append(path)
+            if not candidates:
+                return None
+            return max(candidates, key=lambda path: path.stat().st_mtime)
+        except Exception:
+            return None
+
+    def _spotify_latest_cover_url(self):
+        cover_file = self._spotify_latest_cover_file()
+        if cover_file is None:
+            return ""
+        try:
+            return "/spotify-cover/latest?v=" + str(int(cover_file.stat().st_mtime * 1000))
+        except Exception:
+            return "/spotify-cover/latest"
 
     def _spotify_browser(self, kind):
         np = self._nowplaying()

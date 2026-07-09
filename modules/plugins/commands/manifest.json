@@ -1,0 +1,10 @@
+{
+  "id": "commands",
+  "name": "commands",
+  "version": "0.1.0",
+  "description": "Custom chat commands with chat replies plus optional OBS and Meld actions.",
+  "description_de": "Eigene Chat-Commands mit Chat-Antworten sowie optionalen OBS- und Meld-Aktionen.",
+  "description_en": "Custom chat commands with chat replies plus optional OBS and Meld actions.",
+  "entry": "plugin.py",
+  "display_name": "commands"
+}

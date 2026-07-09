@@ -926,6 +926,7 @@ class DesktopTkOverlay:
         self.root.after(1400, retry)
 
     def _spotify_cover_image(self, cover_url: str, size: int):
+        cover_url = str(cover_url or "").strip()
         local_candidates = [
             _app_root() / "data" / "spotis3mptify" / "covers" / "cover_latest_640.jpg",
             _app_root() / "data" / "spotis3mptify" / "covers" / "cover_latest_300.jpg",
@@ -939,7 +940,14 @@ class DesktopTkOverlay:
                         newest = path
             except Exception:
                 pass
-        if newest is not None:
+        local_matches_cover = not cover_url
+        if newest is not None and cover_url:
+            try:
+                marker = newest.with_suffix(newest.suffix + ".src")
+                local_matches_cover = marker.is_file() and marker.read_text(encoding="utf-8", errors="ignore").strip() == cover_url
+            except Exception:
+                local_matches_cover = False
+        if newest is not None and local_matches_cover:
             key = f"spotify-cover-file:{newest}:{newest.stat().st_mtime}:{size}"
             if key in self._chat_media_images:
                 return self._chat_media_frame(self._chat_media_images[key])
@@ -1359,14 +1367,16 @@ class DesktopTkOverlay:
             platform = str(item.get("platform") or "")
             blocked = bool(item.get("blocked"))
             raw_count = item.get("viewer_count", "-")
-            unavailable = blocked or raw_count is None or str(raw_count).strip().lower() in ("", "none", "null", "-")
+            missing_count = raw_count is None or str(raw_count).strip().lower() in ("", "none", "null", "-")
             bw = self._draw_platform_badge(px, py, platform, size=27)
-            if unavailable:
+            if blocked:
                 status_icon = self._platform_image("no_entry", True, size=27)
                 if status_icon:
                     self.canvas.create_image(px + bw + 20, py + 12, image=status_icon, anchor="center")
                 else:
                     self.canvas.create_text(px + bw + 12, py + 12, text="⛔", fill="#ff4b60", font=(font_family, 10, "bold"), anchor="w")
+            elif missing_count:
+                self.canvas.create_text(px + bw + 12, py + 12, text="LIVE", fill=text_color, font=(font_family, 9, "bold"), anchor="w")
             else:
                 self.canvas.create_text(px + bw + 12, py + 12, text=str(raw_count), fill=text_color, font=(font_family, 10, "bold"), anchor="w")
             px += bw + 44
