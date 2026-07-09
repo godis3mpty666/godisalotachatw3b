@@ -4,13 +4,14 @@ import re
 import json
 import threading
 import time
+import urllib.parse
 from typing import Any
 
 from shared.models import PluginStatus
 from shared.plugin_base import PluginHost, ProviderPlugin
 
 PLUGIN_ID = "commands"
-PLUGIN_VERSION = "0.1.0"
+PLUGIN_VERSION = "0.10"
 PLUGIN_NAME = f"commands ver. {PLUGIN_VERSION}"
 PLATFORMS = ("twitch", "tiktok", "youtube", "kick")
 
@@ -67,6 +68,16 @@ def _normalize_trigger(value: Any) -> str:
     if text[0] not in {"!", "/"}:
         text = "!" + text
     return text.split()[0]
+
+
+def _normalize_output_target(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    return text if text in {"obs", "meld"} else "obs"
+
+
+def _normalize_output_action(value: Any) -> str:
+    text = str(value or "").strip().lower()
+    return text if text in {"text", "show", "hide", "play", "trigger", "scene"} else "show"
 
 
 def _default_command_rows() -> list[dict[str, Any]]:
@@ -172,6 +183,12 @@ class CommandsPlugin(ProviderPlugin):
                 f"cmd{idx}_obs_hotkey": "",
                 f"cmd{idx}_meld_enabled": False,
                 f"cmd{idx}_meld_action": row.get("meld_action", ""),
+                f"cmd{idx}_output_enabled": False,
+                f"cmd{idx}_output_target": "obs",
+                f"cmd{idx}_output_action": "show",
+                f"cmd{idx}_output_scene": "",
+                f"cmd{idx}_output_source": "",
+                f"cmd{idx}_output_text": "{user}",
             })
             for platform in PLATFORMS:
                 defaults[f"cmd{idx}_source_{platform}"] = True
@@ -260,6 +277,12 @@ class CommandsPlugin(ProviderPlugin):
         }
         details: list[str] = []
         ok_all = True
+        if cmd.get("output_enabled"):
+            ok, detail = self._trigger_output(cmd, values)
+            label = str(cmd.get("output_target") or "obs").upper()
+            self._log(f"{label} Test {cmd['trigger']}: {detail if detail else ok}")
+            details.append(f"{label}: {detail if detail else ok}")
+            ok_all = ok_all and bool(ok)
         if cmd["meld_enabled"] and cmd["meld_action"]:
             action = self._format(cmd["meld_action"], values)
             ok, detail = self._trigger_meld(action)
@@ -300,6 +323,13 @@ class CommandsPlugin(ProviderPlugin):
             if not (cmd["obs_enabled"] and cmd["obs_hotkey"]) and not (cmd["meld_enabled"] and cmd["meld_action"]):
                 action_seen = True
                 ok_all = not any(detail.startswith("Chat ") and detail.endswith("fehlgeschlagen") for detail in details)
+        if cmd.get("output_enabled"):
+            action_seen = True
+            ok, detail = self._trigger_output(cmd, values)
+            label = str(cmd.get("output_target") or "obs").upper()
+            self._log(f"{label} {cmd['trigger']}: {detail if detail else ok}")
+            ok_all = ok_all and bool(ok)
+            details.append(f"{label}: {detail if detail else ok}")
         if cmd["obs_enabled"] and cmd["obs_hotkey"]:
             action_seen = True
             ok, detail = self._trigger_obs(cmd["obs_hotkey"])
@@ -345,6 +375,12 @@ class CommandsPlugin(ProviderPlugin):
                 "obs_hotkey": _clean_text(settings.get(f"cmd{idx}_obs_hotkey")),
                 "meld_enabled": _as_bool(settings.get(f"cmd{idx}_meld_enabled"), False),
                 "meld_action": _clean_text(settings.get(f"cmd{idx}_meld_action")),
+                "output_enabled": _as_bool(settings.get(f"cmd{idx}_output_enabled"), False),
+                "output_target": _normalize_output_target(settings.get(f"cmd{idx}_output_target")),
+                "output_action": _normalize_output_action(settings.get(f"cmd{idx}_output_action")),
+                "output_scene": _clean_text(settings.get(f"cmd{idx}_output_scene")),
+                "output_source": _clean_text(settings.get(f"cmd{idx}_output_source")),
+                "output_text": str(settings.get(f"cmd{idx}_output_text") or "{user}").strip(),
             })
         return out
 
@@ -366,6 +402,12 @@ class CommandsPlugin(ProviderPlugin):
                 "obs_hotkey": "",
                 "meld_enabled": False,
                 "meld_action": row.get("meld_action", ""),
+                "output_enabled": False,
+                "output_target": "obs",
+                "output_action": "show",
+                "output_scene": "",
+                "output_source": "",
+                "output_text": "{user}",
             })
         return out
 
@@ -407,6 +449,12 @@ class CommandsPlugin(ProviderPlugin):
                 "obs_hotkey": _clean_text(item.get("obs_hotkey")),
                 "meld_enabled": _as_bool(item.get("meld_enabled"), False),
                 "meld_action": self._migrate_meld_action(_clean_text(item.get("meld_action"))),
+                "output_enabled": _as_bool(item.get("output_enabled"), False),
+                "output_target": _normalize_output_target(item.get("output_target")),
+                "output_action": _normalize_output_action(item.get("output_action")),
+                "output_scene": _clean_text(item.get("output_scene")),
+                "output_source": _clean_text(item.get("output_source")),
+                "output_text": str(item.get("output_text") or "{user}").strip(),
             })
         return out
 
@@ -442,6 +490,246 @@ class CommandsPlugin(ProviderPlugin):
         except Exception as exc:
             self._log(f"Chatantwort an {platform} fehlgeschlagen: {exc}")
             return False
+
+    def _trigger_output(self, cmd: dict[str, Any], values: dict[str, str]) -> tuple[bool, str]:
+        target = _normalize_output_target(cmd.get("output_target"))
+        action = _normalize_output_action(cmd.get("output_action"))
+        scene = _clean_text(cmd.get("output_scene"))
+        source = _clean_text(cmd.get("output_source"))
+        text = self._format(str(cmd.get("output_text") or "{user}"), values)
+        if action == "scene" and not scene:
+            return False, "Szene fehlt"
+        if action != "scene" and not source:
+            return False, "Quelle fehlt"
+        return self._trigger_meld_output(action, scene, source, text) if target == "meld" else self._trigger_obs_output(action, scene, source, text)
+
+    def _trigger_obs_output(self, action: str, scene: str, source: str, text: str) -> tuple[bool, str]:
+        plugin = self._host_plugin("obs_control")
+        if plugin is None:
+            return False, "OBS Control plugin nicht geladen"
+        if not getattr(plugin, "is_connected", lambda: False)():
+            return False, "OBS Control ist nicht verbunden"
+        try:
+            if action == "text":
+                ok, detail = plugin.request("SetInputSettings", {"inputName": source, "inputSettings": {"text": text}, "overlay": True}, timeout=3.0)
+            elif action in {"show", "hide"}:
+                ok, detail = plugin.set_source_visible(source, action == "show")
+            elif action == "scene":
+                ok, detail = plugin.request("SetCurrentProgramScene", {"sceneName": scene}, timeout=3.0)
+            elif action == "play":
+                details: list[str] = []
+                try:
+                    plugin.set_source_visible(source, False)
+                    time.sleep(0.12)
+                except Exception as exc:
+                    details.append(f"hide: {exc}")
+                for media_action in ("OBS_WEBSOCKET_MEDIA_INPUT_ACTION_STOP", "OBS_WEBSOCKET_MEDIA_INPUT_ACTION_RESTART", "OBS_WEBSOCKET_MEDIA_INPUT_ACTION_PLAY"):
+                    step_ok, step_detail = plugin.request("TriggerMediaInputAction", {"inputName": source, "mediaAction": media_action}, timeout=1.5)
+                    details.append(f"{media_action}={bool(step_ok)}:{step_detail}")
+                    time.sleep(0.06)
+                show_ok, show_detail = plugin.set_source_visible(source, True)
+                details.append(f"show={bool(show_ok)}:{show_detail}")
+                ok, detail = bool(show_ok), " | ".join(details[-5:])
+            elif action == "trigger":
+                ok, detail = plugin.request("PressInputPropertiesButton", {"inputName": source, "propertyName": "refreshnocache"}, timeout=1.5)
+                if not ok:
+                    ok, detail = plugin.request("PressInputPropertiesButton", {"inputName": source, "propertyName": "refresh"}, timeout=1.5)
+            else:
+                return False, "Unbekannte OBS-Aktion"
+            return bool(ok), str(detail or "OBS-Aktion ausgeführt")
+        except Exception as exc:
+            return False, f"OBS-Aktion fehlgeschlagen: {exc}"
+
+    def _trigger_meld_output(self, action: str, scene: str, source: str, text: str) -> tuple[bool, str]:
+        plugin = self._host_plugin("meld_control")
+        if plugin is None:
+            return False, "Meld Control plugin nicht geladen"
+        if not getattr(plugin, "is_connected", lambda: False)():
+            return False, "Meld Control ist nicht verbunden"
+        try:
+            scene_ref = self._resolve_meld_scene_id(plugin, scene) if scene else ""
+            if action == "scene":
+                if not scene_ref:
+                    return False, f"Gewählte Meld-Szene wurde nicht gefunden: {scene}"
+                ok, detail = self._invoke_first_meld_method(plugin, ("showScene", "switchScene", "switch_scene", "setCurrentScene"), [scene_ref], timeout=3.0)
+                return bool(ok), str(detail or "Meld-Szene aktiviert")
+            scene_detail = ""
+            if scene_ref and action != "trigger":
+                scene_ok, scene_detail = self._invoke_first_meld_method(plugin, ("showScene", "switchScene", "switch_scene", "setCurrentScene"), [scene_ref], timeout=2.0)
+                if not scene_ok:
+                    self._log(f"Meld Szene konnte vor Aktion nicht aktiviert werden ({scene} -> {scene_ref}): {scene_detail}")
+            layer_ref = f"{scene}/{source}" if scene else source
+            layer_id, layer_detail = self._resolve_meld_layer_id(plugin, layer_ref)
+            if not layer_id:
+                return False, layer_detail or "Gewählte Meld-Quelle wurde nicht gefunden"
+            if scene and layer_id == layer_ref:
+                return False, f"Gewählte Meld-Quelle wurde nicht gefunden: {layer_ref}"
+            self._prepare_meld_layer(plugin, layer_id)
+            if action == "text":
+                ok, detail = plugin.set_session_property(layer_id, "text", text, timeout=3.0)
+            elif action in {"show", "hide"}:
+                ok, detail = plugin.set_session_property(layer_id, "visible", action == "show", timeout=3.0)
+            elif action == "trigger":
+                ok, detail = self._trigger_meld_layer_event(plugin, layer_id, text)
+                if not ok:
+                    return False, detail
+            elif action == "play":
+                details: list[str] = []
+                try:
+                    plugin.set_session_property(layer_id, "visible", True, timeout=1.0)
+                except Exception as exc:
+                    details.append(f"visible: {exc}")
+                try:
+                    plugin.set_session_property(layer_id, "visible", False, timeout=1.0)
+                    time.sleep(0.12)
+                    plugin.set_session_property(layer_id, "visible", True, timeout=1.0)
+                except Exception as exc:
+                    details.append(f"visible edge: {exc}")
+                ok = False
+                detail = ""
+                for command in ("stop", "restart", "replay", "reset", "seekToStart", "play"):
+                    step_ok, step_detail = plugin.call_layer_function(layer_id, command, timeout=1.5)
+                    ok = bool(step_ok) or ok
+                    detail = step_detail
+                    details.append(f"{command}={bool(step_ok)}:{step_detail}")
+                    time.sleep(0.04)
+                if not ok:
+                    ok = True
+                    detail = "Quelle neu sichtbar geschaltet; Meld hat keine Play-Funktion bestätigt. " + " | ".join(details[-6:])
+            else:
+                return False, "Unbekannte Meld-Aktion"
+            suffix = f" | Szene: {scene_detail}" if scene_detail else ""
+            return bool(ok), str(detail or "Meld-Aktion ausgeführt") + suffix
+        except Exception as exc:
+            return False, f"Meld-Aktion fehlgeschlagen: {exc}"
+
+    def _trigger_meld_layer_event(self, plugin: Any, layer_id: str, text: str) -> tuple[bool, str]:
+        details: list[str] = []
+        try:
+            plugin.set_session_property(layer_id, "visible", True, timeout=1.0)
+        except Exception as exc:
+            details.append(f"visible: {exc}")
+
+        reload_ok, reload_detail = self._trigger_meld_url_reload(plugin, layer_id, text)
+        if reload_ok:
+            if details:
+                return True, " | ".join(details + [f"urlReload=True:{reload_detail}"])
+            return True, f"urlReload=True:{reload_detail}"
+        details.append(f"urlReload=False:{reload_detail}")
+
+        methods_getter = getattr(plugin, "get_meld_methods", None)
+        if callable(methods_getter):
+            try:
+                published = set(str(name) for name in methods_getter())
+                relevant = sorted(name for name in published if "function" in name.casefold() or "event" in name.casefold() or "broadcast" in name.casefold())
+                details.append("methods=" + (",".join(relevant) if relevant else "none"))
+            except Exception as exc:
+                details.append(f"methods failed: {exc}")
+
+        call_attempts: list[tuple[str, Any]] = [
+            ("call_layer_function_with_args", getattr(plugin, "call_layer_function_with_args", None)),
+            ("call_function_with_args", getattr(plugin, "call_function_with_args", None)),
+        ]
+        any_ok = False
+        for label, fn in call_attempts:
+            details.append(f"{label}.callable={callable(fn)}")
+            if not callable(fn):
+                continue
+            try:
+                ok, detail = fn(layer_id, "triggerLurk", [text], timeout=2.5)
+            except TypeError:
+                try:
+                    ok, detail = fn(layer_id, "triggerLurk", [text])
+                except Exception as exc:
+                    details.append(f"{label} failed: {exc}")
+                    continue
+            except Exception as exc:
+                details.append(f"{label} failed: {exc}")
+                continue
+            details.append(f"{label}={bool(ok)}:{detail}")
+            if ok:
+                any_ok = True
+
+        for method in ("callFunctionWithArgs", "call_function_with_args"):
+            ok, detail = self._invoke_first_meld_method(plugin, (method,), [layer_id, "triggerLurk", [text]], timeout=2.5)
+            details.append(f"{method}={bool(ok)}:{detail}")
+            if ok:
+                any_ok = True
+
+        event_attempts: list[tuple[str, Any, list[Any]]] = [
+            ("send_stream_event", getattr(plugin, "send_stream_event", None), ["lurk:trigger", {"username": text}]),
+            ("broadcast_custom_event", getattr(plugin, "broadcast_custom_event", None), ["lurk:trigger", {"username": text}]),
+        ]
+        for label, fn, args in event_attempts:
+            details.append(f"{label}.callable={callable(fn)}")
+            if not callable(fn):
+                continue
+            try:
+                ok, detail = fn(*args, timeout=2.5)
+            except TypeError:
+                try:
+                    ok, detail = fn(*args)
+                except Exception as exc:
+                    details.append(f"{label} failed: {exc}")
+                    continue
+            except Exception as exc:
+                details.append(f"{label} failed: {exc}")
+                continue
+            details.append(f"{label}={bool(ok)}:{detail}")
+            if ok:
+                any_ok = True
+
+        for method in ("sendStreamEvent", "emitEvent", "broadcastCustomEvent"):
+            ok, detail = self._invoke_first_meld_method(plugin, (method,), ["lurk:trigger", {"username": text}], timeout=2.5)
+            details.append(f"{method}={bool(ok)}:{detail}")
+            if ok:
+                any_ok = True
+
+        if any_ok:
+            return True, " | ".join(details[-10:]) or "Meld-Trigger gesendet"
+        return False, "Meld-Trigger konnte nicht ausgelöst werden: " + " | ".join(details[-10:])
+
+    def _trigger_meld_url_reload(self, plugin: Any, layer_id: str, text: str) -> tuple[bool, str]:
+        items_getter = getattr(plugin, "get_session_items", None)
+        setter = getattr(plugin, "set_session_property", None)
+        if not callable(items_getter) or not callable(setter):
+            return False, "session items oder setProperty fehlen"
+        try:
+            items = items_getter()
+        except Exception as exc:
+            return False, f"session items failed: {exc}"
+        if not isinstance(items, dict):
+            return False, "session items sind nicht verfügbar"
+        item = items.get(str(layer_id))
+        if not isinstance(item, dict):
+            return False, f"Layer {layer_id} nicht im Session-Cache"
+        url_key = ""
+        current_url = ""
+        for key in ("url", "URL", "sourceUrl", "source_url", "href", "uri"):
+            value = str(item.get(key) or "").strip()
+            if value:
+                url_key = key
+                current_url = value
+                break
+        if not current_url:
+            keys = ",".join(sorted(str(k) for k in item.keys()))
+            return False, f"keine URL-Property gefunden; keys={keys}"
+        next_url = self._url_with_trigger_user(current_url, text)
+        for prop in (url_key, "url", "sourceUrl"):
+            try:
+                ok, detail = setter(str(layer_id), prop, next_url, timeout=2.0)
+            except Exception as exc:
+                ok, detail = False, exc
+            if ok:
+                return True, f"{prop}={next_url}: {detail}"
+        return False, f"URL konnte nicht gesetzt werden: {url_key}"
+
+    def _url_with_trigger_user(self, raw_url: str, username: str) -> str:
+        parts = urllib.parse.urlsplit(str(raw_url or ""))
+        query = dict(urllib.parse.parse_qsl(parts.query, keep_blank_values=True))
+        query["user"] = str(username or "TestUser")
+        query["t"] = str(int(time.time() * 1000))
+        return urllib.parse.urlunsplit((parts.scheme, parts.netloc, parts.path, urllib.parse.urlencode(query), parts.fragment))
 
     def _trigger_obs(self, hotkey: str) -> tuple[bool, str]:
         plugin = self._host_plugin("obs_control")
@@ -485,7 +773,8 @@ class CommandsPlugin(ProviderPlugin):
                 return bool(ok), str(detail)
             if name in {"showScene", "switchScene", "switch_scene"} and hasattr(plugin, "invoke_meld_method") and parts:
                 methods = ("showScene", "switchScene", "switch_scene", "setCurrentScene") if name == "showScene" else ("switch_scene", "switchScene", "showScene", "setCurrentScene")
-                ok, detail = self._invoke_first_meld_method(plugin, methods, [parts[0]])
+                scene_ref = self._resolve_meld_scene_id(plugin, parts[0]) or parts[0]
+                ok, detail = self._invoke_first_meld_method(plugin, methods, [scene_ref])
                 return bool(ok), str(detail)
             if name in {"evalJs", "evaluateJs", "evaluateJavaScript", "executeScript"} and len(parts) >= 2:
                 layer_id, layer_detail = self._resolve_meld_layer_id(plugin, parts[0])
@@ -518,7 +807,16 @@ class CommandsPlugin(ProviderPlugin):
                 ok, detail = plugin.set_session_property(layer_id or parts[0], parts[1], parts[2])
                 return bool(ok), str(detail)
             if name == "sendStreamEvent" and hasattr(plugin, "send_stream_event"):
-                ok, detail = plugin.send_stream_event(parts[0] if parts else "")
+                payload = None
+                if len(parts) >= 2:
+                    try:
+                        payload = json.loads(":".join(parts[1:]))
+                    except Exception:
+                        payload = ":".join(parts[1:])
+                if payload is None:
+                    ok, detail = plugin.send_stream_event(parts[0] if parts else "")
+                else:
+                    ok, detail = plugin.send_stream_event(parts[0] if parts else "", payload)
                 return bool(ok), str(detail)
             inv = getattr(plugin, "invoke_meld_method", None)
             if callable(inv):
@@ -574,6 +872,34 @@ class CommandsPlugin(ProviderPlugin):
                 return False, str(detail)
         return False, "Keine passende Meld-JavaScript-Methode gefunden: " + " | ".join(details[-5:])
 
+    def _resolve_meld_scene_id(self, plugin: Any, scene_ref: str) -> str:
+        ref = _clean_text(scene_ref)
+        if not ref:
+            return ""
+        items_getter = getattr(plugin, "get_session_items", None)
+        if not callable(items_getter):
+            return ref
+        try:
+            items = items_getter()
+        except Exception:
+            return ref
+        if not isinstance(items, dict):
+            return ref
+        if ref in items and str(items.get(ref, {}).get("type") or "").casefold() == "scene":
+            return ref
+        needle = ref.casefold()
+        matches: list[str] = []
+        for item_id, item in items.items():
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("type") or "").casefold() != "scene":
+                continue
+            if str(item.get("name") or "").strip().casefold() == needle:
+                matches.append(str(item_id))
+        if len(matches) == 1:
+            return matches[0]
+        return ref
+
     def _resolve_meld_layer_id(self, plugin: Any, layer_ref: str) -> tuple[str, str]:
         ref = _clean_text(layer_ref)
         if not ref:
@@ -602,18 +928,52 @@ class CommandsPlugin(ProviderPlugin):
                         return ref, ""
                     matches = []
                     needle = ref.strip().casefold()
+                    scene_needle = ""
+                    layer_needle = needle
+                    if "/" in ref:
+                        left, right = ref.split("/", 1)
+                        scene_needle = left.strip().casefold()
+                        layer_needle = right.strip().casefold()
                     for item_id, item in items.items():
                         if not isinstance(item, dict):
                             continue
                         if str(item.get("type") or "").casefold() != "layer":
                             continue
-                        if str(item.get("name") or "").strip().casefold() == needle:
+                        item_name = str(item.get("name") or "").strip().casefold()
+                        if scene_needle and item_name == layer_needle and self._meld_item_belongs_to_scene(str(item_id), item, scene_needle, items):
+                            matches.append(str(item_id))
+                        elif not scene_needle and item_name == needle:
                             matches.append(str(item_id))
                     if len(matches) == 1:
                         return matches[0], ""
             except Exception:
                 pass
         return ref, ""
+
+    def _meld_item_belongs_to_scene(self, item_id: str, item: dict[str, Any], scene_name: str, items: dict[str, dict[str, Any]]) -> bool:
+        if not scene_name:
+            return True
+        scene_id = self._resolve_meld_scene_id(type("_MeldItems", (), {"get_session_items": lambda _self: items})(), scene_name).casefold()
+        for key in ("scene", "sceneName", "scene_name", "sceneTitle"):
+            if str(item.get(key) or "").strip().casefold() in {scene_name, scene_id}:
+                return True
+        queue = [str(item.get(k) or "") for k in ("sceneId", "scene_id", "parentId", "parent_id", "parent", "groupId", "group_id", "ownerId", "owner_id") if str(item.get(k) or "").strip()]
+        seen: set[str] = {str(item_id)}
+        while queue:
+            current = queue.pop(0)
+            if not current or current in seen:
+                continue
+            seen.add(current)
+            parent = items.get(current)
+            if not isinstance(parent, dict):
+                continue
+            if str(parent.get("type") or "").casefold() == "scene":
+                return current.casefold() == scene_id or str(parent.get("name") or "").strip().casefold() == scene_name
+            for next_key in ("sceneId", "scene_id", "parentId", "parent_id", "parent", "groupId", "group_id", "ownerId", "owner_id"):
+                next_id = str(parent.get(next_key) or "").strip()
+                if next_id and next_id not in seen:
+                    queue.append(next_id)
+        return False
 
     def _prepare_meld_layer(self, plugin: Any, layer_id: str) -> None:
         setter = getattr(plugin, "set_session_property", None)

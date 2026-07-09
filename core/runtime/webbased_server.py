@@ -15,7 +15,7 @@ def _sanitize_automation_rules(value):
         return []
     allowed_platforms = {"tiktok", "twitch", "youtube", "kick"}
     allowed_targets = {"obs", "meld"}
-    allowed_actions = {"text", "show", "hide", "play", "scene"}
+    allowed_actions = {"text", "show", "hide", "play", "trigger", "scene"}
     allowed_startup = {"keep", "placeholder"}
     cleaned = []
     for raw in value:
@@ -4939,11 +4939,9 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 meld = st.plugin_instances.get("meld_control")
                 if meld is not None:
-                    # Meld publishes the complete session during the WebChannel
-                    # handshake. Dropping this one connection makes the plugin
-                    # reconnect immediately and refresh its source cache.
-                    meld._drop_connection()
-                    st.log("automation", "targets reload", "Meld session refresh requested")
+                    items = meld.get_session_items() if hasattr(meld, "get_session_items") else {}
+                    connected = bool(getattr(meld, "is_connected", lambda: False)())
+                    st.log("automation", "targets reload", f"Meld cache gelesen: connected={connected} items={len(items) if isinstance(items, dict) else 0}")
                 else:
                     st.log("automation", "targets reload", "Meld-Control-Plugin ist nicht gestartet")
                 return self._json({"ok": True})
@@ -4964,9 +4962,21 @@ class Handler(BaseHTTPRequestHandler):
                         st.log("automation", "test", "Meld-Control ist nicht verbunden")
                         return self._json({"ok": False, "error": "Meld-Control ist nicht verbunden."}, 400)
                     items = meld.get_session_items()
+                    scene_ref = scene_name
+                    try:
+                        scene_matches = [str(key) for key, value in items.items() if isinstance(value, dict) and str(value.get("type") or "").lower() == "scene" and str(value.get("name") or "").casefold() == scene_name.casefold()]
+                        if len(scene_matches) == 1:
+                            scene_ref = scene_matches[0]
+                    except Exception:
+                        scene_ref = scene_name
                     if action == "scene":
-                        ok, detail = meld.invoke_meld_method("showScene", [scene_name], timeout=3.0)
+                        ok, detail = meld.invoke_meld_method("showScene", [scene_ref], timeout=3.0)
                     else:
+                        if scene_ref != scene_name:
+                            try:
+                                meld.invoke_meld_method("showScene", [scene_ref], timeout=2.0)
+                            except Exception:
+                                pass
                         match = next((dict(value, id=key) for key, value in items.items() if str(value.get("name") or "").casefold() == source_name.casefold() and meld._item_matches_scene(value, scene_name.casefold(), items)), None)
                         if match is None:
                             st.log("automation", "test", f"Meld Quelle nicht gefunden: scene={scene_name} source={source_name}")
@@ -4993,11 +5003,9 @@ class Handler(BaseHTTPRequestHandler):
                             layer_id = str(match["id"])
                             details = []
                             try:
-                                meld.set_session_property(layer_id, "visible", False, timeout=1.0)
-                                time.sleep(0.12)
                                 meld.set_session_property(layer_id, "visible", True, timeout=1.0)
                             except Exception as exc:
-                                details.append(f"visible edge: {exc}")
+                                details.append(f"visible: {exc}")
                             ok = False
                             detail = ""
                             for command in ("stop", "restart", "replay", "reset", "seekToStart", "play"):

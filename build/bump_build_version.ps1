@@ -115,9 +115,11 @@ function Get-ChangedBuildFiles {
     }
 
     # Dirty working tree changes count too, except generated version/provenance files below.
-    $changed += Invoke-Git diff --name-only HEAD
+    $dirty = @(Invoke-Git diff --name-only HEAD)
+    $changed += $dirty
     return @{
         Files = @($changed | Where-Object { $_ } | Select-Object -Unique)
+        DirtyFiles = @($dirty | Where-Object { $_ } | Select-Object -Unique)
         Messages = ($messages -join "`n")
     }
 }
@@ -279,7 +281,7 @@ $oldVersion = '{0}.{1:00}' -f $major, $minor
 $newVersion = '{0}.{1:00}' -f $nextMajor, $nextMinor
 
 $scan = Get-ChangedBuildFiles -CurrentVersion $oldVersion
-Bump-ChangedPluginVersions -Files $scan.Files
+Bump-ChangedPluginVersions -Files $scan.DirtyFiles
 $shouldBump = Test-CoreVersionChange -Files $scan.Files -Messages $scan.Messages
 if (-not $shouldBump) {
     Write-Host ("Build-Version bleibt: $oldVersion") -ForegroundColor Green
