@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 import threading
 import time
@@ -39,6 +40,8 @@ class Al3rtalotPlugin(ProviderPlugin):
         self._automation_recent: dict[str, float] = {}
         self._like_threshold_fired: set[str] = set()
         self._auto_hide_timers: dict[str, threading.Timer] = {}
+        self._startup_automation_attempt = 0
+        self._startup_automation_done: set[str] = set()
         self._platforms = {
             'twitch': TwitchAlerts(self),
             'tiktok': TikTokAlerts(self),
@@ -152,11 +155,16 @@ class Al3rtalotPlugin(ProviderPlugin):
             merged['tiktok_gift_template'] = '{user}: {text}'
         self._settings = merged
         self._enabled = as_bool(merged.get('enabled'), True)
+        self._startup_automation_attempt = 0
+        self._startup_automation_done = set()
         DATA_DIR.mkdir(parents=True, exist_ok=True)
+        self._load_export_state()
         state = 'connected' if self._enabled else 'disabled'
         msg = f'{PLUGIN_NAME}: ' + ('aktiv' if self._enabled else 'deaktiviert')
         host.set_status(self.plugin_id, PluginStatus(state, msg))
         host.log(self.plugin_id, f'{PLUGIN_NAME} gestartet. Plattform-Alerts: Twitch/TikTok/YouTube/Kick.')
+        if self._enabled:
+            self._schedule_startup_automation()
 
     def stop(self, *args, **kwargs) -> None:
         self._enabled = False
@@ -247,6 +255,103 @@ class Al3rtalotPlugin(ProviderPlugin):
             atomic_write_json(export_dir / 'state.json', self._export_state)
         except Exception as exc:
             self._log(f'live value export failed: {exc}')
+
+    def _load_export_state(self) -> None:
+        path = DATA_DIR / 'exports' / 'state.json'
+        if not path.exists():
+            return
+        try:
+            data = json.loads(path.read_text(encoding='utf-8'))
+            if isinstance(data, dict):
+                self._export_state = data
+        except Exception as exc:
+            self._log(f'export state read failed: {exc}')
+
+    def _startup_rule_key(self, rule: dict[str, Any]) -> str:
+        return '|'.join([
+            str(rule.get('platform') or '').strip().lower(),
+            str(rule.get('value') or '').strip().lower(),
+            str(rule.get('target') or '').strip().lower(),
+            str(rule.get('action') or 'text').strip().lower(),
+            str(rule.get('scene') or '').strip().casefold(),
+            str(rule.get('source') or '').strip().casefold(),
+        ])
+
+    def _saved_live_value_text(self, rule: dict[str, Any]) -> str:
+        platform = str(rule.get('platform') or '').strip().lower()
+        value = str(rule.get('value') or '').strip().lower()
+        live_values = self._export_state.get('live_values') if isinstance(self._export_state, dict) else None
+        row: Any = None
+        if isinstance(live_values, dict):
+            platform_values = live_values.get(platform)
+            if isinstance(platform_values, dict):
+                row = platform_values.get(value)
+        if not isinstance(row, dict):
+            try:
+                path = DATA_DIR / 'exports' / f'{platform}_{value}.json'
+                if path.exists():
+                    raw = json.loads(path.read_text(encoding='utf-8'))
+                    if isinstance(raw, dict):
+                        row = raw
+            except Exception:
+                row = None
+        if isinstance(row, dict):
+            return self._automation_text(platform, value, str(row.get('user') or ''), to_int(row.get('amount'), 0, 0))
+        try:
+            path = DATA_DIR / 'exports' / f'{platform}_{value}.txt'
+            if path.exists():
+                return path.read_text(encoding='utf-8').strip()
+        except Exception:
+            pass
+        return ''
+
+    def _startup_text_for_rule(self, rule: dict[str, Any]) -> str:
+        startup = str(rule.get('startup') or 'keep').strip().lower()
+        if startup == 'placeholder':
+            return str(rule.get('placeholder') or '---').strip() or '---'
+        return self._saved_live_value_text(rule)
+
+    def _automation_target_ready(self, target: str) -> bool:
+        plugin_id = 'meld_control' if target == 'meld' else 'obs_control' if target == 'obs' else ''
+        plugin = self._get_plugin(plugin_id) if plugin_id else None
+        return plugin is not None and bool(getattr(plugin, 'is_connected', lambda: False)())
+
+    def _schedule_startup_automation(self, delay: float = 1.2) -> None:
+        timer = threading.Timer(delay, self._apply_startup_automation)
+        timer.daemon = True
+        timer.start()
+
+    def _apply_startup_automation(self) -> None:
+        if not self._enabled:
+            return
+        settings = self._global_settings()
+        rules = settings.get('automation_rules')
+        if not isinstance(rules, list):
+            return
+        self._startup_automation_attempt += 1
+        pending = 0
+        for rule in rules:
+            if not isinstance(rule, dict):
+                continue
+            if str(rule.get('action') or 'text').strip().lower() != 'text':
+                continue
+            key = self._startup_rule_key(rule)
+            if key in self._startup_automation_done:
+                continue
+            text = self._startup_text_for_rule(rule)
+            if not text:
+                continue
+            target = str(rule.get('target') or '').strip().lower()
+            if not self._automation_target_ready(target):
+                pending += 1
+                continue
+            ok = self._run_automation_rule(rule, text, force=True)
+            if ok:
+                self._startup_automation_done.add(key)
+            else:
+                pending += 1
+        if pending > 0 and self._startup_automation_attempt < 15:
+            self._schedule_startup_automation(2.0)
 
     def _global_settings(self) -> dict[str, Any]:
         host = self._host
@@ -352,19 +457,19 @@ class Al3rtalotPlugin(ProviderPlugin):
                 self._log(f'Like-Zähler ausgelöst: {username} hat {total} Likes erreicht, Intervall {threshold}, Stufe {reached_at}')
                 self._run_automation_rule(rule, text)
 
-    def _run_automation_rule(self, rule: dict[str, Any], text: str, *, force: bool = False) -> None:
+    def _run_automation_rule(self, rule: dict[str, Any], text: str, *, force: bool = False) -> bool:
         target = str(rule.get('target') or '').strip().lower()
         action = str(rule.get('action') or 'text').strip().lower()
         scene = str(rule.get('scene') or '').strip()
         source = str(rule.get('source') or '').strip()
         if not target:
-            return
+            return False
         dedupe_key = '|'.join([target, action, scene.casefold(), source.casefold(), text])
         now = time.time()
         with self._lock:
             last = self._automation_recent.get(dedupe_key)
             if not force and last is not None and now - last < 0.35:
-                return
+                return True
             self._automation_recent[dedupe_key] = now
             if len(self._automation_recent) > 200:
                 self._automation_recent = {k: v for k, v in self._automation_recent.items() if now - v < 30}
@@ -374,14 +479,16 @@ class Al3rtalotPlugin(ProviderPlugin):
             elif target == 'obs':
                 ok, detail = self._apply_obs_rule(action, scene, source, text)
             else:
-                return
+                return False
             if not ok:
                 self._log(f'automation failed: {target} {action} {scene}/{source}: {detail}')
-                return
+                return False
             if action == 'show':
                 self._schedule_auto_hide(target, scene, source, rule)
+            return True
         except Exception as exc:
             self._log(f'automation failed: {target} {action} {scene}/{source}: {exc}')
+            return False
 
     def _hide_automation_source(self, target: str, scene: str, source: str) -> None:
         try:

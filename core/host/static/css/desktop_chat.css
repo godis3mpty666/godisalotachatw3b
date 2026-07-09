@@ -8,6 +8,14 @@ html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent
 .viewer.blocked{opacity:1;background:rgba(92,20,30,.78);border:1px solid rgba(255,75,96,.6)}
 .platformIcon{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;flex:none;vertical-align:-3px;margin-right:6px}
 .platformIcon img,.statusIcon{width:18px;height:18px;object-fit:contain;display:block}
+#spotifyPanel{display:flex;align-items:center;gap:12px;padding:10px 14px;overflow:hidden}
+.spotifyCoverWrap{width:56px;height:56px;flex:none;border-radius:8px;overflow:hidden;background:rgba(255,255,255,.08);box-shadow:0 6px 18px rgba(0,0,0,.24)}
+#spotifyCover{display:block;width:100%;height:100%;object-fit:cover}
+#spotifyCover[src=""]{display:none}
+.spotifyMeta{min-width:0;line-height:1.18}
+.spotifyLabel{color:#1ed760;font-size:12px;font-weight:800;text-transform:uppercase}
+#spotifyTitle{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:calc(var(--chat-size) + 2px);font-weight:850}
+#spotifyArtist{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:4px;color:#b9c2e2;font-size:calc(var(--chat-size) - 2px)}
 #chatPanel{padding:12px 42px 12px 12px;overflow:hidden;contain:layout paint}
 #desktopMessages{height:100%;width:var(--chat-live-width);max-width:var(--chat-live-width);min-width:0;display:flex;flex-direction:column;justify-content:flex-end;overflow:hidden}
 .desktopMsg{flex:none;display:block;width:100%;max-width:100%;min-width:0;padding:7px 9px;margin:8px 0;border-radius:8px;background:rgba(255,255,255,.045);font-size:var(--chat-size);line-height:1.35;overflow:hidden;white-space:normal;overflow-wrap:normal;word-break:normal;word-wrap:normal;text-wrap:wrap}

@@ -1,8 +1,8 @@
-{
+﻿{
   "id": "tiktok_chat",
   "name": "TikTok Chat",
-  "version": "0.08",
+  "version": "0.10",
   "entry": "plugin.py",
-  "description_de": "Liest den TikTok-Livechat, Live-Werte und Ereignisse über die zentrale TikTok-Verbindung.",
+  "description_de": "Liest den TikTok-Livechat, Live-Werte und Ereignisse Ã¼ber die zentrale TikTok-Verbindung.",
   "description_en": "Reads TikTok live chat, live metrics and events using the central TikTok connection."
 }

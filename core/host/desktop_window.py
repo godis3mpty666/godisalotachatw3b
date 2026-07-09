@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ctypes
+import base64
 import html
 import json
 import os
@@ -220,6 +221,10 @@ def _ping_url(url: str, timeout: float = 0.55) -> bool:
         return False
 
 
+def _app_root() -> Path:
+    return Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parents[2]
+
+
 @dataclass
 class DragState:
     mode: str = ""
@@ -248,6 +253,7 @@ class DesktopTkOverlay:
         self.layout_url = f"{base}/api/desktop-chat/layout"
         self.state_url = f"{base}/api/desktop-chat/state"
         self.chat_url = f"{base}/api/chat-state"
+        self.nowplaying_url = f"{base}/api/nowplaying"
         self.language = "de"
 
         self.root = tk.Tk()
@@ -289,6 +295,7 @@ class DesktopTkOverlay:
         self.bg_hwnd: int | None = None
         self.drag = DragState()
         self.last_chat_state: dict[str, Any] = {}
+        self.last_nowplaying: dict[str, Any] = {}
         self.last_runtime_ok = True
         self.runtime_fail_count = 0
         self._save_after_id: str | None = None
@@ -393,12 +400,16 @@ class DesktopTkOverlay:
                 self.layout = data
         except Exception as exc:
             _log(f"layout konnte nicht geladen werden: {exc}")
-        self.layout.setdefault("layoutVersion", 2)
+        self.layout.setdefault("layoutVersion", 3)
         self.layout.setdefault("viewerBar", {"x": 16, "y": 16, "w": 720, "h": 64})
+        self.layout.setdefault("spotifyPanel", {"x": 16, "y": 92, "w": 720, "h": 84})
         self.layout.setdefault("chatPanel", {"x": 16, "y": 92, "w": 720, "h": 420})
         self.layout.setdefault("alertPanel", {"x": 16, "y": 524, "w": 720, "h": 188})
         self.layout.setdefault("alerts", {"enabled": True, "maxItems": 5, "showTimestamp": True, "platforms": {"twitch": True, "tiktok": True, "youtube": True, "kick": True}})
         self.layout.setdefault("viewers", {"enabled": True})
+        if "spotify" not in self.layout and isinstance(self.layout.get("spotifyPanel"), dict):
+            self.layout["spotify"] = {"enabled": True}
+        self.layout.setdefault("spotify", {"enabled": False})
         self.layout.setdefault(
             "style",
             {
@@ -531,6 +542,18 @@ class DesktopTkOverlay:
         except Exception as exc:
             _log(f"chat-state konnte nicht gelesen werden: {exc}")
 
+        if self.editing or bool((self.layout.get("spotify") or {}).get("enabled", False)):
+            try:
+                nowplaying = _fetch_json(self.nowplaying_url, timeout=0.65)
+                if isinstance(nowplaying, dict):
+                    new_key = self._stable_json_key(nowplaying)
+                    old_key = self._stable_json_key(self.last_nowplaying)
+                    if new_key != old_key:
+                        self.last_nowplaying = nowplaying
+                        needs_render = True
+            except Exception as exc:
+                _log(f"nowplaying konnte nicht gelesen werden: {exc}")
+
         try:
             layout = _fetch_json(self.layout_url, timeout=0.65)
             if isinstance(layout, dict) and not self.drag.mode:
@@ -572,10 +595,12 @@ class DesktopTkOverlay:
         # Native Resize-Griff fuer das komplette Fenster
         if self.editing and x >= self.root.winfo_width() - 34 and y >= self.root.winfo_height() - 34:
             return ("window-resize", "window")
-        for box_id in ("viewerBar", "chatPanel", "alertPanel"):
-            if box_id == "viewerBar" and not bool((self.layout.get("viewers") or {}).get("enabled", True)):
+        for box_id in ("viewerBar", "spotifyPanel", "chatPanel", "alertPanel"):
+            if box_id == "viewerBar" and not self.editing and not bool((self.layout.get("viewers") or {}).get("enabled", True)):
                 continue
-            if box_id == "alertPanel" and not bool((self.layout.get("alerts") or {}).get("enabled", True)):
+            if box_id == "spotifyPanel" and not self.editing and not bool((self.layout.get("spotify") or {}).get("enabled", False)):
+                continue
+            if box_id == "alertPanel" and not self.editing and not bool((self.layout.get("alerts") or {}).get("enabled", True)):
                 continue
             box = self.layout.get(box_id) or {}
             bx, by, bw, bh = int(box.get("x", 0)), int(box.get("y", 0)), int(box.get("w", 0)), int(box.get("h", 0))
@@ -663,7 +688,7 @@ class DesktopTkOverlay:
             latest = _fetch_json(self.layout_url, timeout=1.0)
             if not isinstance(latest, dict):
                 latest = {}
-            for key in ("viewerBar", "chatPanel", "alertPanel", "window"):
+            for key in ("viewerBar", "spotifyPanel", "chatPanel", "alertPanel", "window"):
                 if isinstance(self.layout.get(key), dict):
                     latest[key] = dict(self.layout[key])
             self.layout = latest
@@ -727,7 +752,7 @@ class DesktopTkOverlay:
         if key in self._platform_images:
             return self._platform_images[key]
         try:
-            root = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parents[2]
+            root = _app_root()
             image = self.tk.PhotoImage(file=str(root / "assets" / "pics" / f"{asset_key}.png"))
             scale = max(1, (max(image.width(), image.height()) + size - 1) // size)
             image = image.subsample(scale, scale)
@@ -736,6 +761,75 @@ class DesktopTkOverlay:
         except Exception:
             self._platform_images[key] = None
             return None
+
+    def _photo_from_image_bytes(self, data: bytes, size: int):
+        try:
+            from io import BytesIO
+            from PIL import Image, ImageSequence, ImageTk
+            pil = Image.open(BytesIO(data))
+            is_animated = bool(getattr(pil, "is_animated", False)) and int(getattr(pil, "n_frames", 1) or 1) > 1
+            if is_animated:
+                frames = []
+                durations = []
+                for frame in ImageSequence.Iterator(pil):
+                    frame_rgba = frame.convert('RGBA')
+                    ratio = min(float(size) / max(1, frame_rgba.width), float(size) / max(1, frame_rgba.height))
+                    target = (max(1, int(frame_rgba.width * ratio)), max(1, int(frame_rgba.height * ratio)))
+                    frame_rgba = frame_rgba.resize(target, Image.Resampling.LANCZOS)
+                    frames.append(ImageTk.PhotoImage(frame_rgba, master=self.root))
+                    durations.append(max(40, min(1000, int(frame.info.get('duration') or pil.info.get('duration') or 100))))
+                    if len(frames) >= 180:
+                        break
+                if frames:
+                    return {
+                        'frames': frames,
+                        'durations': durations or [100] * len(frames),
+                        'total_ms': max(40, sum(durations or [100] * len(frames))),
+                        'started_at': time.monotonic(),
+                    }
+                raise ValueError('animated image has no frames')
+            pil = pil.convert('RGBA')
+            ratio = min(float(size) / max(1, pil.width), float(size) / max(1, pil.height))
+            target = (max(1, int(pil.width * ratio)), max(1, int(pil.height * ratio)))
+            pil = pil.resize(target, Image.Resampling.LANCZOS)
+            return ImageTk.PhotoImage(pil, master=self.root)
+        except Exception:
+            pass
+
+        try:
+            from PyQt6 import QtCore, QtGui
+            image = QtGui.QImage()
+            if not image.loadFromData(data):
+                raise ValueError('Qt could not decode image')
+            if not image.isNull():
+                scaled = image.scaled(size, size, QtCore.Qt.AspectRatioMode.KeepAspectRatio, QtCore.Qt.TransformationMode.SmoothTransformation)
+                buffer = QtCore.QBuffer()
+                buffer.open(QtCore.QIODevice.OpenModeFlag.WriteOnly)
+                scaled.save(buffer, "PNG")
+                encoded = base64.b64encode(bytes(buffer.data())).decode('ascii')
+                return self.tk.PhotoImage(data=encoded)
+        except Exception:
+            pass
+
+        try:
+            from PySide6 import QtCore, QtGui
+            image = QtGui.QImage()
+            if not image.loadFromData(data):
+                raise ValueError('Qt could not decode image')
+            if not image.isNull():
+                scaled = image.scaled(size, size, QtCore.Qt.AspectRatioMode.KeepAspectRatio, QtCore.Qt.TransformationMode.SmoothTransformation)
+                buffer = QtCore.QBuffer()
+                buffer.open(QtCore.QIODevice.OpenModeFlag.WriteOnly)
+                scaled.save(buffer, "PNG")
+                encoded = base64.b64encode(bytes(buffer.data())).decode('ascii')
+                return self.tk.PhotoImage(data=encoded)
+        except Exception:
+            pass
+
+        encoded = base64.b64encode(data).decode('ascii')
+        image = self.tk.PhotoImage(data=encoded)
+        scale = max(1, (max(image.width(), image.height()) + size - 1) // size)
+        return image.subsample(scale, scale) if scale > 1 else image
 
     def _chat_media_image(self, source: str, size: int = 24):
         source = str(source or '').strip()
@@ -755,54 +849,11 @@ class DesktopTkOverlay:
             if not data or len(data) > 20 * 1024 * 1024:
                 raise ValueError('chat media is empty or too large')
             if data[:6] in {b'GIF87a', b'GIF89a'}:
-                import base64
                 image = self._tk_gif_animation(base64.b64encode(data).decode('ascii'), size)
                 self._chat_media_images[key] = image
                 self._chat_media_failures.pop(key, None)
                 return self._chat_media_frame(image)
-            try:
-                from io import BytesIO
-                from PIL import Image, ImageSequence, ImageTk
-                pil = Image.open(BytesIO(data))
-                is_animated = bool(getattr(pil, "is_animated", False)) and int(getattr(pil, "n_frames", 1) or 1) > 1
-                if is_animated:
-                    frames = []
-                    durations = []
-                    for frame in ImageSequence.Iterator(pil):
-                        frame_rgba = frame.convert('RGBA')
-                        ratio = min(float(size) / max(1, frame_rgba.width), float(size) / max(1, frame_rgba.height))
-                        target = (max(1, int(frame_rgba.width * ratio)), max(1, int(frame_rgba.height * ratio)))
-                        frame_rgba = frame_rgba.resize(target, Image.Resampling.LANCZOS)
-                        frames.append(ImageTk.PhotoImage(frame_rgba, master=self.root))
-                        durations.append(max(40, min(1000, int(frame.info.get('duration') or pil.info.get('duration') or 100))))
-                        if len(frames) >= 180:
-                            break
-                    if frames:
-                        image = {
-                            'frames': frames,
-                            'durations': durations or [100] * len(frames),
-                            'total_ms': max(40, sum(durations or [100] * len(frames))),
-                            'started_at': time.monotonic(),
-                        }
-                    else:
-                        raise ValueError('animated chat media has no frames')
-                else:
-                    pil = pil.convert('RGBA')
-                    ratio = min(float(size) / max(1, pil.width), float(size) / max(1, pil.height))
-                    target = (max(1, int(pil.width * ratio)), max(1, int(pil.height * ratio)))
-                    pil = pil.resize(target, Image.Resampling.LANCZOS)
-                    image = ImageTk.PhotoImage(pil, master=self.root)
-            except Exception:
-                import base64
-                encoded = base64.b64encode(data).decode('ascii')
-                if data[:6] in {b'GIF87a', b'GIF89a'}:
-                    image = self._tk_gif_animation(encoded, size)
-                else:
-                    image = self.tk.PhotoImage(data=encoded)
-                if not isinstance(image, dict):
-                    scale = max(1, (max(image.width(), image.height()) + size - 1) // size)
-                    if scale > 1:
-                        image = image.subsample(scale, scale)
+            image = self._photo_from_image_bytes(data, size)
             self._chat_media_images[key] = image
             self._chat_media_failures.pop(key, None)
             return self._chat_media_frame(image)
@@ -873,6 +924,32 @@ class DesktopTkOverlay:
             self._chat_media_retry_scheduled = False
             self.render()
         self.root.after(1400, retry)
+
+    def _spotify_cover_image(self, cover_url: str, size: int):
+        local_candidates = [
+            _app_root() / "data" / "spotis3mptify" / "covers" / "cover_latest_640.jpg",
+            _app_root() / "data" / "spotis3mptify" / "covers" / "cover_latest_300.jpg",
+            _app_root() / "data" / "spotis3mptify" / "covers" / "cover_latest_64.jpg",
+        ]
+        newest = None
+        for path in local_candidates:
+            try:
+                if path.is_file() and path.stat().st_size > 0:
+                    if newest is None or path.stat().st_mtime > newest.stat().st_mtime:
+                        newest = path
+            except Exception:
+                pass
+        if newest is not None:
+            key = f"spotify-cover-file:{newest}:{newest.stat().st_mtime}:{size}"
+            if key in self._chat_media_images:
+                return self._chat_media_frame(self._chat_media_images[key])
+            try:
+                image = self._photo_from_image_bytes(newest.read_bytes(), size)
+                self._chat_media_images[key] = image
+                return self._chat_media_frame(image)
+            except Exception as exc:
+                _log(f"Spotify-Coverdatei konnte nicht geladen werden: {newest}: {exc}")
+        return self._chat_media_image(cover_url, size=size) if cover_url else None
 
     @staticmethod
     def _is_emoji_char(char: str) -> bool:
@@ -1165,6 +1242,20 @@ class DesktopTkOverlay:
 
         return lines or [""]
 
+    def _is_fresh_alert_item(self, item: dict[str, Any], max_age_seconds: float = 900.0) -> bool:
+        try:
+            ts = float(item.get("created_at") or 0.0)
+        except Exception:
+            ts = 0.0
+        if ts <= 0:
+            try:
+                raw_id = float(item.get("id") or 0.0)
+                if raw_id > 1_000_000_000_000:
+                    ts = raw_id / 1000.0
+            except Exception:
+                ts = 0.0
+        return ts <= 0 or (time.time() - ts) <= max_age_seconds
+
     def render(self) -> None:
         c = self.canvas
         bgc = self.bg_canvas
@@ -1194,10 +1285,12 @@ class DesktopTkOverlay:
         if self.editing:
             c.create_rectangle(0, 0, self.root.winfo_width(), self.root.winfo_height(), fill="#020304", outline="")
 
-        if bool((self.layout.get("viewers") or {}).get("enabled", True)):
+        if self.editing or bool((self.layout.get("viewers") or {}).get("enabled", True)):
             self._draw_viewer_bar(bg, bg_stipple, radius, font_family, text_color)
         self._draw_chat_panel(bg, bg_stipple, radius, font_family, font_size, text_color)
         self._draw_alert_panel(bg, bg_stipple, radius, font_family, font_size, text_color)
+        if self.editing or bool((self.layout.get("spotify") or {}).get("enabled", False)):
+            self._draw_spotify_panel(bg, bg_stipple, radius, font_family, font_size, text_color)
 
         if not self.last_chat_state and self.editing:
             c.create_text(18, 18, anchor="nw", text=("Desktop overlay active · F8 toggles edit mode" if self.language == "en" else "Desktop-Overlay aktiv · F8 schaltet den Bearbeitungsmodus um"), fill="#b9c2e2", font=(font_family, 10))
@@ -1241,6 +1334,52 @@ class DesktopTkOverlay:
             else:
                 self.canvas.create_text(px + bw + 12, py + 12, text=str(raw_count), fill=text_color, font=(font_family, 10, "bold"), anchor="w")
             px += bw + 44
+        if self.editing:
+            self.canvas.create_rectangle(x, y, x + w, y + h, outline="#936cff", dash=(4, 3))
+            self.canvas.create_polygon(x + w, y + h - 24, x + w, y + h, x + w - 24, y + h, fill="#936cff")
+
+    def _draw_spotify_panel(self, bg: str, bg_stipple: str | None, radius: int, font_family: str, font_size: int, text_color: str) -> None:
+        cfg = self.layout.get("spotify") if isinstance(self.layout.get("spotify"), dict) else {}
+        enabled = bool(cfg.get("enabled", False))
+        if not enabled and not self.editing:
+            return
+        box = self.layout.get("spotifyPanel") or {}
+        x, y, w, h = [int(box.get(k, 0)) for k in ("x", "y", "w", "h")]
+        self._rounded_rect(x, y, w, h, radius, fill=bg, outline="", stipple=bg_stipple, canvas=self.bg_canvas)
+
+        nowplaying = self.last_nowplaying if isinstance(self.last_nowplaying, dict) else {}
+        title = str(nowplaying.get("title") or ("Kein Song aktiv" if self.language != "en" else "No song active"))
+        artist = str(nowplaying.get("artist") or nowplaying.get("album") or "")
+        cover = str(nowplaying.get("cover") or "").strip()
+        if self.editing and not enabled:
+            title = "Spotify"
+            artist = "Im Chat-Reiter aktivieren" if self.language != "en" else "Enable in the chat tab"
+
+        pad = 12
+        cover_size = max(34, min(64, h - 20))
+        px = x + pad
+        center_y = y + h / 2
+        image = self._spotify_cover_image(cover, cover_size) if (cover or enabled or self.editing) else None
+        if image:
+            self.canvas.create_image(px + int(image.width() / 2), center_y, image=image, anchor="center")
+            px += image.width() + 12
+        else:
+            self._rounded_rect(px, int(center_y - cover_size / 2), cover_size, cover_size, 8, fill="#172033", outline="", canvas=self.canvas)
+            self.canvas.create_text(px + cover_size / 2, center_y, text="SP", fill="#1ed760", font=(font_family, max(9, int(font_size * .72)), "bold"), anchor="center")
+            px += cover_size + 12
+
+        right = x + w - (36 if self.editing else 14)
+        label_font = self.tkfont.Font(family=font_family, size=max(8, int(font_size * .72)), weight="bold")
+        title_font = self.tkfont.Font(family=font_family, size=max(10, font_size + 1), weight="bold")
+        artist_font = self.tkfont.Font(family=font_family, size=max(8, font_size - 2))
+        self.canvas.create_text(px, y + 17, text="SPOTIFY", fill="#1ed760", font=label_font, anchor="w")
+        available = max(20, right - px)
+        safe_title = self._wrap_text_px(title, title_font, available, available, max_lines=1)[0]
+        safe_artist = self._wrap_text_px(artist, artist_font, available, available, max_lines=1)[0] if artist else ""
+        self.canvas.create_text(px, y + max(36, int(h * .48)), text=safe_title, fill=text_color, font=title_font, anchor="w")
+        if safe_artist:
+            self.canvas.create_text(px, min(y + h - 14, y + max(54, int(h * .72))), text=safe_artist, fill="#b9c2e2", font=artist_font, anchor="w")
+
         if self.editing:
             self.canvas.create_rectangle(x, y, x + w, y + h, outline="#936cff", dash=(4, 3))
             self.canvas.create_polygon(x + w, y + h - 24, x + w, y + h, x + w - 24, y + h, fill="#936cff")
@@ -1310,7 +1449,7 @@ class DesktopTkOverlay:
 
     def _draw_alert_panel(self, bg: str, bg_stipple: str | None, radius: int, font_family: str, font_size: int, text_color: str) -> None:
         cfg = self.layout.get("alerts") if isinstance(self.layout.get("alerts"), dict) else {}
-        if not bool(cfg.get("enabled", True)):
+        if not bool(cfg.get("enabled", True)) and not self.editing:
             return
         box = self.layout.get("alertPanel") or {}
         x, y, w, h = [int(box.get(k, 0)) for k in ("x", "y", "w", "h")]
@@ -1318,7 +1457,7 @@ class DesktopTkOverlay:
         platforms = cfg.get("platforms") if isinstance(cfg.get("platforms"), dict) else {}
         alerts = [
             item for item in (self.last_chat_state.get("messages", []) or [])
-            if item.get("message_type") == "alert" and bool(platforms.get(str(item.get("platform") or "").lower(), True))
+            if item.get("message_type") == "alert" and self._is_fresh_alert_item(item) and bool(platforms.get(str(item.get("platform") or "").lower(), True))
         ][-max(1, min(20, int(cfg.get("maxItems", 5) or 5))):]
         title_font = self.tkfont.Font(family=font_family, size=max(10, int(font_size * .9)), weight="bold")
         text_font = self.tkfont.Font(family=font_family, size=max(10, int(font_size * .9)))

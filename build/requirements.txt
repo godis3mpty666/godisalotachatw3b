@@ -1,3 +1,4 @@
 PyInstaller
 requests
 TikTokLive
+Pillow

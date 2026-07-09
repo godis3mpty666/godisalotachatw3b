@@ -210,8 +210,9 @@ def prune_ui_browser_profile_data(data_dir: Path | str) -> int:
 
 def default_desktop_chat_layout() -> dict:
     return {
-        "layoutVersion": 2,
+        "layoutVersion": 3,
         "viewerBar": {"x": 16, "y": 16, "w": 720, "h": 64},
+        "spotifyPanel": {"x": 16, "y": 92, "w": 720, "h": 84},
         "chatPanel": {"x": 16, "y": 92, "w": 720, "h": 420},
         "alertPanel": {"x": 16, "y": 524, "w": 720, "h": 188},
         "style": {
@@ -229,6 +230,7 @@ def default_desktop_chat_layout() -> dict:
             "platforms": {"twitch": True, "tiktok": True, "youtube": True, "kick": True},
         },
         "viewers": {"enabled": True},
+        "spotify": {"enabled": False},
         "window": {"x": 80, "y": 80, "w": 780, "h": 820},
         "autoStart": False,
     }
@@ -257,6 +259,7 @@ def normalize_desktop_chat_layout(raw_layout) -> dict:
 
     min_sizes = {
         "viewerBar": (160, 42),
+        "spotifyPanel": (220, 58),
         "chatPanel": (180, 100),
         "alertPanel": (180, 72),
     }
@@ -266,6 +269,8 @@ def normalize_desktop_chat_layout(raw_layout) -> dict:
         box["w"] = min(int(box["w"]), max(140, win_w - 32))
         if key == "chatPanel":
             box["h"] = min(int(box["h"]), max(100, win_h - 188))
+        if key == "spotifyPanel":
+            box["h"] = min(int(box["h"]), max(58, win_h - int(box["y"]) - 16))
         if key == "alertPanel":
             box["y"] = min(int(box["y"]), max(16, win_h - int(box["h"]) - 16))
             box["h"] = min(int(box["h"]), max(72, win_h - int(box["y"]) - 16))
@@ -292,7 +297,7 @@ def normalize_desktop_chat_layout(raw_layout) -> dict:
         h = max(min_h, min(h, max(min_h, win_h - y)))
         return {"x": x, "y": y, "w": w, "h": h}
 
-    for key in ("viewerBar", "chatPanel", "alertPanel"):
+    for key in ("viewerBar", "spotifyPanel", "chatPanel", "alertPanel"):
         merged[key] = clean_box(key)
 
     if not isinstance(raw_layout.get("alertPanel"), dict) or legacy_layout:
@@ -317,8 +322,14 @@ def normalize_desktop_chat_layout(raw_layout) -> dict:
     }
     viewers = merged.get("viewers") if isinstance(merged.get("viewers"), dict) else {}
     merged["viewers"] = {"enabled": bool(viewers.get("enabled", True))}
+    spotify = merged.get("spotify") if isinstance(merged.get("spotify"), dict) else {}
+    if isinstance(raw_layout.get("spotify"), dict):
+        spotify_enabled = bool(spotify.get("enabled", False))
+    else:
+        spotify_enabled = isinstance(raw_layout.get("spotifyPanel"), dict)
+    merged["spotify"] = {"enabled": spotify_enabled}
     merged["autoStart"] = bool(merged.get("autoStart", False))
-    merged["layoutVersion"] = 2
+    merged["layoutVersion"] = 3
     return merged
 
 
@@ -635,8 +646,10 @@ class WebbasedPluginHost:
                 return
             if self._is_suppressed_outbound_echo(payload, text):
                 return
+            now = time.time()
             item = {
                 "id": _now_ms(),
+                "created_at": now,
                 "platform": str(payload.get("platform") or plugin_id or "plugin"),
                 "user": str(payload.get("username") or payload.get("display_name") or payload.get("user") or ""),
                 "text": text,
@@ -680,7 +693,6 @@ class WebbasedPluginHost:
             if not isinstance(recent, dict):
                 recent = {}
                 setattr(self.state, "_recent_chat_emit", recent)
-            now = time.time()
             try:
                 for key, ts in list(recent.items()):
                     if now - float(ts or 0.0) > 5.0:
@@ -5291,8 +5303,8 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 clean = {}
                 defaults = default_desktop_chat_layout()
-                clean["layoutVersion"] = 2
-                for key in ("viewerBar", "chatPanel", "alertPanel"):
+                clean["layoutVersion"] = 3
+                for key in ("viewerBar", "spotifyPanel", "chatPanel", "alertPanel"):
                     raw = data.get(key) if isinstance(data, dict) else {}
                     raw = raw if isinstance(raw, dict) else {}
                     fallback_box = defaults.get(key, {})
@@ -5331,6 +5343,9 @@ class Handler(BaseHTTPRequestHandler):
                 raw_viewers = data.get("viewers") if isinstance(data, dict) else {}
                 raw_viewers = raw_viewers if isinstance(raw_viewers, dict) else {}
                 clean["viewers"] = {"enabled": bool(raw_viewers.get("enabled", True))}
+                raw_spotify = data.get("spotify") if isinstance(data, dict) else {}
+                raw_spotify = raw_spotify if isinstance(raw_spotify, dict) else {}
+                clean["spotify"] = {"enabled": bool(raw_spotify.get("enabled", False))}
                 clean = normalize_desktop_chat_layout(clean)
                 _json_save(st.data / "plugins" / "chat_desktop" / "layout.json", clean)
                 return self._json({"ok": True, "layout": clean})

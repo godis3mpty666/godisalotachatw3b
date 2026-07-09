@@ -743,6 +743,8 @@ class TwitchChatPlugin(ThreadedPlugin):
         return str(fallback or login or key).strip()
 
     def _emit_viewer_join_once(self, host: PluginHost, channel: str, joined_name: str, joined_login: str = '') -> None:
+        if self._last_is_live is not True:
+            return
         joined_key = self._remember_chatter_name(joined_login or joined_name, joined_name)
         if not joined_key:
             return
@@ -811,6 +813,8 @@ class TwitchChatPlugin(ThreadedPlugin):
 
     def _handle_join_event(self, host: PluginHost, settings: dict, channel: str, login_username: str, line: str) -> None:
         if not self._settings_bool(settings.get('viewer_join_alerts'), True):
+            return
+        if self._last_is_live is not True:
             return
         joined_name = self._parse_join_name(line, channel)
         if not joined_name:
@@ -980,6 +984,8 @@ class TwitchChatPlugin(ThreadedPlugin):
 
     def _maybe_poll_join_fallback(self, host: PluginHost, settings: dict, cache: dict, channel: str, *, force: bool = False) -> None:
         if not self._settings_bool(settings.get('viewer_join_alerts'), True):
+            return
+        if self._last_is_live is not True:
             return
         try:
             poll_seconds = max(1.0, min(60.0, float(settings.get('viewer_join_poll_seconds') or 2)))

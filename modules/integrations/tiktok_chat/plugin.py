@@ -1411,6 +1411,13 @@ class TikTokChatPlugin(ThreadedPlugin):
         # temporarily unavailable debug port must remain retryable.
         self._live_reload_done = self._open_main_live_window(host, settings, channel, reason='connected')
 
+    def _reload_main_live_window_when_viewers_ready(self, host: PluginHost, channel: str) -> None:
+        if self._last_is_live is not True:
+            return
+        if self._last_viewer_count is None:
+            return
+        self._reload_main_live_window_on_live(host, channel)
+
     def _debug_url(self, port: int, suffix: str = 'json') -> str:
         return f'http://127.0.0.1:{port}/{suffix}'
 
@@ -2698,6 +2705,7 @@ class TikTokChatPlugin(ThreadedPlugin):
                 'viewer_count': viewer_count,
             },
         )
+        self._reload_main_live_window_when_viewers_ready(host, channel)
 
     def _emit_is_live(self, host: PluginHost, channel: str, is_live: bool, *, force: bool = False) -> None:
         # Live status is a metric for the shared viewer display. Keep it out
@@ -2717,10 +2725,12 @@ class TikTokChatPlugin(ThreadedPlugin):
         if not force and self._last_is_live is is_live:
             return
         self._last_is_live = is_live
-        if is_live:
-            self._reload_main_live_window_on_live(host, channel)
-        else:
+        if not is_live:
             self._live_reload_done = False
+            self._last_viewer_count = None
+            self._last_valid_live_viewers = None
+        else:
+            self._reload_main_live_window_when_viewers_ready(host, channel)
 
         # Nicht ueber host.emit_message senden: das Main-Tool macht daraus eine
         # ChatMessage mit leerem Text. Genau dadurch entstehen die leeren TikTok-
