@@ -554,10 +554,6 @@ class CommandsPlugin(ProviderPlugin):
                 ok, detail = self._invoke_first_meld_method(plugin, ("showScene", "switchScene", "switch_scene", "setCurrentScene"), [scene_ref], timeout=3.0)
                 return bool(ok), str(detail or "Meld-Szene aktiviert")
             scene_detail = ""
-            if scene_ref and action != "trigger":
-                scene_ok, scene_detail = self._invoke_first_meld_method(plugin, ("showScene", "switchScene", "switch_scene", "setCurrentScene"), [scene_ref], timeout=2.0)
-                if not scene_ok:
-                    self._log(f"Meld Szene konnte vor Aktion nicht aktiviert werden ({scene} -> {scene_ref}): {scene_detail}")
             layer_ref = f"{scene}/{source}" if scene else source
             layer_id, layer_detail = self._resolve_meld_layer_id(plugin, layer_ref)
             if not layer_id:

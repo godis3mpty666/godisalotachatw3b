@@ -1,7 +1,7 @@
-{
+﻿{
   "id": "meld_control",
   "name": "Meld Control",
-  "version": "0.06",
+  "version": "0.08",
   "description": "Uses central Meld Studio platform connection settings from the main tool and keeps route/browser settings inside the plugin.",
   "description_de": "Verwendet die zentrale Meld-Studio-Verbindung des Hauptprogramms und verwaltet Routen- und Browser-Einstellungen im Plugin.",
   "description_en": "Uses the central Meld Studio connection from the main tool and keeps route and browser settings inside the plugin."

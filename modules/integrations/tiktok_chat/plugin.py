@@ -662,6 +662,7 @@ class TikTokChatPlugin(ThreadedPlugin):
         self._live_window_opened = False
         self._live_reload_done = False
         self._live_window_last_url = ''
+        self._live_reload_generation = 0
         self._live_window_title_monitors: set[int] = set()
         self._gift_media_dir = app_root() / 'data' / 'tiktok_chat' / 'media'
         self._gift_catalog_path = app_root() / 'data' / 'tiktok_chat' / 'gift_catalog.json'
@@ -1346,6 +1347,10 @@ class TikTokChatPlugin(ThreadedPlugin):
                         # navigate it to the currently resolved live URL. This
                         # also rebuilds TikTok's chat composer for main/bot send.
                         self._cdp_call(ws_url, 'Page.navigate', {'url': url}, timeout=6.0)
+                        if reason in {'live detected', 'connected'}:
+                            time.sleep(0.8)
+                            with contextlib.suppress(Exception):
+                                self._cdp_call(ws_url, 'Page.reload', {'ignoreCache': True}, timeout=4.0)
                         if reason not in {'plugin active', 'start', 'live detected', 'connected'}:
                             self._cdp_call(ws_url, 'Page.bringToFront', {}, timeout=3.0)
                         self._live_window_opened = True
@@ -1407,9 +1412,25 @@ class TikTokChatPlugin(ThreadedPlugin):
             return
         if self._live_reload_done:
             return
-        # Only mark it done after navigation/opening actually succeeded. A
-        # temporarily unavailable debug port must remain retryable.
-        self._live_reload_done = self._open_main_live_window(host, settings, channel, reason='connected')
+        self._live_reload_done = True
+        self._live_reload_generation += 1
+        generation = self._live_reload_generation
+
+        def delayed_reload() -> None:
+            if self._stop.wait(5.0):
+                return
+            if generation != self._live_reload_generation:
+                return
+            if self._last_is_live is not True:
+                return
+            current_settings = self._settings if isinstance(self._settings, dict) else settings
+            ok = self._open_main_live_window(host, current_settings, channel, reason='connected')
+            with contextlib.suppress(Exception):
+                host.log(self.plugin_id, f'TikTok live window reinit after live start: ok={bool(ok)}')
+            if not ok and generation == self._live_reload_generation:
+                self._live_reload_done = False
+
+        threading.Thread(target=delayed_reload, daemon=True, name='tiktok-live-window-reinit').start()
 
     def _reload_main_live_window_when_viewers_ready(self, host: PluginHost, channel: str) -> None:
         if self._last_is_live is not True:
@@ -2727,10 +2748,11 @@ class TikTokChatPlugin(ThreadedPlugin):
         self._last_is_live = is_live
         if not is_live:
             self._live_reload_done = False
+            self._live_reload_generation += 1
             self._last_viewer_count = None
             self._last_valid_live_viewers = None
         else:
-            self._reload_main_live_window_when_viewers_ready(host, channel)
+            self._reload_main_live_window_on_live(host, channel)
 
         # Nicht ueber host.emit_message senden: das Main-Tool macht daraus eine
         # ChatMessage mit leerem Text. Genau dadurch entstehen die leeren TikTok-

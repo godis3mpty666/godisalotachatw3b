@@ -539,6 +539,8 @@ class MeldControlPlugin(ThreadedPlugin):
         self._browser_server_key: tuple[str, int] | None = None
         self._latest_settings_for_routes: dict[str, Any] = {}
         self._routes_store_path = _main_data_dir(self.plugin_id) / 'file_routes.json'
+        self._host: PluginHost | None = None
+        self._settings: dict[str, Any] = {}
         self.ui_language = 'de'
 
     def set_ui_language(self, language: str) -> None:
@@ -818,6 +820,8 @@ class MeldControlPlugin(ThreadedPlugin):
 
     def run(self, settings: dict[str, Any], host: PluginHost) -> None:
         settings = self._effective_settings(settings, host)
+        self._host = host
+        self._settings = dict(settings or {})
         if not self._bool_setting(settings, 'platform_enabled', True):
             host.set_status(self.plugin_id, PluginStatus('disconnected', 'Meld disabled in platforms'))
             while not self._stop.wait(0.5):
@@ -917,6 +921,37 @@ class MeldControlPlugin(ThreadedPlugin):
         with self._lock:
             return self._connected and self._ws is not None
 
+    def ensure_connected(self, timeout: float = 5.0) -> tuple[bool, str]:
+        with self._lock:
+            if self._connected and self._ws is not None:
+                return True, self._last_detail or 'Connected'
+        settings = self._effective_settings(getattr(self, '_settings', {}) or {}, self._host)
+        deadline = time.time() + max(0.5, float(timeout or 5.0))
+        last_detail = 'Meld is not connected'
+        while time.time() < deadline and not self._stop.is_set():
+            try:
+                ws, detail = self._connect_and_verify(settings, self._host)
+                with self._lock:
+                    old_ws = self._ws
+                    self._ws = ws
+                    self._connected = True
+                    self._last_detail = detail
+                if old_ws is not None and old_ws is not ws:
+                    with contextlib.suppress(Exception):
+                        old_ws.close()
+                host = self._host
+                if host is not None:
+                    with contextlib.suppress(Exception):
+                        host.set_status(self.plugin_id, PluginStatus('connected', detail))
+                    with contextlib.suppress(Exception):
+                        host.log(self.plugin_id, f'Meld reconnect OK: {detail}')
+                return True, detail
+            except Exception as exc:
+                last_detail = 'Meld ist nicht gestartet oder nicht erreichbar.' if self._is_connection_refused(exc) else f'Meld reconnect failed: {exc}'
+                self._drop_connection()
+                time.sleep(0.35)
+        return False, last_detail
+
     def get_session_items(self) -> dict[str, dict[str, Any]]:
         with self._lock:
             return {k: dict(v) for k, v in self._session_items.items()}
@@ -998,8 +1033,12 @@ class MeldControlPlugin(ThreadedPlugin):
         method_id = None
         clean_name = str(method_name or '').strip()
         with self._lock:
-            if not self._connected or self._ws is None:
-                return False, 'Meld is not connected'
+            needs_connect = not self._connected or self._ws is None
+        if needs_connect:
+            ok, detail = self.ensure_connected(timeout=max(1.0, min(4.0, float(timeout or 3.0))))
+            if not ok:
+                return False, detail or 'Meld is not connected'
+        with self._lock:
             method_id = self._resolve_method_id_locked(clean_name)
             if method_id is None:
                 return False, f'Unknown Meld method: {clean_name}'

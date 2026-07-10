@@ -4508,8 +4508,10 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 meld = getattr(st, "plugin_instances", {}).get("meld_control")
                 if meld is not None:
+                    ensure = getattr(meld, "ensure_connected", None)
+                    if callable(ensure):
+                        ensure(timeout=2.5)
                     items = meld.get_session_items()
-                    result["meld"]["connected"] = bool(getattr(meld, "is_connected", lambda: False)())
                     rows = [dict(value, id=key) for key, value in items.items()]
                     result["meld"]["scenes"] = sorted({str(row.get("name") or "") for row in rows if str(row.get("type") or "").lower() == "scene" and str(row.get("name") or "")}, key=str.casefold)
                     for scene in result["meld"]["scenes"]:
@@ -4524,6 +4526,7 @@ class Handler(BaseHTTPRequestHandler):
                                 continue
                         result["meld"]["sources_by_scene"][scene] = sorted(set(scene_layers), key=str.casefold)
                     result["meld"]["sources"] = sorted({source for names in result["meld"]["sources_by_scene"].values() for source in names}, key=str.casefold)
+                    result["meld"]["connected"] = bool(getattr(meld, "is_connected", lambda: False)()) or bool(result["meld"]["scenes"] or result["meld"]["sources"])
                     st.log("automation", "meld targets", f"connected={result['meld']['connected']} scenes={len(result['meld']['scenes'])} layers={len(result['meld']['sources'])}")
                 else:
                     result["meld"]["detail"] = "Meld-Control-Plugin ist nicht gestartet"
@@ -4939,6 +4942,9 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 meld = st.plugin_instances.get("meld_control")
                 if meld is not None:
+                    ensure = getattr(meld, "ensure_connected", None)
+                    if callable(ensure):
+                        ensure(timeout=3.0)
                     items = meld.get_session_items() if hasattr(meld, "get_session_items") else {}
                     connected = bool(getattr(meld, "is_connected", lambda: False)())
                     st.log("automation", "targets reload", f"Meld cache gelesen: connected={connected} items={len(items) if isinstance(items, dict) else 0}")
@@ -4958,10 +4964,18 @@ class Handler(BaseHTTPRequestHandler):
                 preview_text = str(data.get("preview") or "Testwert aus godisalotachat")
                 if target == "meld":
                     meld = st.plugin_instances.get("meld_control")
-                    if meld is None or not meld.is_connected():
+                    if meld is None:
                         st.log("automation", "test", "Meld-Control ist nicht verbunden")
                         return self._json({"ok": False, "error": "Meld-Control ist nicht verbunden."}, 400)
+                    ensure = getattr(meld, "ensure_connected", None)
+                    if callable(ensure):
+                        connected, connect_detail = ensure(timeout=4.0)
+                    else:
+                        connected, connect_detail = bool(getattr(meld, "is_connected", lambda: False)()), "Meld-Control ist nicht verbunden."
                     items = meld.get_session_items()
+                    if not connected and not items:
+                        st.log("automation", "test", f"Meld-Control ist nicht verbunden: {connect_detail}")
+                        return self._json({"ok": False, "error": f"Meld-Control ist nicht verbunden: {connect_detail}"}, 400)
                     scene_ref = scene_name
                     try:
                         scene_matches = [str(key) for key, value in items.items() if isinstance(value, dict) and str(value.get("type") or "").lower() == "scene" and str(value.get("name") or "").casefold() == scene_name.casefold()]
@@ -4972,15 +4986,14 @@ class Handler(BaseHTTPRequestHandler):
                     if action == "scene":
                         ok, detail = meld.invoke_meld_method("showScene", [scene_ref], timeout=3.0)
                     else:
-                        if scene_ref != scene_name:
-                            try:
-                                meld.invoke_meld_method("showScene", [scene_ref], timeout=2.0)
-                            except Exception:
-                                pass
-                        match = next((dict(value, id=key) for key, value in items.items() if str(value.get("name") or "").casefold() == source_name.casefold() and meld._item_matches_scene(value, scene_name.casefold(), items)), None)
+                        finder = getattr(meld, "_find_target_layer", None)
+                        match = finder(scene_name, source_name) if callable(finder) else None
+                        if match is None:
+                            match = next((dict(value, id=key) for key, value in items.items() if str(value.get("name") or "").casefold() == source_name.casefold() and meld._item_matches_scene(value, scene_name.casefold(), items)), None)
                         if match is None:
                             st.log("automation", "test", f"Meld Quelle nicht gefunden: scene={scene_name} source={source_name}")
-                            return self._json({"ok": False, "error": "Gewählte Meld-Quelle wurde nicht gefunden."}, 400)
+                            return self._json({"ok": False, "error": f"Gewählte Meld-Quelle wurde nicht gefunden: {scene_name} / {source_name}"}, 400)
+                        matched_layer = str(match.get("_full_path") or match.get("name") or source_name)
                         if action == "text":
                             ok, detail = meld.set_session_property(str(match["id"]), "text", preview_text, timeout=3.0)
                         elif action in {"show", "hide"}:
@@ -5021,7 +5034,7 @@ class Handler(BaseHTTPRequestHandler):
                             st.log("automation", "test", f"Unbekannte Aktion: {action}")
                             return self._json({"ok": False, "error": "Unbekannte Aktion."}, 400)
                     st.log("automation", "test", f"meld action={action} scene={scene_name} source={source_name} ok={bool(ok)}")
-                    return self._json({"ok": bool(ok), "detail": str(detail or "Test ausgeführt")})
+                    return self._json({"ok": bool(ok), "detail": f"{str(detail or 'Test ausgeführt')} | Layer: {matched_layer}" if action != "scene" else str(detail or "Test ausgeführt")})
                 if target == "obs":
                     obs = st.plugin_instances.get("obs_control")
                     if obs is None or not obs.is_connected():

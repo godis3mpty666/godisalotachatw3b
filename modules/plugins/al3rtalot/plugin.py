@@ -385,6 +385,8 @@ class Al3rtalotPlugin(ProviderPlugin):
     def _automation_text(self, platform: str, value: str, user: str, amount: int) -> str:
         user = str(user or '').strip() or 'Unbekannt'
         amount = int(amount or 0)
+        if value.startswith('latest_'):
+            return user
         if platform == 'tiktok' and value == 'top_liker':
             return user
         if platform == 'tiktok' and value == 'like_total':
@@ -406,6 +408,15 @@ class Al3rtalotPlugin(ProviderPlugin):
         text = self._automation_text(platform, value, user, amount)
         for rule in matching:
             self._run_automation_rule(rule, text)
+
+    def _apply_alert_automation(self, item: dict[str, Any]) -> None:
+        platform = str(item.get('platform') or '').strip().lower()
+        event_type = str(item.get('event_type') or '').strip().lower()
+        username = str(item.get('username') or '').strip()
+        if not platform or not event_type or event_type == 'chat':
+            return
+        value = f'latest_{event_type}'
+        self._apply_automation_value(platform, value, username, to_int(item.get('amount'), 0, 0))
 
     def _apply_like_threshold_rules(self, user: str, total_likes: int) -> None:
         settings = self._global_settings()
@@ -526,6 +537,14 @@ class Al3rtalotPlugin(ProviderPlugin):
     def _find_meld_layer(self, meld: Any, scene_name: str, source_name: str) -> dict[str, Any] | None:
         if meld is None or not source_name:
             return None
+        finder = getattr(meld, '_find_target_layer', None)
+        if callable(finder):
+            try:
+                found = finder(scene_name, source_name)
+                if isinstance(found, dict):
+                    return found
+            except Exception:
+                pass
         items = meld.get_session_items() if hasattr(meld, 'get_session_items') else {}
         if not isinstance(items, dict):
             return None
@@ -565,8 +584,16 @@ class Al3rtalotPlugin(ProviderPlugin):
 
     def _apply_meld_rule(self, action: str, scene_name: str, source_name: str, text: str) -> tuple[bool, str]:
         meld = self._get_plugin('meld_control')
-        if meld is None or not getattr(meld, 'is_connected', lambda: False)():
+        if meld is None:
             return False, 'Meld-Control ist nicht verbunden'
+        ensure = getattr(meld, 'ensure_connected', None)
+        if callable(ensure):
+            connected, detail = ensure(timeout=4.0)
+        else:
+            connected, detail = bool(getattr(meld, 'is_connected', lambda: False)()), 'Meld-Control ist nicht verbunden'
+        cached_items = meld.get_session_items() if hasattr(meld, 'get_session_items') else {}
+        if not connected and not cached_items:
+            return False, str(detail or 'Meld-Control ist nicht verbunden')
         if action == 'scene':
             ok, detail = meld.invoke_meld_method('showScene', [scene_name], timeout=3.0)
             return bool(ok), str(detail or '')
@@ -766,6 +793,7 @@ class Al3rtalotPlugin(ProviderPlugin):
         item['id'] = now_ms()
         item['platform_label'] = PLATFORM_LABELS.get(str(item.get('platform')), str(item.get('platform') or 'al3rtalot'))
         self._write_exports(item)
+        self._apply_alert_automation(item)
         self._save_runtime_state({'latest_alert': item})
         self._emit_desktop_alert(item, cfg)
         self._log(f"alert | {item.get('platform')}:{item.get('event_type')}:{item.get('username')} -> {item.get('text')}")

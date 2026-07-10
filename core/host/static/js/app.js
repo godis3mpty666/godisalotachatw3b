@@ -1018,7 +1018,7 @@ async function renderObsMeld(){
 
   const fillLikeUserList=()=>{$("#ruleLikeUserList").innerHTML=savedLikeUsers().map(x=>`<option value="${esc(x)}"></option>`).join("");};
   const selectedIsLikeCounter=()=>$("#rulePlatform").value==="tiktok"&&$("#ruleValue").value==="like_total";
-  const toggleTextOptions=()=>{const action=$("#ruleAction").value,text=action==="text",placeholder=$("#ruleStartup").value==="placeholder";startupField.hidden=!text;placeholderField.hidden=!text||!placeholder;likeCounterField.hidden=!selectedIsLikeCounter();hideSecondsField.hidden=action!=="show";};
+  const toggleTextOptions=()=>{const action=$("#ruleAction").value,text=action==="text",placeholder=$("#ruleStartup").value==="placeholder";startupField.hidden=!text;startupField.style.display=text?"":"none";placeholderField.hidden=!text||!placeholder;placeholderField.style.display=text&&placeholder?"":"none";likeCounterField.hidden=!selectedIsLikeCounter();likeCounterField.style.display=selectedIsLikeCounter()?"":"none";hideSecondsField.hidden=action!=="show";hideSecondsField.style.display=action==="show"?"":"none";};
   $("#ruleAction").onchange=toggleTextOptions;$("#ruleStartup").onchange=toggleTextOptions;
 
   let editIndex=-1;
@@ -1034,8 +1034,13 @@ async function renderObsMeld(){
   const runRuleTest=async (r,previewText)=>{
     const body={...r};
     if(isTextRule(r))body.preview=String(previewText||r.testText||defaultPreview(r));
+    const result=$("#ruleTestResult");
+    if(result)result.textContent=L("Teste...","Testing...");
     const out=await api("/api/automation/test",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
-    if(!out.ok)console.warn(L("Regeltest fehlgeschlagen","Rule test failed"),out.error);
+    const message=out.ok?(out.detail||L("Test gesendet.","Test sent.")):(out.error||out.detail||L("Regeltest fehlgeschlagen","Rule test failed"));
+    if(result)result.textContent=message;
+    if(!out.ok)console.warn(L("Regeltest fehlgeschlagen","Rule test failed"),message);
+    return out;
   };
   const renderRules=()=>{
     fillLikeUserList();
@@ -1050,6 +1055,7 @@ async function renderObsMeld(){
         : `<button class="secondary testSavedRule" data-i="${i}">${L("Testen","Test")}</button>`;
       return `<div class="ruleRow"><div><b>${esc(r.name)}</b><div class="small">${esc(platformLabel(r.platform))} · ${esc(valueLabel)}${condition} → ${esc((r.target||"").toUpperCase())} · ${esc(r.scene||"-")} · ${esc(r.source||"-")} · ${esc(actionLabels[r.action]||r.action||actionLabels.text)}${showInfo}</div></div><div class="btnLine">${testControls}<button class="secondary editRule" data-i="${i}">${L("Ändern","Edit")}</button><button class="secondary deleteRule" data-i="${i}">${L("Löschen","Delete")}</button></div></div>`;
     }).join(""):`<div class="hint">${L("Noch keine Einträge. Lege oben einen dauerhaften Live-Wert an.","No entries yet. Create a persistent live value above.")}</div>`;
+    $("#ruleList").insertAdjacentHTML("beforeend",`<div class="hint" id="ruleTestResult"></div>`);
     let testTextSaveTimer=null;
     const queueTestTextSave=()=>{clearTimeout(testTextSaveTimer);testTextSaveTimer=setTimeout(()=>persistRules(),450);};
     $$('.savedRuleTestText').forEach(input=>{
