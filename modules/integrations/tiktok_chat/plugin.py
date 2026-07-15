@@ -663,6 +663,7 @@ class TikTokChatPlugin(ThreadedPlugin):
         self._live_reload_done = False
         self._live_window_last_url = ''
         self._live_reload_generation = 0
+        self._live_reload_attempts = 0
         self._live_window_title_monitors: set[int] = set()
         self._gift_media_dir = app_root() / 'data' / 'tiktok_chat' / 'media'
         self._gift_catalog_path = app_root() / 'data' / 'tiktok_chat' / 'gift_catalog.json'
@@ -1413,22 +1414,27 @@ class TikTokChatPlugin(ThreadedPlugin):
         if self._live_reload_done:
             return
         self._live_reload_done = True
+        self._live_reload_attempts = 0
         self._live_reload_generation += 1
         generation = self._live_reload_generation
 
         def delayed_reload() -> None:
-            if self._stop.wait(5.0):
-                return
-            if generation != self._live_reload_generation:
-                return
-            if self._last_is_live is not True:
-                return
-            current_settings = self._settings if isinstance(self._settings, dict) else settings
-            ok = self._open_main_live_window(host, current_settings, channel, reason='connected')
-            with contextlib.suppress(Exception):
-                host.log(self.plugin_id, f'TikTok live window reinit after live start: ok={bool(ok)}')
-            if not ok and generation == self._live_reload_generation:
-                self._live_reload_done = False
+            # TikTok's /live page often changes from the offline shell to the
+            # real player several seconds after the API first reports live.
+            # Reload more than once so the embedded chat is rebuilt without a
+            # manual refresh, even on a slow live transition.
+            for delay in (5.0, 8.0, 12.0):
+                if self._stop.wait(delay):
+                    return
+                if generation != self._live_reload_generation or self._last_is_live is not True:
+                    return
+                current_settings = self._settings if isinstance(self._settings, dict) else settings
+                ok = self._open_main_live_window(host, current_settings, channel, reason='connected')
+                self._live_reload_attempts += 1
+                with contextlib.suppress(Exception):
+                    host.log(self.plugin_id, f'TikTok live window reinit after live start: attempt={self._live_reload_attempts} ok={bool(ok)}')
+            if generation == self._live_reload_generation:
+                self._live_reload_done = True
 
         threading.Thread(target=delayed_reload, daemon=True, name='tiktok-live-window-reinit').start()
 
@@ -2748,6 +2754,7 @@ class TikTokChatPlugin(ThreadedPlugin):
         self._last_is_live = is_live
         if not is_live:
             self._live_reload_done = False
+            self._live_reload_attempts = 0
             self._live_reload_generation += 1
             self._last_viewer_count = None
             self._last_valid_live_viewers = None

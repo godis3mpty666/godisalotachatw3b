@@ -2,6 +2,9 @@
 *{box-sizing:border-box}
 html,body{margin:0;width:100%;height:100%;overflow:hidden;background:transparent;color:var(--chat-color);font-family:var(--chat-font),Arial,sans-serif}
 .desktopBox{position:absolute;background:var(--box-bg);border:1px solid rgba(255,255,255,.16);border-radius:var(--box-radius);box-shadow:0 14px 40px rgba(0,0,0,.35);overflow:hidden}
+#systemInfoPanel{padding:14px 16px;background:rgba(120,31,50,.96);border-color:rgba(255,139,161,.8);overflow:hidden;white-space:normal;overflow-wrap:anywhere;line-height:1.25}
+#systemInfoPanel .desktopAlertTitle{margin:0 0 8px;font-size:clamp(16px,2.6vw,22px);line-height:1.15;white-space:normal}
+#systemInfoText{font-size:clamp(13px,2vw,17px);white-space:normal;overflow-wrap:anywhere}
 .editing:after{content:"";position:fixed;right:0;bottom:0;width:28px;height:28px;background:#936cff;clip-path:polygon(100% 0,100% 100%,0 100%)}
 #viewerBar{display:flex;gap:10px;align-items:center;padding:10px;overflow:hidden}
 .viewer{display:flex;align-items:center;gap:7px;min-width:72px;background:transparent;border-radius:10px;padding:7px 10px}

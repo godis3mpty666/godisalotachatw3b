@@ -405,7 +405,9 @@ class DesktopTkOverlay:
         self.layout.setdefault("spotifyPanel", {"x": 16, "y": 92, "w": 720, "h": 84})
         self.layout.setdefault("chatPanel", {"x": 16, "y": 92, "w": 720, "h": 420})
         self.layout.setdefault("alertPanel", {"x": 16, "y": 524, "w": 720, "h": 188})
+        self.layout.setdefault("systemInfoPanel", {"x": 16, "y": 724, "w": 720, "h": 112})
         self.layout.setdefault("alerts", {"enabled": True, "maxItems": 5, "showTimestamp": True, "platforms": {"twitch": True, "tiktok": True, "youtube": True, "kick": True}})
+        self.layout.setdefault("systemInfo", {"enabled": True})
         self.layout.setdefault("viewers", {"enabled": True})
         if "spotify" not in self.layout and isinstance(self.layout.get("spotifyPanel"), dict):
             self.layout["spotify"] = {"enabled": True}
@@ -595,13 +597,17 @@ class DesktopTkOverlay:
         # Native Resize-Griff fuer das komplette Fenster
         if self.editing and x >= self.root.winfo_width() - 34 and y >= self.root.winfo_height() - 34:
             return ("window-resize", "window")
-        for box_id in ("viewerBar", "spotifyPanel", "chatPanel", "alertPanel"):
+        for box_id in ("viewerBar", "spotifyPanel", "chatPanel", "alertPanel", "systemInfoPanel"):
             if box_id == "viewerBar" and not self.editing and not bool((self.layout.get("viewers") or {}).get("enabled", True)):
                 continue
             if box_id == "spotifyPanel" and not self.editing and not bool((self.layout.get("spotify") or {}).get("enabled", False)):
                 continue
             if box_id == "alertPanel" and not self.editing and not bool((self.layout.get("alerts") or {}).get("enabled", True)):
                 continue
+            if box_id == "systemInfoPanel" and not self.editing:
+                info = self.last_chat_state.get("system_info", {}) if isinstance(self.last_chat_state, dict) else {}
+                if not bool((self.layout.get("systemInfo") or {}).get("enabled", True)) or not bool(info.get("active")):
+                    continue
             box = self.layout.get(box_id) or {}
             bx, by, bw, bh = int(box.get("x", 0)), int(box.get("y", 0)), int(box.get("w", 0)), int(box.get("h", 0))
             if bx <= x <= bx + bw and by <= y <= by + bh:
@@ -688,7 +694,7 @@ class DesktopTkOverlay:
             latest = _fetch_json(self.layout_url, timeout=1.0)
             if not isinstance(latest, dict):
                 latest = {}
-            for key in ("viewerBar", "spotifyPanel", "chatPanel", "alertPanel", "window"):
+            for key in ("viewerBar", "spotifyPanel", "chatPanel", "alertPanel", "systemInfoPanel", "window"):
                 if isinstance(self.layout.get(key), dict):
                     latest[key] = dict(self.layout[key])
             self.layout = latest
@@ -1333,6 +1339,7 @@ class DesktopTkOverlay:
             self._draw_viewer_bar(bg, bg_stipple, radius, font_family, text_color)
         self._draw_chat_panel(bg, bg_stipple, radius, font_family, font_size, text_color)
         self._draw_alert_panel(bg, bg_stipple, radius, font_family, font_size, text_color)
+        self._draw_system_info_panel(bg, radius, font_family, font_size)
         if self.editing or bool((self.layout.get("spotify") or {}).get("enabled", False)):
             self._draw_spotify_panel(bg, bg_stipple, radius, font_family, font_size, text_color)
 
@@ -1494,6 +1501,27 @@ class DesktopTkOverlay:
                 safe_line = self._wrap_text_px(line, text_font, available, available, max_lines=1)[0]
                 self.canvas.create_text(px, cy + line_h / 2, text=safe_line, fill=text_color, font=text_font, anchor="w")
             cy += line_h
+        if self.editing:
+            self.canvas.create_rectangle(x, y, x + w, y + h, outline="#936cff", dash=(4, 3))
+            self.canvas.create_polygon(x + w, y + h - 24, x + w, y + h, x + w - 24, y + h, fill="#936cff")
+
+    def _draw_system_info_panel(self, bg: str, radius: int, font_family: str, font_size: int) -> None:
+        cfg = self.layout.get("systemInfo") if isinstance(self.layout.get("systemInfo"), dict) else {}
+        info = self.last_chat_state.get("system_info", {}) if isinstance(self.last_chat_state, dict) else {}
+        active = bool(info.get("active"))
+        if (not bool(cfg.get("enabled", True)) or not active) and not self.editing:
+            return
+        box = self.layout.get("systemInfoPanel") or {}
+        x, y, w, h = [int(box.get(k, 0)) for k in ("x", "y", "w", "h")]
+        fill = "#781f32" if active else bg
+        self._rounded_rect(x, y, w, h, radius, fill=fill, outline="#ff8ba1" if active else "", canvas=self.bg_canvas)
+        title = info.get("title_en" if self.language == "en" else "title_de") if active else ("System information" if self.language == "en" else "Systeminfo")
+        text = info.get("text_en" if self.language == "en" else "text_de") if active else ("Only visible during a system error." if self.language == "en" else "Nur bei einem Systemfehler sichtbar.")
+        title_font = self.tkfont.Font(family=font_family, size=max(12, int(font_size * 1.1)), weight="bold")
+        text_font = self.tkfont.Font(family=font_family, size=max(10, int(font_size * .9)))
+        text_width = max(80, w - 32)
+        self.canvas.create_text(x + 16, y + 14, text=str(title or ""), fill="#ffffff", font=title_font, anchor="nw", width=text_width)
+        self.canvas.create_text(x + 16, y + 50, text=str(text or ""), fill="#ffe4e9" if active else "#aeb8dc", font=text_font, anchor="nw", width=text_width)
         if self.editing:
             self.canvas.create_rectangle(x, y, x + w, y + h, outline="#936cff", dash=(4, 3))
             self.canvas.create_polygon(x + w, y + h - 24, x + w, y + h, x + w - 24, y + h, fill="#936cff")

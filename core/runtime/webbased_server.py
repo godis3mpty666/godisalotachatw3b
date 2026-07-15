@@ -146,6 +146,62 @@ TOKEN_URLS = {
 def _now_ms():
     return int(time.time() * 1000)
 
+_NETWORK_STATUS_LOCK = threading.Lock()
+_NETWORK_STATUS_CACHE = {"checked_at": 0.0, "online": True, "detail": "startup"}
+
+def _network_status() -> dict:
+    """Check general internet reachability, independently of stream platforms."""
+    now = time.time()
+    with _NETWORK_STATUS_LOCK:
+        if now - float(_NETWORK_STATUS_CACHE.get("checked_at") or 0.0) < 4.0:
+            return dict(_NETWORK_STATUS_CACHE)
+        online = False
+        detail = "unreachable"
+        probes = (
+            "http://www.msftconnecttest.com/connecttest.txt",
+            "http://connectivitycheck.gstatic.com/generate_204",
+        )
+        for url in probes:
+            try:
+                req = urllib.request.Request(url, headers={"User-Agent": "godisalotachat-connectivity/1"})
+                with urllib.request.urlopen(req, timeout=1.5) as response:
+                    status = int(getattr(response, "status", 200) or 200)
+                    body = response.read(64)
+                    expected = (status == 204) if "gstatic.com" in url else (status == 200 and body.strip() == b"Microsoft Connect Test")
+                    if expected:
+                        online = True
+                        detail = urllib.parse.urlparse(url).hostname or "reachable"
+                        break
+            except Exception:
+                continue
+        _NETWORK_STATUS_CACHE.update({"checked_at": now, "online": online, "detail": detail})
+        return dict(_NETWORK_STATUS_CACHE)
+
+def _network_alert_loop(state) -> None:
+    """Maintain standalone system information, separate from platform alerts."""
+    failures = 0
+    state.system_info = {"active": False, "kind": "", "title_de": "", "title_en": "", "text_de": "", "text_en": ""}
+    while True:
+        try:
+            status = _network_status()
+            failures = 0 if bool(status.get("online")) else failures + 1
+            if failures >= 2:
+                was_active = bool(getattr(state, "system_info", {}).get("active"))
+                state.system_info = {
+                    "active": True, "kind": "internet_offline",
+                    "title_de": "Keine Internetverbindung", "title_en": "No internet connection",
+                    "text_de": "Die Stream-Verbindung ist unterbrochen.", "text_en": "The stream connection is interrupted.",
+                }
+                if not was_active:
+                    state.log("system", "internet connection lost")
+            elif bool(getattr(state, "system_info", {}).get("active")):
+                state.system_info = {"active": False, "kind": "", "title_de": "", "title_en": "", "text_de": "", "text_en": ""}
+                state.log("system", "internet connection restored")
+        except Exception as exc:
+            try: state.log("system", "network monitor failed", exc)
+            except Exception: pass
+        time.sleep(5.0)
+
 def _json_load(path: Path, default):
     try:
         if path.exists():
@@ -258,6 +314,7 @@ def default_desktop_chat_layout() -> dict:
         "spotifyPanel": {"x": 16, "y": 92, "w": 720, "h": 84},
         "chatPanel": {"x": 16, "y": 92, "w": 720, "h": 420},
         "alertPanel": {"x": 16, "y": 524, "w": 720, "h": 188},
+        "systemInfoPanel": {"x": 16, "y": 724, "w": 720, "h": 112},
         "style": {
             "background": "#0d101d",
             "opacity": 82,
@@ -272,9 +329,10 @@ def default_desktop_chat_layout() -> dict:
             "showTimestamp": False,
             "platforms": {"twitch": True, "tiktok": True, "youtube": True, "kick": True},
         },
+        "systemInfo": {"enabled": True},
         "viewers": {"enabled": True},
         "spotify": {"enabled": False},
-        "window": {"x": 80, "y": 80, "w": 780, "h": 820},
+        "window": {"x": 80, "y": 80, "w": 780, "h": 868},
         "autoStart": False,
     }
 
@@ -291,6 +349,13 @@ def normalize_desktop_chat_layout(raw_layout) -> dict:
     window = merged.get("window") if isinstance(merged.get("window"), dict) else {}
     win_w = max(320, min(4000, int(window.get("w", 780) or 780)))
     win_h = max(240, min(4000, int(window.get("h", 820) or 820)))
+    early_system_box = raw_layout.get("systemInfoPanel") if isinstance(raw_layout.get("systemInfoPanel"), dict) else {}
+    early_system_pos = (int(early_system_box.get("x", -1) or -1), int(early_system_box.get("y", -1) or -1), int(early_system_box.get("w", -1) or -1))
+    early_old_default = not early_system_box or early_system_pos in {(160, 24, 460), (16, 16, 720), (16, 16, 498)}
+    if early_old_default:
+        raw_alert = raw_layout.get("alertPanel") if isinstance(raw_layout.get("alertPanel"), dict) else default.get("alertPanel", {})
+        required_h = int(raw_alert.get("y", 524) or 524) + int(raw_alert.get("h", 188) or 188) + 12 + 112 + 16
+        win_h = min(4000, max(win_h, required_h))
     if legacy_layout and (win_w < 700 or win_h < 760):
         win_w, win_h = 780, 820
     merged["window"] = {
@@ -305,6 +370,7 @@ def normalize_desktop_chat_layout(raw_layout) -> dict:
         "spotifyPanel": (220, 58),
         "chatPanel": (180, 100),
         "alertPanel": (180, 72),
+        "systemInfoPanel": (240, 72),
     }
 
     def default_box(key: str) -> dict:
@@ -340,8 +406,27 @@ def normalize_desktop_chat_layout(raw_layout) -> dict:
         h = max(min_h, min(h, max(min_h, win_h - y)))
         return {"x": x, "y": y, "w": w, "h": h}
 
-    for key in ("viewerBar", "spotifyPanel", "chatPanel", "alertPanel"):
+    for key in ("viewerBar", "spotifyPanel", "chatPanel", "alertPanel", "systemInfoPanel"):
         merged[key] = clean_box(key)
+
+    raw_system_box = raw_layout.get("systemInfoPanel") if isinstance(raw_layout.get("systemInfoPanel"), dict) else {}
+    old_system_default = (
+        not raw_system_box
+        or (int(raw_system_box.get("x", -1) or -1), int(raw_system_box.get("y", -1) or -1), int(raw_system_box.get("w", -1) or -1)) in {(160, 24, 460), (16, 16, 720), (16, 16, 498)}
+    )
+    if old_system_default:
+        alert_box = merged.get("alertPanel") or default_box("alertPanel")
+        desired = {
+            "x": int(alert_box.get("x", 16)),
+            "y": int(alert_box.get("y", 524)) + int(alert_box.get("h", 188)) + 12,
+            "w": int(alert_box.get("w", 720)),
+            "h": 112,
+        }
+        desired["x"] = max(0, min(desired["x"], max(0, win_w - 240)))
+        desired["w"] = max(240, min(desired["w"], win_w - desired["x"]))
+        desired["y"] = max(0, min(desired["y"], max(0, win_h - 72)))
+        desired["h"] = max(72, min(desired["h"], win_h - desired["y"]))
+        merged["systemInfoPanel"] = desired
 
     if not isinstance(raw_layout.get("alertPanel"), dict) or legacy_layout:
         merged["chatPanel"]["h"] = min(int(merged["chatPanel"].get("h", 420)), max(100, merged["alertPanel"]["y"] - merged["chatPanel"]["y"] - 12))
@@ -363,6 +448,8 @@ def normalize_desktop_chat_layout(raw_layout) -> dict:
         "showTimestamp": False,
         "platforms": {name: bool(platforms.get(name, True)) for name in ("twitch", "tiktok", "youtube", "kick")},
     }
+    system_info = merged.get("systemInfo") if isinstance(merged.get("systemInfo"), dict) else {}
+    merged["systemInfo"] = {"enabled": bool(system_info.get("enabled", True))}
     viewers = merged.get("viewers") if isinstance(merged.get("viewers"), dict) else {}
     merged["viewers"] = {"enabled": bool(viewers.get("enabled", True))}
     spotify = merged.get("spotify") if isinstance(merged.get("spotify"), dict) else {}
@@ -4716,7 +4803,7 @@ class Handler(BaseHTTPRequestHandler):
                 if str(item.get("platform") or "") not in CHAT_PLATFORM_PLUGINS
                 or str(item.get("platform") or "") in enabled_platforms
             ]
-            self._json({"messages": messages, "platforms": platform_state})
+            self._json({"messages": messages, "platforms": platform_state, "system_info": dict(getattr(st, "system_info", {}) or {})})
             return
         if path == "/api/chattim3r":
             return self._json({"ok": True, "entries": st.chattim3r_entries()})
@@ -4725,7 +4812,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json(normalize_desktop_chat_layout(stored))
             return
         if path == "/api/desktop-chat/layout":
-            default = {"viewerBar": {"x": 16, "y": 16, "w": 720, "h": 64}, "chatPanel": {"x": 16, "y": 92, "w": 720, "h": 420}, "alertPanel": {"x": 16, "y": 524, "w": 720, "h": 188}, "style": {"background": "#0d101d", "opacity": 82, "radius": 16, "fontFamily": "Segoe UI", "fontSize": 16, "textColor": "#ffffff"}, "alerts": {"enabled": True, "maxItems": 5, "showTimestamp": False, "platforms": {"twitch": True, "tiktok": True, "youtube": True, "kick": True}}, "window": {"x": 80, "y": 80, "w": 780, "h": 820}, "autoStart": False}
+            default = {"viewerBar": {"x": 16, "y": 16, "w": 720, "h": 64}, "chatPanel": {"x": 16, "y": 92, "w": 720, "h": 420}, "alertPanel": {"x": 16, "y": 524, "w": 720, "h": 188}, "systemInfoPanel": {"x": 16, "y": 724, "w": 720, "h": 112}, "style": {"background": "#0d101d", "opacity": 82, "radius": 16, "fontFamily": "Segoe UI", "fontSize": 16, "textColor": "#ffffff"}, "alerts": {"enabled": True, "maxItems": 5, "showTimestamp": False, "platforms": {"twitch": True, "tiktok": True, "youtube": True, "kick": True}}, "systemInfo": {"enabled": True}, "window": {"x": 80, "y": 80, "w": 780, "h": 868}, "autoStart": False}
             stored = _json_load(st.data / "plugins" / "chat_desktop" / "layout.json", {})
             merged = {
                 key: ({**value, **(stored.get(key, {}) if isinstance(stored.get(key), dict) else {})} if isinstance(value, dict) else stored.get(key, value))
@@ -4756,6 +4843,9 @@ class Handler(BaseHTTPRequestHandler):
                 "language": normalize_language(settings.get("ui", {}).get("language", "de")),
                 "port_warning": ""
             })
+            return
+        if path == "/api/network-status":
+            self._json(_network_status())
             return
         if path.startswith("/api/tiktok/open/"):
             parts = path.strip("/").split("/")
@@ -5383,7 +5473,7 @@ class Handler(BaseHTTPRequestHandler):
                 clean = {}
                 defaults = default_desktop_chat_layout()
                 clean["layoutVersion"] = 3
-                for key in ("viewerBar", "spotifyPanel", "chatPanel", "alertPanel"):
+                for key in ("viewerBar", "spotifyPanel", "chatPanel", "alertPanel", "systemInfoPanel"):
                     raw = data.get(key) if isinstance(data, dict) else {}
                     raw = raw if isinstance(raw, dict) else {}
                     fallback_box = defaults.get(key, {})
@@ -5419,6 +5509,9 @@ class Handler(BaseHTTPRequestHandler):
                     "showTimestamp": False,
                     "platforms": {name: bool(raw_platforms.get(name, True)) for name in ("twitch", "tiktok", "youtube", "kick")},
                 }
+                raw_system_info = data.get("systemInfo") if isinstance(data, dict) else {}
+                raw_system_info = raw_system_info if isinstance(raw_system_info, dict) else {}
+                clean["systemInfo"] = {"enabled": bool(raw_system_info.get("enabled", True))}
                 raw_viewers = data.get("viewers") if isinstance(data, dict) else {}
                 raw_viewers = raw_viewers if isinstance(raw_viewers, dict) else {}
                 clean["viewers"] = {"enabled": bool(raw_viewers.get("enabled", True))}
@@ -6592,6 +6685,7 @@ def run(base_dir: str, open_browser: bool = True):
         try: STATE.log("plugins", "autostart failed", exc)
         except Exception: pass
     threading.Thread(target=STATE.chattim3r_loop, daemon=True, name="chattim3r").start()
+    threading.Thread(target=_network_alert_loop, args=(STATE,), daemon=True, name="system-network-monitor").start()
     _start_ui_watchdog()
     _write_pid(port)
     httpd = WebbasedHTTPServer(("127.0.0.1", port), Handler)
