@@ -109,6 +109,7 @@ class TwitchChatPlugin(ThreadedPlugin):
         self._processed_join_names: set[str] = set()
         self._processed_join_seen_at: dict[str, float] = {}
         self._active_chatters: set[str] = set()
+        self._chatter_missing_polls: dict[str, int] = {}
         self._chatter_display_names: dict[str, str] = {}
         self._chatters_initialized = False
         self._last_chatters_poll = 0.0
@@ -667,7 +668,7 @@ class TwitchChatPlugin(ThreadedPlugin):
             'detail': detail,
         })
 
-    def _emit_alert(self, host: PluginHost, channel: str, username: str, text: str, message_type: str) -> None:
+    def _emit_alert(self, host: PluginHost, channel: str, username: str, text: str, message_type: str, *, amount: int | None = None, raw: dict[str, Any] | None = None) -> None:
         clean_text = self._normalize_chat_text(text)
         clean_name = (username or 'Twitch').strip() or 'Twitch'
         clean_type = (message_type or 'twitch_alert').strip() or 'twitch_alert'
@@ -696,6 +697,11 @@ class TwitchChatPlugin(ThreadedPlugin):
             'show_in_desktop': True,
             'show_in_obs': True,
         }
+        if amount is not None:
+            payload['amount'] = max(0, int(amount))
+            payload['count'] = max(0, int(amount))
+        if isinstance(raw, dict):
+            payload['raw'] = dict(raw)
         host.emit_message(self.plugin_id, payload)
         try:
             host.log(self.plugin_id, f'Alert emitted: {clean_type} | {clean_name} | {clean_text}')
@@ -1004,11 +1010,27 @@ class TwitchChatPlugin(ThreadedPlugin):
         current = set(chatters.keys())
         if not self._chatters_initialized:
             self._active_chatters = set(current)
+            self._chatter_missing_polls = {}
             self._chatters_initialized = True
             return
         for key in sorted(current - self._active_chatters):
             self._emit_viewer_join_once(host, channel, chatters.get(key) or key, key)
-        self._active_chatters = current
+
+        # Helix chatter snapshots can briefly be incomplete while Twitch updates
+        # presence or paginates a busy room. Replacing the whole set after one
+        # such response loses valid JOINs and makes later join alerts erratic.
+        # Require two consecutive missing snapshots before considering a chatter
+        # gone; IRC PART still removes them immediately when Twitch sends it.
+        for key in current:
+            self._chatter_missing_polls.pop(key, None)
+        for key in tuple(self._active_chatters - current):
+            misses = self._chatter_missing_polls.get(key, 0) + 1
+            if misses >= 2:
+                self._active_chatters.discard(key)
+                self._chatter_missing_polls.pop(key, None)
+            else:
+                self._chatter_missing_polls[key] = misses
+        self._active_chatters.update(current)
 
     def _log_join_fallback_warning(self, host: PluginHost, exc: Exception) -> None:
         now = time.monotonic()
@@ -1042,6 +1064,21 @@ class TwitchChatPlugin(ThreadedPlugin):
             viewers = self._to_int(tags.get('msg-param-viewerCount'))
             text = f'raided mit {viewers} Zuschauern' if viewers else 'raided den Stream'
             self._emit_alert(host, channel, raider, text, 'twitch_raid')
+            return
+
+        if msg_id == 'viewermilestone':
+            category = self._unescape_tag(tags.get('msg-param-category', '')).strip().lower()
+            if category == 'watch-streak':
+                streak = self._to_int(tags.get('msg-param-value'))
+                text = system_msg or (
+                    f'hat eine Viewer-Streak von {streak} aufeinanderfolgenden Streams'
+                    if streak else 'hat eine Viewer-Streak erreicht'
+                )
+                self._emit_alert(
+                    host, channel, username, text, 'twitch_viewer_streak',
+                    amount=streak,
+                    raw={'event_id': tags.get('msg-param-id') or tags.get('id') or '', 'category': category, 'streak_streams': streak or 0},
+                )
             return
 
         if msg_id in {'sub', 'primepaidupgrade'}:
@@ -1768,6 +1805,7 @@ class TwitchChatPlugin(ThreadedPlugin):
         self._known_follower_ids = set()
         self._followers_initialized = False
         self._active_chatters = set()
+        self._chatter_missing_polls = {}
         self._chatters_initialized = False
         self._last_chatters_poll = 0.0
         self._last_chatters_error_log = 0.0

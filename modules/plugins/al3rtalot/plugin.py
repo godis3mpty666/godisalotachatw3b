@@ -111,6 +111,8 @@ class Al3rtalotPlugin(ProviderPlugin):
             'follow_template': '{user} folgt jetzt auf {platform}',
             'join_title': 'Join',
             'join_template': '{user} ist im Live',
+            'viewer_streak_title': 'Viewer-Streak',
+            'viewer_streak_template': '{user}: {text}',
             'like_title': 'Likes',
             'like_template': '{user} hat {amount} Likes geschickt',
             'gift_title': 'Gift',
@@ -335,6 +337,13 @@ class Al3rtalotPlugin(ProviderPlugin):
                 continue
             if str(rule.get('action') or 'text').strip().lower() != 'text':
                 continue
+            if (
+                str(rule.get('platform') or '').strip().lower() == 'twitch'
+                and str(rule.get('value') or '').strip().lower() == 'latest_viewer_streak'
+            ):
+                # Viewer streaks are transient Twitch alerts. Never restore an
+                # old one or write a placeholder when the tool starts.
+                continue
             key = self._startup_rule_key(rule)
             if key in self._startup_automation_done:
                 continue
@@ -382,9 +391,24 @@ class Al3rtalotPlugin(ProviderPlugin):
         except Exception:
             return None
 
-    def _automation_text(self, platform: str, value: str, user: str, amount: int) -> str:
+    def _automation_text(self, platform: str, value: str, user: str, amount: int, output: str = '') -> str:
         user = str(user or '').strip() or 'Unbekannt'
         amount = int(amount or 0)
+        if platform == 'twitch' and value == 'latest_viewer_streak':
+            template = str(output or '').strip()
+            mode = template.lower()
+            if mode == 'name':
+                return user
+            if mode == 'count':
+                return str(amount)
+            if mode in {'', 'both'}:
+                template = '<user> hat einen Streak von <amount> Streams erreicht'
+            for token, replacement in (
+                ('<user>', user), ('<amount>', str(amount)),
+                ('{user}', user), ('{amount}', str(amount)),
+            ):
+                template = template.replace(token, replacement)
+            return ' '.join(template.split()).strip()
         if value.startswith('latest_'):
             return user
         if platform == 'tiktok' and value == 'top_liker':
@@ -405,8 +429,9 @@ class Al3rtalotPlugin(ProviderPlugin):
         matching = [r for r in rules if isinstance(r, dict) and str(r.get('platform') or '').lower() == platform and str(r.get('value') or '').lower() == value]
         if not matching:
             return
-        text = self._automation_text(platform, value, user, amount)
         for rule in matching:
+            streak_template = str(rule.get('streakTemplate') or rule.get('streak_template') or rule.get('streakOutput') or rule.get('streak_output') or '')
+            text = self._automation_text(platform, value, user, amount, streak_template)
             self._run_automation_rule(rule, text)
 
     def _apply_alert_automation(self, item: dict[str, Any]) -> None:
@@ -416,7 +441,8 @@ class Al3rtalotPlugin(ProviderPlugin):
         if not platform or not event_type or event_type == 'chat':
             return
         value = f'latest_{event_type}'
-        self._apply_automation_value(platform, value, username, to_int(item.get('amount'), 0, 0))
+        amount = to_int(item.get('amount'), 0, 0)
+        self._apply_automation_value(platform, value, username, amount)
 
     def _apply_like_threshold_rules(self, user: str, total_likes: int) -> None:
         settings = self._global_settings()

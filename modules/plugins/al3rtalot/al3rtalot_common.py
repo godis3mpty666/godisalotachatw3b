@@ -18,6 +18,7 @@ EVENT_LABELS = {
     "chat": "Chat",
     "follow": "Follow",
     "join": "Join",
+    "viewer_streak": "Viewer-Streak",
     "like": "Like",
     "gift": "Gift",
     "share": "Share",

@@ -50,6 +50,18 @@ def _sanitize_automation_rules(value):
                 item["likeThreshold"] = max(1, int(float(str(raw.get("likeThreshold") or raw.get("like_threshold") or 1).replace(",", "."))))
             except Exception:
                 item["likeThreshold"] = 1
+        if platform == "twitch" and item["value"] == "latest_viewer_streak":
+            streak_output = str(raw.get("streakOutput") or raw.get("streak_output") or "both").strip().lower()
+            item["streakOutput"] = streak_output if streak_output in {"name", "count", "both"} else "both"
+            streak_template = str(raw.get("streakTemplate") or raw.get("streak_template") or "").strip()[:500]
+            if not streak_template:
+                if item["streakOutput"] == "name":
+                    streak_template = "<user>"
+                elif item["streakOutput"] == "count":
+                    streak_template = "<amount>"
+                else:
+                    streak_template = "<user> hat einen Streak von <amount> Streams erreicht"
+            item["streakTemplate"] = streak_template
         if item["startup"] not in allowed_startup:
             item["startup"] = "keep"
         if not item["name"]:
@@ -870,7 +882,7 @@ class WebbasedPluginHost:
                 return
             if alert_type not in {
                 "follow", "follower", "new_follow", "new_follower",
-                "join", "viewer_join", "user_join", "like", "likes",
+                "join", "viewer_join", "user_join", "viewer_streak", "watch_streak", "like", "likes",
                 "gift", "gifts", "share", "shares", "subscribe", "sub",
                 "subscription", "raid", "donation", "donate", "donated", "tip", "bits", "cheer", "member", "membership",
                 "sponsor", "new_sponsor", "superchat", "supersticker", "super_chat", "super-chat", "super_sticker", "super-sticker",
@@ -1079,6 +1091,12 @@ class WebbasedPluginManager:
         self.state = state
         self.host = WebbasedPluginHost(state)
         self.started = False
+        self._lifecycle_locks: dict[str, threading.Lock] = {}
+        self._lifecycle_locks_guard = threading.RLock()
+
+    def _lifecycle_lock(self, plugin_id: str) -> threading.Lock:
+        with self._lifecycle_locks_guard:
+            return self._lifecycle_locks.setdefault(plugin_id, threading.Lock())
 
     def discover(self) -> list[dict]:
         out = []
@@ -1090,15 +1108,20 @@ class WebbasedPluginManager:
                         continue
                     man = _json_load(folder / "manifest.json", {})
                     pid = str(man.get("id") or folder.name)
-                    status = self.state.plugin_status.get(pid, {"state": "ready", "message": "Bereit"})
+                    enabled = bool(self.state.plugin_enabled(pid))
+                    default_status = {"state": "stopped", "message": "Nicht gestartet" if enabled else "Deaktiviert"}
+                    status = self.state.plugin_status.get(pid, default_status)
                     state = str(status.get("state") or "ready")
                     msg = str(status.get("message") or "Bereit")
+                    if enabled and state.lower() in {"connected", "running"} and pid not in self.state.plugin_instances:
+                        state = "error"
+                        msg = "Status war aktiv, aber es existiert keine Plugin-Instanz"
                     out.append({
                         "id": pid,
                         "name": man.get("name") or folder.name,
                         "version": man.get("version") or "",
                         "description": man.get("description_en" if language == "en" else "description_de") or man.get("description") or "",
-                        "enabled": bool(self.state.plugin_enabled(pid)),
+                        "enabled": enabled,
                         "status": self._status_label(state, msg),
                         "state": state,
                         "message": msg,
@@ -1111,7 +1134,7 @@ class WebbasedPluginManager:
         st = (state or "").lower()
         if st in {"connected", "running"}:
             return "Verbunden" if not msg else f"Verbunden · {msg}"
-        if st in {"connecting", "starting"}:
+        if st in {"connecting", "starting", "stopping"}:
             return "Verbindet" if not msg else f"Verbindet · {msg}"
         if st in {"error", "failed"}:
             return "Fehler" if not msg else f"Fehler · {msg}"
@@ -1123,7 +1146,9 @@ class WebbasedPluginManager:
         if self.started:
             return
         self.started = True
-        for plugin_id in ("twitch_chat", "tiktok_chat", "youtube_chat", "kick_chat", "spotis3mptify", "al3rtalot", "gam3pick3r", "botalot", "bridg3alot", "modalot", "commands", "meld_control", "obs_control"):
+        preferred = ["twitch_chat", "tiktok_chat", "youtube_chat", "kick_chat", "spotis3mptify", "al3rtalot", "gam3pick3r", "botalot", "bridg3alot", "modalot", "commands", "meld_control", "obs_control"]
+        discovered = [str(item.get("id") or "") for item in self.discover() if str(item.get("id") or "")]
+        for plugin_id in preferred + [pid for pid in discovered if pid not in preferred]:
             self.start_plugin(plugin_id)
 
     def load_plugin(self, plugin_id: str):
@@ -1163,12 +1188,16 @@ class WebbasedPluginManager:
             if not self.state.plugin_enabled(plugin_id):
                 self.state.plugin_status[plugin_id] = {"state": "stopped", "message": "Deaktiviert", "ts": time.time()}
                 return False
+            self.state.plugin_status[plugin_id] = {"state": "starting", "message": "Plugin wird gestartet", "ts": time.time()}
             plugin = self.load_plugin(plugin_id)
             settings = self.state.plugin_settings(plugin_id, plugin)
             set_language = getattr(plugin, "set_ui_language", None)
             if callable(set_language):
                 set_language(self.state.settings().get("ui", {}).get("language", "de"))
             plugin.start(settings, self.host)
+            current = self.state.plugin_status.get(plugin_id, {})
+            if str(current.get("state") or "").lower() in {"", "ready", "starting", "stopped"}:
+                self.state.plugin_status[plugin_id] = {"state": "running", "message": "Gestartet", "ts": time.time()}
             return True
         except Exception as exc:
             self.state.plugin_status[plugin_id] = {"state": "error", "message": str(exc), "ts": time.time()}
@@ -1181,36 +1210,58 @@ class WebbasedPluginManager:
             return
 
         def worker() -> None:
-            try:
-                self.state.plugin_status[plugin_id] = {"state": "starting", "message": reason or "Neustart laeuft", "ts": time.time()}
-                self.stop_plugin(plugin_id, update_status=False)
-                self.start_plugin(plugin_id)
-            except Exception as exc:
-                self.state.plugin_status[plugin_id] = {"state": "error", "message": str(exc), "ts": time.time()}
-                self.state.log(plugin_id, "async restart failed", exc)
+            with self._lifecycle_lock(plugin_id):
+                try:
+                    self.state.plugin_status[plugin_id] = {"state": "stopping", "message": reason or "Neustart: Plugin wird gestoppt", "ts": time.time()}
+                    if not self.stop_plugin(plugin_id, update_status=False):
+                        return
+                    self.state.plugin_status[plugin_id] = {"state": "starting", "message": reason or "Neustart: Plugin wird gestartet", "ts": time.time()}
+                    self.start_plugin(plugin_id)
+                except Exception as exc:
+                    self.state.plugin_status[plugin_id] = {"state": "error", "message": str(exc), "ts": time.time()}
+                    self.state.log(plugin_id, "async restart failed", exc)
 
         threading.Thread(target=worker, daemon=True, name=f"plugin-restart-{plugin_id}").start()
 
-    def stop_plugin(self, plugin_id: str, update_status: bool = True) -> None:
+    def stop_plugin(self, plugin_id: str, update_status: bool = True) -> bool:
         """Stop and unload one plugin so no stale runtime instance remains usable."""
         plugin_id = str(plugin_id or "").strip()
-        plugin = self.state.plugin_instances.pop(plugin_id, None)
+        plugin = self.state.plugin_instances.get(plugin_id)
         if plugin is not None:
-            try:
-                plugin.stop(wait=True, timeout=3.0)
-            except TypeError:
+            outcome: dict[str, Any] = {}
+            def run_stop() -> None:
                 try:
-                    plugin.stop()
+                    plugin.stop(wait=True, timeout=3.0)
+                    outcome["ok"] = True
+                except TypeError:
+                    try:
+                        plugin.stop()
+                        outcome["ok"] = True
+                    except Exception as exc:
+                        outcome["error"] = exc
                 except Exception as exc:
-                    self.state.log(plugin_id, "stop failed", exc)
-            except Exception as exc:
+                    outcome["error"] = exc
+            stopper = threading.Thread(target=run_stop, daemon=True, name=f"plugin-stop-{plugin_id}")
+            stopper.start()
+            stopper.join(timeout=5.0)
+            if stopper.is_alive():
+                message = "Stop-Timeout nach 5 Sekunden; Neustart abgebrochen, um eine doppelte Plugin-Instanz zu verhindern"
+                self.state.plugin_status[plugin_id] = {"state": "error", "message": message, "ts": time.time()}
+                self.state.log(plugin_id, message)
+                return False
+            if outcome.get("error") is not None:
+                exc = outcome["error"]
                 self.state.log(plugin_id, "stop failed", exc)
+                self.state.plugin_status[plugin_id] = {"state": "error", "message": f"Stop fehlgeschlagen: {exc}", "ts": time.time()}
+                return False
+            self.state.plugin_instances.pop(plugin_id, None)
         if update_status:
             self.state.plugin_status[plugin_id] = {"state": "stopped", "message": "Deaktiviert", "ts": time.time()}
 
         platform = next((name for name, pid in CHAT_PLATFORM_PLUGINS.items() if pid == plugin_id), "")
         if platform:
             self.state.metrics.pop(platform, None)
+        return True
 
     def stop_all(self) -> None:
         for pid, plugin in list(self.state.plugin_instances.items()):
@@ -4569,7 +4620,14 @@ class Handler(BaseHTTPRequestHandler):
                 plats = {p: {"enabled": False, "status": "nicht verbunden", "detail": str(exc)} for p in PLATFORM_ORDER}
             self._json({"version": VERSION, "uptime": int(time.time()-st.started), "port": st.port, "platforms": plats, "plugins": st.plugin_list()})
             return
+        if path == "/api/plugins":
+            self._json({"ok": True, "plugins": st.plugin_list()})
+            return
         if path == "/api/automation/targets":
+            cached_targets = getattr(st, "_automation_targets_cache", None)
+            if isinstance(cached_targets, dict) and time.time() - float(cached_targets.get("ts") or 0) < 15.0:
+                self._json({"ok": True, "targets": cached_targets.get("targets") or {}})
+                return
             result = {"obs": {"connected": False, "scenes": [], "sources": [], "sources_by_scene": {}}, "meld": {"connected": False, "scenes": [], "sources": [], "sources_by_scene": {}}}
             try:
                 obs = getattr(st, "plugin_instances", {}).get("obs_control")
@@ -4620,6 +4678,7 @@ class Handler(BaseHTTPRequestHandler):
                     st.log("automation", "meld targets", "Meld-Control-Plugin ist nicht gestartet")
             except Exception as exc:
                 result["meld"]["detail"] = str(exc)
+            st._automation_targets_cache = {"ts": time.time(), "targets": result}
             self._json({"ok": True, "targets": result})
             return
         if path == "/api/settings":
@@ -5030,6 +5089,7 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/api/automation/reload-targets":
             try:
+                st._automation_targets_cache = None
                 meld = st.plugin_instances.get("meld_control")
                 if meld is not None:
                     ensure = getattr(meld, "ensure_connected", None)

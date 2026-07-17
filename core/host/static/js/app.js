@@ -11,7 +11,11 @@ const STARTUP_SPLASH={minVisibleMs:3900,fadeInMs:1350,fadeOutMs:1200,videoPlayba
 
 function prepareStartupSplash(){
   const splash=$("#startupSplash");
+  let alreadyShown=false;
+  try{alreadyShown=sessionStorage.getItem("godisalotachat.startupSplashShown")==="1";}catch(_){}
+  if(splash&&alreadyShown){splash.remove();return;}
   if(splash){
+    try{sessionStorage.setItem("godisalotachat.startupSplashShown","1");}catch(_){}
     splash.style.setProperty("--splash-fade-in",`${STARTUP_SPLASH.fadeInMs}ms`);
     splash.style.setProperty("--splash-fade-out",`${STARTUP_SPLASH.fadeOutMs}ms`);
   }
@@ -506,7 +510,7 @@ function normalizeObsFields(form){
 function sel(name,label,val){return `<label><div>${label}</div><select name="${name}"><option value="false" ${!val?'selected':''}>${L("Nein","No")}</option><option value="true" ${val?'selected':''}>${L("Ja","Yes")}</option></select></label>`;}
 function platformForm(p,cfg){
   const enabled=sel("enabled",L("Aktiv","Active"),cfg.enabled), auto=sel("autoconnect",L("Automatisch verbinden","Autoconnect"),cfg.autoconnect ?? true);
-  const status=(detail=true)=>`<span class="small">${L("Status","Status")}: ${esc(localizedPlatformStatus(cfg,detail))}</span>`;
+  const status=(detail=true)=>`<span class="small" data-platform-status="${esc(p)}" data-status-detail="${detail?"1":"0"}">${L("Status","Status")}: ${esc(localizedPlatformStatus(cfg,detail))}</span>`;
   if(p==="tiktok") return `<form class="platformForm" data-platform="${p}">${enabled}${auto}${field("main",L("Hauptkonto/Kanal","Main/Channel"),cfg.main)}${field("bot",L("Botkonto","Bot account"),cfg.bot)}<div class="platformSubBox"><b>${L("Testkanal / fremden Livestream lesen","Read test channel / external livestream")}</b><div class="testChannelFields">${sel("test_channel_enabled",L("Testkanal aktiv","Test channel active"),cfg.test_channel_enabled ?? false)}${field("test_channel",L("Testkanal ohne @","Test channel without @"),cfg.test_channel || "")}</div><div class="hint testChannelHint">${L("Wenn aktiviert, liest das TikTok-Chatplugin Chat, Beitritte, Likes, Geschenke, Follows und Shares aus diesem Kanal. Damit kannst du Warnungen testen, ohne mit deinem eigenen Konto live zu gehen. Der angegebene Kanal muss gerade live sein.","When enabled, the TikTok chat plugin reads chat, joins, likes, gifts, follows and shares from this channel. This lets you test alerts without going live on your own account. The specified channel must currently be live.")}</div></div><div class="hint">${L("TikTok verwendet getrennte gespeicherte Browserprofile für Hauptkonto und Bot. Es gibt keine Redirect-URL. Beim Anmelden öffnet sich die TikTok-Anmeldeseite, auf der du dich beispielsweise per QR-Code anmelden kannst.","TikTok uses separate saved browser profiles for the main account and bot. There is no redirect URL. Signing in opens the TikTok login page, where you can sign in using a QR code, for example.")}</div><div class="btnLine"><button type="submit">${L("Speichern","Save")}</button><button type="button" class="btn tiktokLogin" data-account="main">${L("Hauptkonto anmelden","Sign in main")}</button><button type="button" class="btn tiktokLogin" data-account="bot">${L("Bot anmelden","Sign in bot")}</button><button type="button" class="secondary disconnect" data-platform="${p}" data-account="main">${L("Hauptkonto trennen","Disconnect main")}</button><button type="button" class="secondary disconnect" data-platform="${p}" data-account="bot">${L("Bot trennen","Disconnect bot")}</button>${status()}</div></form>`;
   if(p==="meld") return `<form class="platformForm" data-platform="${p}">${enabled}${auto}${field("host","Host",cfg.host||"127.0.0.1")}${field("port","Port",cfg.port||"13376")}<div class="hint">${L("Meld Studio benötigt keine Anmeldedaten. Es wird ausschließlich über einen lokalen WebSocket verbunden.","Meld Studio does not require login credentials. It connects exclusively through a local WebSocket.")}</div><div class="btnLine"><button type="submit">${L("Speichern","Save")}</button><button type="button" class="secondary testMeld">${L("Verbindung testen","Test connection")}</button>${status()}</div></form>`;
   if(p==="obs") return `<form class="platformForm" data-platform="${p}">${enabled}${auto}${field("host","Host",cfg.host||"127.0.0.1")}${field("port","Port",cfg.port||"4455")}${field("password",L("Passwort","Password"),cfg.password,"password")}<div class="hint">${L("OBS-WebSocket-Standard:","OBS WebSocket default:")} <b>ws://127.0.0.1:4455</b>. ${L("In OBS muss der WebSocket-Server unter Werkzeuge > WebSocket-Servereinstellungen aktiviert sein.","In OBS, the WebSocket server must be enabled under Tools > WebSocket Server Settings.")}</div><div class="btnLine"><button type="submit">${L("Speichern","Save")}</button><button type="button" class="secondary testObs">${L("Verbindung testen","Test connection")}</button>${status()}</div></form>`;
@@ -515,8 +519,18 @@ function platformForm(p,cfg){
   return `<form class="platformForm" data-platform="${p}">${enabled}${auto}${field("main",L("Hauptkonto/Kanal","Main/Channel"),cfg.main)}${field("bot","Bot",cfg.bot)}${field("client_id","Client ID",cfg.client_id)}${field("client_secret","Client Secret",cfg.client_secret,"password")}${redirectFieldOnly("Redirect URI",cfg.redirect_uri)}<div class="btnLine"><button type="submit">${L("Speichern","Save")}</button><a class="btn login" data-platform="${p}" data-account="main" href="#">OAuth Main</a><a class="btn login" data-platform="${p}" data-account="bot" href="#">OAuth Bot</a><button type="button" class="secondary disconnect" data-platform="${p}" data-account="main">${L("Hauptkonto trennen","Disconnect main")}</button><button type="button" class="secondary disconnect" data-platform="${p}" data-account="bot">${L("Bot trennen","Disconnect bot")}</button>${devButton(p)}${status(false)}</div></form>`;
 }
 async function renderPlatforms(){
-  const {settings,status}=await loadAll(); const p=settings.platforms;
+  const settings=settingsCache=await api("/api/settings");
+  const status={platforms:{}};
+  const p=settings.platforms||{};
   shell("platforms",L("Plattformen","Platforms"),L("Anmeldedaten bleiben im Ordner webbased/data.","Login data remains in the webbased/data folder."),["twitch","tiktok","youtube","kick","spotify","openai","meld","obs"].map(k=>`<section class="card platformCard"><h3>${platformLabel(k)}</h3>${platformForm(k,{...(p[k]||{}),...(status.platforms[k]||{})})}</section>`).join(""));
+  api("/api/status").then(freshStatus=>{
+    statusCache=freshStatus;
+    $$('[data-platform-status]').forEach(el=>{
+      const platform=el.dataset.platformStatus;
+      const cfg={...(p[platform]||{}),...((freshStatus.platforms||{})[platform]||{})};
+      el.textContent=`${L("Status","Status")}: ${localizedPlatformStatus(cfg,el.dataset.statusDetail==="1")}`;
+    });
+  }).catch(()=>{});
   $$("form[data-platform]").forEach(form=>{
     form.onsubmit=async(e)=>{
       e.preventDefault();
@@ -963,10 +977,11 @@ async function renderChat(){
   refreshMessages();
 }
 async function renderObsMeld(){
-  const [settings,targetData]=await Promise.all([api("/api/settings"),api("/api/automation/targets")]);
+  const settings=await api("/api/settings");
   const rules=Array.isArray(settings.automation_rules)?settings.automation_rules:[];
-  const targets=targetData.targets||{};
-  const values={tiktok:[["latest_follow",L("Neuester Follow","Latest follow")],["top_liker",L("Top-Liker","Top liker")],["top_gifter",L("Top-Gifter","Top gifter")],["latest_gift",L("Neuestes Geschenk","Latest gift")],["like_total",L("Like-Zähler","Like counter")]],twitch:[["latest_follow",L("Neuester Follow","Latest follow")],["latest_subscribe",L("Neuestes Abo","Latest subscription")],["latest_raid",L("Letzter Raid","Latest raid")],["latest_donation",L("Letzte Spende","Latest donation")],["latest_bits",L("Letzte Bits","Latest bits")]],youtube:[["latest_member",L("Neuestes Mitglied","Latest member")],["latest_superchat",L("Letzter Superchat","Latest Super Chat")]],kick:[["latest_follow",L("Neuester Follow","Latest follow")],["latest_subscribe",L("Neuestes Abo","Latest subscription")]]};
+  const targets={obs:{connected:false,scenes:[],sources:[],sources_by_scene:{}},meld:{connected:false,scenes:[],sources:[],sources_by_scene:{}}};
+  const targetLoad=api("/api/automation/targets").catch(()=>({targets:{}}));
+  const values={tiktok:[["latest_follow",L("Neuester Follow","Latest follow")],["top_liker",L("Top-Liker","Top liker")],["top_gifter",L("Top-Gifter","Top gifter")],["latest_gift",L("Neuestes Geschenk","Latest gift")],["like_total",L("Like-Zähler","Like counter")]],twitch:[["latest_follow",L("Neuester Follow","Latest follow")],["latest_subscribe",L("Neuestes Abo","Latest subscription")],["latest_raid",L("Letzter Raid","Latest raid")],["latest_donation",L("Letzte Spende","Latest donation")],["latest_bits",L("Letzte Bits","Latest bits")],["latest_viewer_streak",L("Viewer-Streak","Viewer streak")]],youtube:[["latest_member",L("Neuestes Mitglied","Latest member")],["latest_superchat",L("Letzter Superchat","Latest Super Chat")]],kick:[["latest_follow",L("Neuester Follow","Latest follow")],["latest_subscribe",L("Neuestes Abo","Latest subscription")]]};
   const option=(items,selected="")=>items.map(([v,l])=>`<option value="${esc(v)}" ${v===selected?"selected":""}>${esc(l)}</option>`).join("");
   const targetOptions=Object.entries(targets).map(([key,value])=>[key,`${key.toUpperCase()}${value.connected?"":L(" (nicht verbunden)"," (not connected)")}`]);
   const actionLabels={text:L("Text schreiben","Write text"),show:L("Quelle einblenden","Show source"),hide:L("Quelle ausblenden","Hide source"),trigger:L("Trigger auslösen","Trigger event"),play:L("Medienquelle abspielen","Play media source"),scene:L("Szene aktivieren","Activate scene")};
@@ -974,10 +989,12 @@ async function renderObsMeld(){
   const isTextRule=r=>textActions.has(String(r?.action||"text").toLowerCase());
   const isShowRule=r=>String(r?.action||"").toLowerCase()==="show";
   const isLikeCounterRule=r=>String(r?.platform||"").toLowerCase()==="tiktok"&&String(r?.value||"").toLowerCase()==="like_total";
+  const isViewerStreakRule=r=>String(r?.platform||"").toLowerCase()==="twitch"&&String(r?.value||"").toLowerCase()==="latest_viewer_streak";
   const savedLikeUsers=()=>[...new Set(rules.map(r=>String(r?.likeUser||r?.like_user||"").trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
   const defaultPreview=r=>{
     const label=(values[r.platform]||[]).find(x=>x[0]===r.value)?.[1]||r.value||L("Wert","Value");
     if(isLikeCounterRule(r))return `Test: ${String(r.likeUser||"Chatter")} · ${L("Intervall","Interval")} ${Number(r.likeThreshold||0)||1} Likes`;
+    if(isViewerStreakRule(r)){return String(r.streakTemplate||L("<user> hat einen Streak von <amount> Streams erreicht","<user> reached a streak of <amount> streams")).replaceAll("<user>","TestViewer").replaceAll("<amount>","3").replaceAll("{user}","TestViewer").replaceAll("{amount}","3");}
     return `Test: ${label}`;
   };
   const localizedPreview=(r,value)=>{
@@ -1004,11 +1021,15 @@ async function renderObsMeld(){
   $(".integrationFlow").append(actionField);
   const likeCounterField=document.createElement("div");
   likeCounterField.className="likeCounterFields";
-  likeCounterField.innerHTML=`<label><div>Chatter</div><input id="ruleLikeUser" list="ruleLikeUserList" placeholder="${L("TikTok-Name exakt eingeben","Enter exact TikTok name")}"></label><label><div>${L("Auslösen alle X Likes","Trigger every X likes")}</div><input id="ruleLikeThreshold" type="number" min="1" step="1" value="10"></label><datalist id="ruleLikeUserList"></datalist><div class="hint">${L("Gilt nur für TikTok-Like-Zähler: Die Aktion wird bei jedem Intervall dieses Benutzers erneut ausgeführt, z. B. bei 50, 100 und 150 Likes.","Only applies to the TikTok like counter: the action repeats at every interval for this user, e.g. at 50, 100 and 150 likes.")}</div>`;
+  likeCounterField.innerHTML=`<label><div>7 · Chatter</div><input id="ruleLikeUser" title="${esc(L("TikTok-Name exakt eingeben","Enter exact TikTok name"))}" list="ruleLikeUserList" placeholder="${L("TikTok-Name exakt eingeben","Enter exact TikTok name")}"></label><label><div>8 · ${L("Auslösen alle X Likes","Trigger every X likes")}</div><input id="ruleLikeThreshold" title="${esc(L("Die Aktion wird bei jedem Intervall erneut ausgeführt, z. B. bei 50, 100 und 150 Likes.","The action repeats at every interval, e.g. at 50, 100 and 150 likes."))}" type="number" min="1" step="1" value="10"></label><datalist id="ruleLikeUserList"></datalist>`;
   $(".integrationFlow").append(likeCounterField);
+  const viewerStreakField=document.createElement("label");
+  viewerStreakField.className="viewerStreakFields";
+  viewerStreakField.innerHTML=`<div>7 · ${L("Gesendeter Text","Text to send")}</div><input id="ruleStreakTemplate" title="${esc(L("Vorlagen: <user> = Twitch-Name, <amount> = Anzahl der Streams","Templates: <user> = Twitch name, <amount> = stream count"))}" value="${esc(L("<user> hat einen Streak von <amount> Streams erreicht","<user> reached a streak of <amount> streams"))}">`;
+  $(".integrationFlow").append(viewerStreakField);
   const hideSecondsField=document.createElement("label");
   hideSecondsField.className="hideSecondsField";
-  hideSecondsField.innerHTML=`<div>${L("Nach X Sekunden ausblenden","Hide after X seconds")}</div><input id="ruleHideSeconds" type="number" min="0" max="3600" step="0.1" value="4"><div class="hint">${L("0 = nicht automatisch ausblenden.","0 = do not hide automatically.")}</div>`;
+  hideSecondsField.innerHTML=`<div>7 · ${L("Nach X Sekunden ausblenden","Hide after X seconds")}</div><input id="ruleHideSeconds" title="${esc(L("0 = nicht automatisch ausblenden.","0 = do not hide automatically."))}" type="number" min="0" max="3600" step="0.1" value="4">`;
   $(".integrationFlow").append(hideSecondsField);
   const startupField=document.createElement("label");
   startupField.className="textStartupField";
@@ -1021,7 +1042,7 @@ async function renderObsMeld(){
 
   const fillLikeUserList=()=>{$("#ruleLikeUserList").innerHTML=savedLikeUsers().map(x=>`<option value="${esc(x)}"></option>`).join("");};
   const selectedIsLikeCounter=()=>$("#rulePlatform").value==="tiktok"&&$("#ruleValue").value==="like_total";
-  const toggleTextOptions=()=>{const action=$("#ruleAction").value,text=action==="text",placeholder=$("#ruleStartup").value==="placeholder";startupField.hidden=!text;startupField.style.display=text?"":"none";placeholderField.hidden=!text||!placeholder;placeholderField.style.display=text&&placeholder?"":"none";likeCounterField.hidden=!selectedIsLikeCounter();likeCounterField.style.display=selectedIsLikeCounter()?"":"none";hideSecondsField.hidden=action!=="show";hideSecondsField.style.display=action==="show"?"":"none";};
+  const toggleTextOptions=()=>{const action=$("#ruleAction").value,text=action==="text",placeholder=$("#ruleStartup").value==="placeholder",streak=text&&$("#rulePlatform").value==="twitch"&&$("#ruleValue").value==="latest_viewer_streak";startupField.hidden=!text||streak;startupField.style.display=text&&!streak?"":"none";placeholderField.hidden=!text||!placeholder||streak;placeholderField.style.display=text&&placeholder&&!streak?"":"none";likeCounterField.hidden=!selectedIsLikeCounter();likeCounterField.style.display=selectedIsLikeCounter()?"":"none";viewerStreakField.hidden=!streak;viewerStreakField.style.display=streak?"":"none";hideSecondsField.hidden=action!=="show";hideSecondsField.style.display=action==="show"?"":"none";};
   $("#ruleAction").onchange=toggleTextOptions;$("#ruleStartup").onchange=toggleTextOptions;
 
   let editIndex=-1;
@@ -1032,6 +1053,7 @@ async function renderObsMeld(){
     const r={name:$("#ruleName").value.trim()||`${platformLabel($("#rulePlatform").value)} ${$("#ruleValue").selectedOptions[0]?.textContent||L("Wert","Value")}`,platform:$("#rulePlatform").value,value:$("#ruleValue").value,target:$("#ruleTarget").value,scene:$("#ruleScene").value,source:$("#ruleSource").value,action:$("#ruleAction").value,startup:$("#ruleStartup").value,placeholder:$("#rulePlaceholder").value.trim()||"---"};
     if(r.action==="show")r.hideSeconds=Math.max(0,Number($("#ruleHideSeconds").value)||0);
     if(isLikeCounterRule(r)){r.likeUser=$("#ruleLikeUser").value.trim();r.likeThreshold=Math.max(1,Number($("#ruleLikeThreshold").value)||1);}
+    if(isViewerStreakRule(r))r.streakTemplate=$("#ruleStreakTemplate").value.trim()||L("<user> hat einen Streak von <amount> Streams erreicht","<user> reached a streak of <amount> streams");
     return r;
   };
   const runRuleTest=async (r,previewText)=>{
@@ -1066,13 +1088,24 @@ async function renderObsMeld(){
       input.onchange=async()=>{const i=Number(input.dataset.i);if(!rules[i])return;rules[i].testText=input.value;await persistRules();};
     });
     $$('.testSavedRule').forEach(b=>b.onclick=async()=>{const i=Number(b.dataset.i);const r=rules[i];if(!r)return;const input=$(`.savedRuleTestText[data-i="${i}"]`);if(input){r.testText=input.value;await persistRules();await runRuleTest(r,input.value);}else{await runRuleTest(r);}});
-    $$('.editRule').forEach(b=>b.onclick=()=>{const r=rules[Number(b.dataset.i)];editIndex=Number(b.dataset.i);$("#rulePlatform").value=r.platform;refreshValues();$("#ruleValue").value=r.value;toggleTextOptions();$("#ruleTarget").value=r.target;refreshTargets();$("#ruleScene").value=r.scene||"";refreshSources();$("#ruleSource").value=r.source||"";$("#ruleAction").value=r.action||"text";$("#ruleStartup").value=r.startup||"keep";$("#rulePlaceholder").value=r.placeholder||"---";$("#ruleHideSeconds").value=r.hideSeconds??r.hide_seconds??4;$("#ruleLikeUser").value=r.likeUser||r.like_user||"";$("#ruleLikeThreshold").value=r.likeThreshold||r.like_threshold||10;toggleTextOptions();$("#ruleName").value=r.name;$("#saveRule").textContent=L("Änderung speichern","Save changes");});
+    $$('.editRule').forEach(b=>b.onclick=()=>{const r=rules[Number(b.dataset.i)];editIndex=Number(b.dataset.i);$("#rulePlatform").value=r.platform;refreshValues();$("#ruleValue").value=r.value;toggleTextOptions();$("#ruleTarget").value=r.target;refreshTargets();$("#ruleScene").value=r.scene||"";refreshSources();$("#ruleSource").value=r.source||"";$("#ruleAction").value=r.action||"text";$("#ruleStartup").value=r.startup||"keep";$("#rulePlaceholder").value=r.placeholder||"---";$("#ruleHideSeconds").value=r.hideSeconds??r.hide_seconds??4;$("#ruleLikeUser").value=r.likeUser||r.like_user||"";$("#ruleLikeThreshold").value=r.likeThreshold||r.like_threshold||10;$("#ruleStreakTemplate").value=r.streakTemplate||r.streak_template||(r.streakOutput==="name"?"<user>":r.streakOutput==="count"?"<amount>":L("<user> hat einen Streak von <amount> Streams erreicht","<user> reached a streak of <amount> streams"));toggleTextOptions();$("#ruleName").value=r.name;$("#saveRule").textContent=L("Änderung speichern","Save changes");});
     $$('.deleteRule').forEach(b=>b.onclick=async()=>{rules.splice(Number(b.dataset.i),1);await persistRules();renderRules();});
   };
   $("#rulePlatform").onchange=()=>{refreshValues();};$("#ruleValue").onchange=toggleTextOptions;$("#ruleTarget").onchange=refreshTargets;$("#ruleScene").onchange=refreshSources;
   $("#clearRule").onclick=()=>{editIndex=-1;$("#ruleName").value="";$("#ruleLikeUser").value="";$("#ruleLikeThreshold").value=10;$("#ruleHideSeconds").value=4;$("#saveRule").textContent=L("Speichern","Save");};
   $("#saveRule").onclick=async()=>{const r=readRule();if(isLikeCounterRule(r)&&!r.likeUser){alert(L("Bitte einen Chatter für den Like-Zähler eintragen.","Please enter a chatter for the like counter."));return;}if(editIndex>=0){r.testText=rules[editIndex]?.testText||defaultPreview(r);rules[editIndex]=r;}else{r.testText=defaultPreview(r);rules.push(r);}const out=await persistRules();if(!out.ok){console.warn(L("Regel speichern fehlgeschlagen","Failed to save rule"),out.error);return;}editIndex=-1;$("#ruleName").value="";$("#ruleLikeUser").value="";$("#ruleLikeThreshold").value=10;$("#ruleHideSeconds").value=4;$("#saveRule").textContent=L("Speichern","Save");renderRules();};
   fillLikeUserList();refreshValues();refreshTargets();toggleTextOptions();renderRules();
+  targetLoad.then(targetData=>{
+    const loaded=targetData?.targets||{};
+    for(const key of ["obs","meld"])Object.assign(targets[key],loaded[key]||{});
+    const targetSelect=$("#ruleTarget");
+    if(!targetSelect)return;
+    const selected=targetSelect.value;
+    targetSelect.innerHTML=option(Object.entries(targets).map(([key,value])=>[key,`${key.toUpperCase()}${value.connected?"":L(" (nicht verbunden)"," (not connected)")}`]),selected);
+    if(selected)targetSelect.value=selected;
+    refreshTargets();
+    renderRules();
+  });
 }
 async function renderSpotify(){
   const data=await api("/api/overlay-urls");
@@ -1393,7 +1426,7 @@ async function openCommandsSettings(mount, values, defaults={}){
   const option=(items,selected="")=>items.map(([v,l])=>`<option value="${esc(v)}" ${String(v)===String(selected)?"selected":""}>${esc(l)}</option>`).join("");
   const actionLabels={text:L("Text schreiben","Write text"),show:L("Quelle einblenden","Show source"),hide:L("Quelle ausblenden","Hide source"),trigger:L("Trigger auslösen","Trigger event"),play:L("Medienquelle abspielen","Play media source"),scene:L("Szene aktivieren","Activate scene")};
   let automationTargets={obs:{connected:false,scenes:[],sources_by_scene:{}},meld:{connected:false,scenes:[],sources_by_scene:{}}};
-  try{const targetData=await api("/api/automation/targets");automationTargets=targetData.targets||automationTargets;}catch(_){}
+  const automationTargetsLoad=api("/api/automation/targets").catch(()=>({targets:{}}));
   const targetOptions=()=>Object.entries(automationTargets).map(([key,value])=>[key,`${key.toUpperCase()}${value.connected?"":L(" (nicht verbunden)"," (not connected)")}`]);
   const empty=()=>({id:`cmd_${Date.now()}`,enabled:false,name:"",trigger:"!",cooldown_seconds:0,sources:{twitch:true,tiktok:true,youtube:true,kick:true},chat_enabled:true,response:"",reply_same_platform:true,targets:{twitch:false,tiktok:false,youtube:false,kick:false},obs_enabled:false,obs_hotkey:"",meld_enabled:false,meld_action:"",output_enabled:false,output_target:"obs",output_action:"show",output_scene:"",output_source:"",output_text:"{user}"});
   let state={enabled:values.enabled!==false,commands_enabled:true,default_cooldown_seconds:Number(values.default_cooldown_seconds??15)||0,commands:[]};
@@ -1436,6 +1469,16 @@ async function openCommandsSettings(mount, values, defaults={}){
   $("#commandsEnabled").onchange=e=>state.enabled=e.target.checked;$("#commandsCooldown").onchange=e=>state.default_cooldown_seconds=Number(e.target.value)||0;
   $("#commandsForm").onsubmit=async ev=>{ev.preventDefault();const cmd=collect();if(!cmd.trigger||!"!/".includes(cmd.trigger[0])){alert(L("Trigger muss mit ! oder / beginnen.","Trigger must start with ! or /."));return;}const idx=state.commands.findIndex(x=>x.id===cmd.id);if(idx>=0)state.commands[idx]=cmd;else state.commands.push(cmd);const out=await save();$("#commandsResult").textContent=out.ok?L("Gespeichert.","Saved."):resultText(out);if(out.ok){reset();renderList();}};
   refreshOutputTargets();toggleOutputFields();reset();renderList();
+  automationTargetsLoad.then(targetData=>{
+    if(!mount.isConnected||!$("#cmdOutputTarget",mount))return;
+    const loaded=targetData?.targets||{};
+    for(const key of ["obs","meld"])Object.assign(automationTargets[key],loaded[key]||{});
+    const targetSelect=$("#cmdOutputTarget",mount);
+    const selected=targetSelect.value;
+    targetSelect.innerHTML=option(targetOptions(),selected);
+    if(selected)targetSelect.value=selected;
+    refreshOutputTargets();
+  });
 }
 
 async function openPluginSettings(pluginId){
@@ -1496,12 +1539,12 @@ async function togglePluginEnabled(pluginId, enabled){
   const values={...(d.values||{}),enabled:!!enabled};
   const out=await api(`/api/plugins/${encodeURIComponent(pluginId)}/settings`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({values})});
   if(!out.ok){alert(out.error||"Plugin konnte nicht umgeschaltet werden");return;}
-  setTimeout(renderPlugins,500);
+  setTimeout(renderPlugins,250);setTimeout(renderPlugins,1500);setTimeout(renderPlugins,4000);
 }
 async function restartPlugin(pluginId){
   const out=await api(`/api/plugins/${encodeURIComponent(pluginId)}/restart`,{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"});
   if(!out.ok){alert(out.error||"Plugin konnte nicht neu gestartet werden");return;}
-  setTimeout(renderPlugins,500);
+  setTimeout(renderPlugins,250);setTimeout(renderPlugins,1500);setTimeout(renderPlugins,4000);
 }
 async function renderEasyslider(){
   const settings=normalizeEasysliderClient(((await api("/api/settings")).ui||{})["3asyslid3r"]);
@@ -1545,10 +1588,11 @@ async function renderEasyslider(){
   };
 }
 async function renderPlugins(){
-  const s=await api("/api/status");
+  const s=await api("/api/plugins");
   const cards=(s.plugins||[]).map(p=>`<section class="card pluginCard"><div class="pluginHead"><h3>${esc(p.name)}</h3><span class="pluginState ${pluginStateClass(p.state)}">${esc(p.state||"ready")}</span></div><div class="small pluginVersion">Version ${esc(p.version||"-")}</div><div class="small">${esc(p.description||"")}</div><div class="small pluginStatusText">${esc(p.status||p.message||"Bereit")}</div><div class="btnLine"><button type="button" class="pluginSettingsBtn" data-plugin="${esc(p.id)}">Einstellungen</button><a class="btn secondary" href="/dev" title="Protokolle im DEV-Bereich prüfen">Protokolle</a></div></section>`).join("");
   shell("plugins","Plugins","Hier stellst du jedes gefundene Plugin direkt ein. Der alte nutzlose Bereit-Button ist weg.",`<div id="pluginSettingsMount"></div><div class="pluginGrid">${cards}</div>`);
   $$(".pluginSettingsBtn").forEach(b=>b.onclick=()=>openPluginSettings(b.dataset.plugin));
+  addPluginToggleButtons(s.plugins||[]);
 }
 function addPluginToggleButtons(plugins){
   $$(".pluginSettingsBtn").forEach(btn=>{
@@ -1571,8 +1615,6 @@ function addPluginToggleButtons(plugins){
 const renderPluginsWithoutToggle=renderPlugins;
 renderPlugins=async function(){
   await renderPluginsWithoutToggle();
-  const s=await api("/api/status");
-  addPluginToggleButtons(s.plugins||[]);
   try{
     const wanted=new URLSearchParams(location.search).get("plugin");
     if(wanted) setTimeout(()=>openPluginSettings(wanted),150);

@@ -1,8 +1,8 @@
 ﻿{
   "id": "twitch_chat",
   "name": "Twitch Chat",
-  "version": "0.32",
-  "description": "Twitch IRC chat reader using central main-tool platform auth/settings, with automatic token refresh, reconnect handling, metrics, emotes, and viewer join desktop alerts.",
-  "description_de": "Liest und schreibt den Twitch-Chat mit zentraler Anmeldung, automatischer Token-Erneuerung, Live-Werten, Emotes und Zuschauer-Warnungen.",
-  "description_en": "Reads and writes Twitch chat with central authentication, automatic token refresh, live metrics, emotes and viewer alerts."
+  "version": "0.43",
+  "description": "Twitch IRC chat reader using central main-tool platform auth/settings, with automatic token refresh, reconnect handling, metrics, emotes, viewer joins, and watch-streak alerts.",
+  "description_de": "Liest und schreibt den Twitch-Chat mit zentraler Anmeldung, automatischer Token-Erneuerung, Live-Werten, Emotes, Zuschauer- und Viewer-Streak-Warnungen.",
+  "description_en": "Reads and writes Twitch chat with central authentication, automatic token refresh, live metrics, emotes, viewer joins, and watch-streak alerts."
 }
