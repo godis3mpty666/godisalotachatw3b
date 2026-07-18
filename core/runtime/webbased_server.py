@@ -4455,17 +4455,13 @@ def _dev_plugin_filter_list(st):
             pid = str(item.get("id") or "").strip()
             if not pid or pid in seen:
                 continue
+            try:
+                if not st.plugin_enabled(pid):
+                    continue
+            except Exception:
+                continue
             seen.add(pid)
             plugins.append({"id": pid, "name": str(item.get("name") or pid)})
-    except Exception:
-        pass
-    try:
-        txt = st.log_file.read_text(encoding="utf-8") if st.log_file.exists() else ""
-        for item in _available_dev_log_sources(txt, seen):
-            pid = str(item.get("id") or "").strip()
-            if pid and pid not in seen:
-                seen.add(pid)
-                plugins.append(item)
     except Exception:
         pass
     return plugins

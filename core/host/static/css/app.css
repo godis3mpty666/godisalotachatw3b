@@ -502,7 +502,11 @@ button.secondary{
 .btnLine .btn,
 .btnLine a.btn{
   flex:0 1 auto;
-  min-width:max-content;
+  min-width:116px;
+  min-height:34px;
+  padding:8px 14px;
+  border-radius:10px;
+  font-size:12px;
 }
 .btnLine .small{
   flex:1 0 100%;
@@ -591,7 +595,7 @@ button.secondary{
   .integrationFlow label,.integrationName label{display:flex;flex-direction:column;gap:6px;min-width:0}
   .integrationFlow .likeCounterFields{display:contents}
   .integrationName{display:grid;grid-template-columns:minmax(240px,1fr) auto;gap:12px;align-items:end;margin-top:14px}.integrationName label{flex:1}
-  .ruleFormActions{display:grid;grid-template-columns:repeat(2,168px);gap:10px;justify-content:end}.ruleFormActions button{width:100%;min-height:38px;padding:8px 12px;font-size:12px}
+  .ruleFormActions{display:grid;grid-template-columns:repeat(2,150px);gap:10px;justify-content:end}.ruleFormActions button{width:100%;min-height:34px;padding:8px 12px;font-size:12px;border-radius:10px}
   .integrationListCard{padding:18px}
   .integrationListHead{padding-right:0;align-items:center}
   .ruleList{display:flex;flex-direction:column;gap:10px}
@@ -601,9 +605,9 @@ button.secondary{
   .ruleTestField{display:flex;flex-direction:column;gap:5px;grid-column:1/-1;margin:0}
   .ruleTestField span{color:#9aa7d7;font-size:11px;font-weight:800;text-transform:uppercase}
   .ruleTestField input{min-height:36px;padding:8px 11px;font-size:13px}
-  .ruleActions{display:grid;grid-template-columns:repeat(3,104px);gap:8px;align-items:center;justify-content:end}
-  .ruleActions.hasText{grid-template-columns:repeat(3,104px)}
-  .ruleActions button,.ruleActions .btn{width:100%;min-height:36px;padding:8px 10px;font-size:12px}
+  .ruleActions{display:grid;grid-template-columns:repeat(3,116px);gap:8px;align-items:center;justify-content:end}
+  .ruleActions.hasText{grid-template-columns:repeat(3,116px)}
+  .ruleActions button,.ruleActions .btn{width:100%;min-height:34px;padding:8px 10px;font-size:12px;border-radius:10px}
   @media(max-width:1100px){.ruleRow{grid-template-columns:1fr}.ruleActions,.ruleActions.hasText,.ruleActions.noText{justify-content:start}}
   @media(max-width:720px){.integrationBuilder .targetReload{position:static;margin-bottom:12px}.integrationHead{padding-right:0}.integrationName{grid-template-columns:1fr}.ruleFormActions{grid-template-columns:repeat(2,minmax(0,1fr));justify-content:stretch}.ruleActions,.ruleActions.hasText,.ruleActions.noText{grid-template-columns:repeat(3,minmax(78px,1fr));width:100%}}
 .platformCard h3{
@@ -855,8 +859,10 @@ button.secondary{
   justify-content:flex-end;
 }
 .pluginFilters button{
-  min-height:38px;
+  min-height:34px;
   padding:8px 12px;
+  font-size:12px;
+  border-radius:10px;
 }
 .pluginFilters button.active{
   border-color:rgba(95,215,255,.5);
@@ -958,10 +964,11 @@ button.secondary{
   margin-top:0;
 }
 .pluginActions button,.pluginActions .btn{
-  flex:1 1 95px;
+  flex:1 1 116px;
   min-height:34px;
   padding:8px 10px;
   font-size:12px;
+  border-radius:10px;
 }
 .pluginToggleBtn.enable{background:var(--green);color:#07140d}
 .pluginToggleBtn.disable{background:var(--red);color:#fff}
@@ -984,16 +991,25 @@ button.secondary{
 }
 .pluginSettingsCard{margin-bottom:18px;border-color:rgba(134,92,255,.45)}
 .pluginSettingsHead{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;flex-wrap:wrap;margin-bottom:14px}
+.pluginSettingsCard .pluginSettingsHead button,.pluginSettingsCard .btnLine button,.pluginSettingsCard .btnLine .btn{min-height:34px;padding:8px 14px;font-size:12px;border-radius:10px}
 .pluginSettingsGroup{border:1px solid rgba(255,255,255,.08);border-radius:14px;background:rgba(255,255,255,.03);padding:14px;margin:12px 0}
 .infoPlatform{border:1px solid rgba(255,255,255,.12);border-radius:14px;background:rgba(255,255,255,.03);padding:14px;margin:12px 0}
 .infoPlatformHead{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:12px;text-transform:capitalize}
 .infoPlatformHead h3{margin:0}
 .infoPresetButtons{flex-wrap:wrap}
 .infoPresetList{display:grid;gap:10px;margin-top:14px}
-.infoPresetRow{display:grid;grid-template-columns:minmax(100px,auto) auto minmax(220px,1fr);align-items:center;gap:14px;padding:12px 14px;border:1px solid rgba(255,255,255,.12);border-radius:12px;background:rgba(255,255,255,.03)}
+.infoCreateLine{margin-top:12px}
+.infoPresetRow{display:grid;gap:12px;padding:14px 16px;border:1px solid rgba(255,255,255,.12);border-radius:12px;background:rgba(255,255,255,.03)}
+.infoPresetRow>div:first-child{display:grid;gap:6px;min-width:0}
+.infoPresetRow>div:first-child span{color:var(--muted);font-size:12px}
+.infoPresetInfo{display:grid;gap:8px;min-width:0}
+.infoPresetInfo b{font-size:16px}
 .infoPresetSummary{display:flex;gap:18px;min-width:0;color:#aeb9e9;font-size:13px}
 .infoPresetSummary span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-@media(max-width:640px){.infoPresetRow{grid-template-columns:1fr;align-items:flex-start}.infoPresetSummary{flex-direction:column;gap:4px;width:100%}}
+.infoPresetActions{margin-top:0}
+.infoPresetActions button,#commandsList .btnLine button{min-width:116px}
+#commandsList .btnLine{margin-top:0}
+@media(max-width:640px){.infoPresetSummary{flex-direction:column;gap:4px;width:100%}.infoPresetActions button{flex:1 1 calc(33.333% - 8px);min-width:0}}
 .pluginSettingsFields{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;align-items:end}
 .pluginSettingsFields .wide{grid-column:1/-1}
 .pluginSettingsFields .hint{margin-top:-4px;grid-column:1/-1}
@@ -1095,7 +1111,7 @@ button.secondary{
 .dashboardChatText,.dashboardChatText>*{display:inline}
 .dashboardChatText img{max-height:2.18em;width:auto;vertical-align:middle}
 .dashboardChatText .chatEmote,.dashboardChatText .chatGift,.msg>.chatEmote{display:inline-block;height:2.18em;max-height:2.18em;width:auto;vertical-align:-.42em;object-fit:contain}
-.timerEditor{margin-bottom:18px}.timerFields{display:grid;grid-template-columns:minmax(160px,240px) minmax(0,1fr);gap:14px}.timerText{min-width:0}.timerText textarea{display:block;width:100%;min-height:82px;box-sizing:border-box;resize:vertical;background:#090b16;border:1px solid #303656;color:#fff;border-radius:clamp(8px,1vw,12px);padding:clamp(9px,1vw,12px) clamp(10px,1.2vw,14px);font:inherit;font-size:clamp(12px,1.1vw,14px);outline:none}.timerText textarea:focus{border-color:var(--purple);box-shadow:0 0 0 3px rgba(134,92,255,.2)}.timerPlatforms{display:flex;flex-wrap:wrap;align-items:center;gap:14px;margin:16px 0}.timerPlatforms label{display:flex;align-items:center;gap:6px}.timerPlatforms input{width:auto}.timerList{display:grid;gap:10px}.timerRow{display:flex;justify-content:space-between;align-items:center;gap:16px;padding:13px 14px;border:1px solid rgba(255,255,255,.1);border-radius:12px;background:rgba(8,10,22,.38)}.timerRow>div:first-child{display:grid;gap:5px;min-width:0}.timerRow b{white-space:pre-wrap;overflow-wrap:anywhere}.timerRow span{color:var(--muted);font-size:12px}@media(max-width:700px){.timerFields{grid-template-columns:1fr}.timerRow{align-items:flex-start;flex-direction:column}}
+.timerEditor{margin-bottom:18px}.timerFields{display:grid;grid-template-columns:minmax(160px,240px) minmax(0,1fr);gap:14px}.timerText{min-width:0}.timerText textarea{display:block;width:100%;min-height:82px;box-sizing:border-box;resize:vertical;background:#090b16;border:1px solid #303656;color:#fff;border-radius:clamp(8px,1vw,12px);padding:clamp(9px,1vw,12px) clamp(10px,1.2vw,14px);font:inherit;font-size:clamp(12px,1.1vw,14px);outline:none}.timerText textarea:focus{border-color:var(--purple);box-shadow:0 0 0 3px rgba(134,92,255,.2)}.timerPlatforms{display:flex;flex-wrap:wrap;align-items:center;gap:14px;margin:16px 0}.timerPlatforms label{display:flex;align-items:center;gap:6px}.timerPlatforms input{width:auto}.timerEditor .btnLine button,.timerRow .btnLine button{min-height:34px;padding:8px 14px;font-size:12px;border-radius:10px}.timerList{display:grid;gap:10px}.timerRow{display:grid;align-items:start;gap:12px;padding:14px 16px;border:1px solid rgba(255,255,255,.1);border-radius:12px;background:rgba(8,10,22,.38)}.timerRow>div:first-child{display:grid;gap:6px;min-width:0}.timerRow b{white-space:pre-wrap;overflow-wrap:anywhere;font-size:16px;line-height:1.35}.timerRow span{color:var(--muted);font-size:12px}.timerRow .btnLine{margin-top:0}.timerRow .btnLine button{min-width:116px}@media(max-width:700px){.timerFields{grid-template-columns:1fr}.timerRow .btnLine button{flex:1 1 calc(33.333% - 8px);min-width:0}}
 .settingsSectionTitle{margin:0 0 12px;font-size:22px}.soundSettingsGroup{display:none}.soundSettingsGroup.active{display:block}.soundSettingsGrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px;align-items:end}.soundSettingsGrid label{min-width:0}.soundPlatformHead{display:flex;align-items:center;gap:10px;margin-bottom:14px}.soundPlatformHead h3{margin:0}.soundPlatformHead .chatPlatform{width:28px;height:28px}.soundPlatformHead .chatPlatform img{width:100%;height:100%;object-fit:contain}
 
 /* Keep the animated focus treatment above component-specific field styles. */
