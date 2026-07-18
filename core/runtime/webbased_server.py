@@ -15,7 +15,7 @@ def _sanitize_automation_rules(value):
         return []
     allowed_platforms = {"tiktok", "twitch", "youtube", "kick"}
     allowed_targets = {"obs", "meld"}
-    allowed_actions = {"text", "show", "hide", "play", "trigger", "scene"}
+    allowed_actions = {"text", "text_show", "show", "hide", "play", "trigger", "scene"}
     allowed_startup = {"keep", "placeholder"}
     cleaned = []
     for raw in value:
@@ -5113,6 +5113,10 @@ class Handler(BaseHTTPRequestHandler):
                 source_name = str(data.get("source") or "").strip()
                 scene_name = str(data.get("scene") or "").strip()
                 preview_text = str(data.get("preview") or "Testwert aus godisalotachat")
+                try:
+                    hide_seconds = max(0.0, min(3600.0, float(str(data.get("hideSeconds") or data.get("hide_seconds") or 4).replace(",", "."))))
+                except Exception:
+                    hide_seconds = 4.0
                 if target == "meld":
                     meld = st.plugin_instances.get("meld_control")
                     if meld is None:
@@ -5147,6 +5151,30 @@ class Handler(BaseHTTPRequestHandler):
                         matched_layer = str(match.get("_full_path") or match.get("name") or source_name)
                         if action == "text":
                             ok, detail = meld.set_session_property(str(match["id"]), "text", preview_text, timeout=3.0)
+                        elif action == "text_show":
+                            text_ok, text_detail = meld.set_session_property(str(match["id"]), "text", preview_text, timeout=3.0)
+                            parent_id = str(match.get("parentId") or match.get("parent_id") or match.get("parent") or match.get("groupId") or match.get("group_id") or "")
+                            visited = set()
+                            while parent_id and parent_id not in visited:
+                                visited.add(parent_id)
+                                parent = items.get(parent_id)
+                                if not isinstance(parent, dict) or str(parent.get("type") or "").lower() == "scene":
+                                    break
+                                meld.set_session_property(parent_id, "visible", True, timeout=3.0)
+                                parent_id = str(parent.get("parentId") or parent.get("parent_id") or parent.get("parent") or parent.get("groupId") or parent.get("group_id") or "")
+                            try:
+                                meld.set_session_property(str(match["id"]), "visible", False, timeout=1.0)
+                                time.sleep(0.05)
+                            except Exception:
+                                pass
+                            show_ok, show_detail = meld.set_session_property(str(match["id"]), "visible", True, timeout=3.0)
+                            if hide_seconds > 0:
+                                layer_id = str(match["id"])
+                                timer = threading.Timer(hide_seconds, lambda: meld.set_session_property(layer_id, "visible", False, timeout=3.0))
+                                timer.daemon = True
+                                timer.start()
+                            ok = bool(text_ok) and bool(show_ok)
+                            detail = f"text={bool(text_ok)}:{text_detail} | show={bool(show_ok)}:{show_detail}"
                         elif action in {"show", "hide"}:
                             visible = action == "show"
                             # A layer hidden inside a hidden group still cannot be seen.
@@ -5193,6 +5221,20 @@ class Handler(BaseHTTPRequestHandler):
                         return self._json({"ok": False, "error": "OBS-Control ist nicht verbunden."}, 400)
                     if action == "text":
                         ok, detail = obs.request("SetInputSettings", {"inputName": source_name, "inputSettings": {"text": preview_text}, "overlay": True}, timeout=3.0)
+                    elif action == "text_show":
+                        text_ok, text_detail = obs.request("SetInputSettings", {"inputName": source_name, "inputSettings": {"text": preview_text}, "overlay": True}, timeout=3.0)
+                        try:
+                            obs.set_source_visible(source_name, False)
+                            time.sleep(0.05)
+                        except Exception:
+                            pass
+                        show_ok, show_detail = obs.set_source_visible(source_name, True)
+                        if hide_seconds > 0:
+                            timer = threading.Timer(hide_seconds, lambda: obs.set_source_visible(source_name, False))
+                            timer.daemon = True
+                            timer.start()
+                        ok = bool(text_ok) and bool(show_ok)
+                        detail = f"text={bool(text_ok)}:{text_detail} | show={bool(show_ok)}:{show_detail}"
                     elif action in {"show", "hide"}:
                         ok, detail = obs.set_source_visible(source_name, action == "show")
                     elif action == "scene":

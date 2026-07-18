@@ -520,7 +520,7 @@ class Al3rtalotPlugin(ProviderPlugin):
             if not ok:
                 self._log(f'automation failed: {target} {action} {scene}/{source}: {detail}')
                 return False
-            if action == 'show':
+            if action in {'show', 'text_show'}:
                 self._schedule_auto_hide(target, scene, source, rule)
             return True
         except Exception as exc:
@@ -630,6 +630,16 @@ class Al3rtalotPlugin(ProviderPlugin):
         if action == 'text':
             ok, detail = meld.set_session_property(layer_id, 'text', text, timeout=3.0)
             return bool(ok), str(detail or '')
+        if action == 'text_show':
+            text_ok, text_detail = meld.set_session_property(layer_id, 'text', text, timeout=3.0)
+            self._show_meld_parent_chain(meld, layer)
+            try:
+                meld.set_session_property(layer_id, 'visible', False, timeout=1.0)
+                time.sleep(0.05)
+            except Exception:
+                pass
+            show_ok, show_detail = meld.set_session_property(layer_id, 'visible', True, timeout=3.0)
+            return bool(text_ok) and bool(show_ok), f'text={bool(text_ok)}:{text_detail} | show={bool(show_ok)}:{show_detail}'
         if action in {'show', 'hide'}:
             visible = action == 'show'
             if visible:
@@ -678,6 +688,15 @@ class Al3rtalotPlugin(ProviderPlugin):
         if action == 'text':
             ok, detail = obs.request('SetInputSettings', {'inputName': source_name, 'inputSettings': {'text': text}, 'overlay': True}, timeout=3.0)
             return bool(ok), str(detail or '')
+        if action == 'text_show':
+            text_ok, text_detail = obs.request('SetInputSettings', {'inputName': source_name, 'inputSettings': {'text': text}, 'overlay': True}, timeout=3.0)
+            try:
+                obs.set_source_visible(source_name, False)
+                time.sleep(0.05)
+            except Exception:
+                pass
+            show_ok, show_detail = obs.set_source_visible(source_name, True)
+            return bool(text_ok) and bool(show_ok), f'text={bool(text_ok)}:{text_detail} | show={bool(show_ok)}:{show_detail}'
         if action in {'show', 'hide'}:
             if action == 'show':
                 # Force an off->on edge, otherwise an already visible source cannot visibly trigger again.

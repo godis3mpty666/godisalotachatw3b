@@ -984,8 +984,8 @@ async function renderObsMeld(){
   const values={tiktok:[["latest_follow",L("Neuester Follow","Latest follow")],["top_liker",L("Top-Liker","Top liker")],["top_gifter",L("Top-Gifter","Top gifter")],["latest_gift",L("Neuestes Geschenk","Latest gift")],["like_total",L("Like-Zähler","Like counter")]],twitch:[["latest_follow",L("Neuester Follow","Latest follow")],["latest_subscribe",L("Neuestes Abo","Latest subscription")],["latest_raid",L("Letzter Raid","Latest raid")],["latest_donation",L("Letzte Spende","Latest donation")],["latest_bits",L("Letzte Bits","Latest bits")],["latest_viewer_streak",L("Viewer-Streak","Viewer streak")]],youtube:[["latest_member",L("Neuestes Mitglied","Latest member")],["latest_superchat",L("Letzter Superchat","Latest Super Chat")]],kick:[["latest_follow",L("Neuester Follow","Latest follow")],["latest_subscribe",L("Neuestes Abo","Latest subscription")]]};
   const option=(items,selected="")=>items.map(([v,l])=>`<option value="${esc(v)}" ${v===selected?"selected":""}>${esc(l)}</option>`).join("");
   const targetOptions=Object.entries(targets).map(([key,value])=>[key,`${key.toUpperCase()}${value.connected?"":L(" (nicht verbunden)"," (not connected)")}`]);
-  const actionLabels={text:L("Text schreiben","Write text"),show:L("Quelle einblenden","Show source"),hide:L("Quelle ausblenden","Hide source"),trigger:L("Trigger auslösen","Trigger event"),play:L("Medienquelle abspielen","Play media source"),scene:L("Szene aktivieren","Activate scene")};
-  const textActions=new Set(["text"]);
+  const actionLabels={text:L("Text schreiben","Write text"),text_show:L("Text schreiben + Quelle kurz einblenden","Write text + briefly show source"),show:L("Quelle einblenden","Show source"),hide:L("Quelle ausblenden","Hide source"),trigger:L("Trigger auslösen","Trigger event"),play:L("Medienquelle abspielen","Play media source"),scene:L("Szene aktivieren","Activate scene")};
+  const textActions=new Set(["text","text_show"]);
   const isTextRule=r=>textActions.has(String(r?.action||"text").toLowerCase());
   const isShowRule=r=>String(r?.action||"").toLowerCase()==="show";
   const isLikeCounterRule=r=>String(r?.platform||"").toLowerCase()==="tiktok"&&String(r?.value||"").toLowerCase()==="like_total";
@@ -1009,7 +1009,7 @@ async function renderObsMeld(){
     return await api("/api/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(settings)});
   };
 
-  shell("obs_meld","OBS/Meld Integration",L("Dauerhafte Live-Werte gezielt in eine OBS- oder Meld-Quelle schreiben.","Write persistent live values to a specific OBS or Meld source."),`<section class="card integrationBuilder"><h3>${L("Neuen Eintrag anlegen","Create new entry")}</h3><div class="integrationFlow"><label><div>1 · ${L("Plattform","Platform")}</div><select id="rulePlatform">${option([["tiktok","TikTok"],["twitch","Twitch"],["youtube","YouTube"],["kick","Kick"]])}</select></label><label><div>2 · ${L("Live-Wert","Live value")}</div><select id="ruleValue"></select></label><label><div>3 · ${L("Ausgabe","Output")}</div><select id="ruleTarget">${option(targetOptions)}</select></label><label><div>4 · ${L("Szene","Scene")}</div><select id="ruleScene"></select></label><label><div>5 · ${L("Quelle","Source")}</div><select id="ruleSource"></select></label></div><div class="integrationName"><label><div>${L("Name dieses Eintrags","Name of this entry")}</div><input id="ruleName" placeholder="${L("z. B. TikTok-Like-Zähler","e.g. TikTok like counter")}"></label><div class="btnLine"><button id="saveRule">${L("Speichern","Save")}</button><button class="secondary" id="clearRule">${L("Ändern abbrechen","Cancel editing")}</button></div></div></section><section class="card"><h3>${L("Gespeicherte Einträge","Saved entries")}</h3><div id="ruleList" class="ruleList"></div></section>`);
+  shell("obs_meld","OBS/Meld Integration",L("Dauerhafte Live-Werte gezielt in eine OBS- oder Meld-Quelle schreiben.","Write persistent live values to a specific OBS or Meld source."),`<section class="card integrationBuilder"><div class="integrationHead"><div><h3>${L("Neuen Eintrag anlegen","Create new entry")}</h3><div class="small">${L("Wähle zuerst den Auslöser. Weitere Optionen erscheinen passend zur Aktion.","Choose the trigger first. More options appear depending on the action.")}</div></div></div><div class="integrationFlow"><label><div>1 · ${L("Plattform","Platform")}</div><select id="rulePlatform">${option([["tiktok","TikTok"],["twitch","Twitch"],["youtube","YouTube"],["kick","Kick"]])}</select></label><label><div>2 · ${L("Live-Wert","Live value")}</div><select id="ruleValue"></select></label><label><div>3 · ${L("Ausgabe","Output")}</div><select id="ruleTarget">${option(targetOptions)}</select></label><label><div>4 · ${L("Szene","Scene")}</div><select id="ruleScene"></select></label><label><div>5 · ${L("Quelle","Source")}</div><select id="ruleSource"></select></label></div><div class="integrationName"><label><div>${L("Name dieses Eintrags","Name of this entry")}</div><input id="ruleName" placeholder="${L("z. B. TikTok-Like-Zähler","e.g. TikTok like counter")}"></label><div class="ruleFormActions"><button id="saveRule">${L("Speichern","Save")}</button><button class="secondary" id="clearRule">${L("Ändern abbrechen","Cancel editing")}</button></div></div></section><section class="card integrationListCard"><div class="integrationListHead"><h3>${L("Gespeicherte Einträge","Saved entries")}</h3><span class="small">${L("Neueste zuerst","Newest first")}</span></div><div id="ruleList" class="ruleList"></div></section>`);
   const reloadButton=document.createElement("button");
   reloadButton.className="secondary targetReload";
   reloadButton.textContent=L("Szenen & Quellen neu laden","Reload scenes & sources");
@@ -1042,7 +1042,7 @@ async function renderObsMeld(){
 
   const fillLikeUserList=()=>{$("#ruleLikeUserList").innerHTML=savedLikeUsers().map(x=>`<option value="${esc(x)}"></option>`).join("");};
   const selectedIsLikeCounter=()=>$("#rulePlatform").value==="tiktok"&&$("#ruleValue").value==="like_total";
-  const toggleTextOptions=()=>{const action=$("#ruleAction").value,text=action==="text",placeholder=$("#ruleStartup").value==="placeholder",streak=text&&$("#rulePlatform").value==="twitch"&&$("#ruleValue").value==="latest_viewer_streak";startupField.hidden=!text||streak;startupField.style.display=text&&!streak?"":"none";placeholderField.hidden=!text||!placeholder||streak;placeholderField.style.display=text&&placeholder&&!streak?"":"none";likeCounterField.hidden=!selectedIsLikeCounter();likeCounterField.style.display=selectedIsLikeCounter()?"":"none";viewerStreakField.hidden=!streak;viewerStreakField.style.display=streak?"":"none";hideSecondsField.hidden=action!=="show";hideSecondsField.style.display=action==="show"?"":"none";};
+  const toggleTextOptions=()=>{const action=$("#ruleAction").value,text=isTextRule({action}),placeholder=$("#ruleStartup").value==="placeholder",streak=text&&$("#rulePlatform").value==="twitch"&&$("#ruleValue").value==="latest_viewer_streak";startupField.hidden=!text||streak;startupField.style.display=text&&!streak?"":"none";placeholderField.hidden=!text||!placeholder||streak;placeholderField.style.display=text&&placeholder&&!streak?"":"none";likeCounterField.hidden=!selectedIsLikeCounter();likeCounterField.style.display=selectedIsLikeCounter()?"":"none";viewerStreakField.hidden=!streak;viewerStreakField.style.display=streak?"":"none";hideSecondsField.hidden=!["show","text_show"].includes(action);hideSecondsField.style.display=["show","text_show"].includes(action)?"":"none";};
   $("#ruleAction").onchange=toggleTextOptions;$("#ruleStartup").onchange=toggleTextOptions;
 
   let editIndex=-1;
@@ -1051,7 +1051,7 @@ async function renderObsMeld(){
   const refreshValues=()=>{$("#ruleValue").innerHTML=option(values[$("#rulePlatform").value]||[]);toggleTextOptions();};
   const readRule=()=>{
     const r={name:$("#ruleName").value.trim()||`${platformLabel($("#rulePlatform").value)} ${$("#ruleValue").selectedOptions[0]?.textContent||L("Wert","Value")}`,platform:$("#rulePlatform").value,value:$("#ruleValue").value,target:$("#ruleTarget").value,scene:$("#ruleScene").value,source:$("#ruleSource").value,action:$("#ruleAction").value,startup:$("#ruleStartup").value,placeholder:$("#rulePlaceholder").value.trim()||"---"};
-    if(r.action==="show")r.hideSeconds=Math.max(0,Number($("#ruleHideSeconds").value)||0);
+    if(["show","text_show"].includes(r.action))r.hideSeconds=Math.max(0,Number($("#ruleHideSeconds").value)||0);
     if(isLikeCounterRule(r)){r.likeUser=$("#ruleLikeUser").value.trim();r.likeThreshold=Math.max(1,Number($("#ruleLikeThreshold").value)||1);}
     if(isViewerStreakRule(r))r.streakTemplate=$("#ruleStreakTemplate").value.trim()||L("<user> hat einen Streak von <amount> Streams erreicht","<user> reached a streak of <amount> streams");
     return r;
@@ -1069,16 +1069,17 @@ async function renderObsMeld(){
   };
   const renderRules=()=>{
     fillLikeUserList();
-    $("#ruleList").innerHTML=rules.length?rules.map((r,i)=>{
+    const orderedRules=rules.map((r,i)=>({r,i})).reverse();
+    $("#ruleList").innerHTML=orderedRules.length?orderedRules.map(({r,i})=>{
       const textRule=isTextRule(r);
       const testText=localizedPreview(r,r.testText||defaultPreview(r));
       const valueLabel=(values[r.platform]||[]).find(x=>x[0]===r.value)?.[1]||r.value;
       const condition=isLikeCounterRule(r)?` · ${L("Benutzer","User")}: ${esc(r.likeUser||"-")} · ${L("alle","every")} ${esc(r.likeThreshold||"-")} Likes`:"";
-      const showInfo=isShowRule(r)?` · ${L("ausblenden nach","hide after")} ${esc(r.hideSeconds??4)}s`:"";
+      const showInfo=["show","text_show"].includes(String(r.action||"").toLowerCase())?` · ${L("ausblenden nach","hide after")} ${esc(r.hideSeconds??4)}s`:"";
       const testControls=textRule
-        ? `<input class="savedRuleTestText" data-i="${i}" value="${esc(testText)}" placeholder="${L("Testtext","Test text")}"><button class="secondary testSavedRule" data-i="${i}">${L("Testen","Test")}</button>`
+        ? `<label class="ruleTestField"><span>${L("Testtext","Test text")}</span><input class="savedRuleTestText" data-i="${i}" value="${esc(testText)}" placeholder="${L("Testtext","Test text")}"></label><button class="secondary testSavedRule" data-i="${i}">${L("Testen","Test")}</button>`
         : `<button class="secondary testSavedRule" data-i="${i}">${L("Testen","Test")}</button>`;
-      return `<div class="ruleRow"><div><b>${esc(r.name)}</b><div class="small">${esc(platformLabel(r.platform))} · ${esc(valueLabel)}${condition} → ${esc((r.target||"").toUpperCase())} · ${esc(r.scene||"-")} · ${esc(r.source||"-")} · ${esc(actionLabels[r.action]||r.action||actionLabels.text)}${showInfo}</div></div><div class="btnLine">${testControls}<button class="secondary editRule" data-i="${i}">${L("Ändern","Edit")}</button><button class="secondary deleteRule" data-i="${i}">${L("Löschen","Delete")}</button></div></div>`;
+      return `<div class="ruleRow"><div class="ruleMeta"><b>${esc(r.name)}</b><div class="small">${esc(platformLabel(r.platform))} · ${esc(valueLabel)}${condition} → ${esc((r.target||"").toUpperCase())} · ${esc(r.scene||"-")} · ${esc(r.source||"-")} · ${esc(actionLabels[r.action]||r.action||actionLabels.text)}${showInfo}</div></div><div class="ruleActions ${textRule?"hasText":"noText"}">${testControls}<button class="secondary editRule" data-i="${i}">${L("Ändern","Edit")}</button><button class="secondary deleteRule" data-i="${i}">${L("Löschen","Delete")}</button></div></div>`;
     }).join(""):`<div class="hint">${L("Noch keine Einträge. Lege oben einen dauerhaften Live-Wert an.","No entries yet. Create a persistent live value above.")}</div>`;
     $("#ruleList").insertAdjacentHTML("beforeend",`<div class="hint" id="ruleTestResult"></div>`);
     let testTextSaveTimer=null;
