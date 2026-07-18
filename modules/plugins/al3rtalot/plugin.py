@@ -40,6 +40,7 @@ class Al3rtalotPlugin(ProviderPlugin):
         self._automation_recent: dict[str, float] = {}
         self._like_threshold_fired: set[str] = set()
         self._auto_hide_timers: dict[str, threading.Timer] = {}
+        self._scene_restore_timers: dict[str, threading.Timer] = {}
         self._startup_automation_attempt = 0
         self._startup_automation_done: set[str] = set()
         self._platforms = {
@@ -499,9 +500,10 @@ class Al3rtalotPlugin(ProviderPlugin):
         action = str(rule.get('action') or 'text').strip().lower()
         scene = str(rule.get('scene') or '').strip()
         source = str(rule.get('source') or '').strip()
+        filter_name = str(rule.get('filter') or rule.get('filterName') or rule.get('filter_name') or '').strip()
         if not target:
             return False
-        dedupe_key = '|'.join([target, action, scene.casefold(), source.casefold(), text])
+        dedupe_key = '|'.join([target, action, scene.casefold(), source.casefold(), filter_name.casefold(), text])
         now = time.time()
         with self._lock:
             last = self._automation_recent.get(dedupe_key)
@@ -511,10 +513,13 @@ class Al3rtalotPlugin(ProviderPlugin):
             if len(self._automation_recent) > 200:
                 self._automation_recent = {k: v for k, v in self._automation_recent.items() if now - v < 30}
         try:
+            previous_scene = ''
+            if action == 'scene':
+                previous_scene = self._current_automation_scene(target)
             if target == 'meld':
                 ok, detail = self._apply_meld_rule(action, scene, source, text)
             elif target == 'obs':
-                ok, detail = self._apply_obs_rule(action, scene, source, text)
+                ok, detail = self._apply_obs_rule(action, scene, source, text, filter_name)
             else:
                 return False
             if not ok:
@@ -522,6 +527,8 @@ class Al3rtalotPlugin(ProviderPlugin):
                 return False
             if action in {'show', 'text_show'}:
                 self._schedule_auto_hide(target, scene, source, rule)
+            if action == 'scene':
+                self._schedule_scene_restore(target, scene, previous_scene, rule)
             return True
         except Exception as exc:
             self._log(f'automation failed: {target} {action} {scene}/{source}: {exc}')
@@ -541,7 +548,10 @@ class Al3rtalotPlugin(ProviderPlugin):
         if not source:
             return
         try:
-            seconds = float(str((rule or {}).get('hideSeconds') or (rule or {}).get('hide_seconds') or 4).replace(',', '.'))
+            seconds_raw = (rule or {}).get('hideSeconds') if (rule or {}).get('hideSeconds') is not None else (rule or {}).get('hide_seconds')
+            if seconds_raw is None:
+                seconds_raw = 4
+            seconds = float(str(seconds_raw).replace(',', '.'))
         except Exception:
             seconds = 4.0
         seconds = max(0.0, min(3600.0, seconds))
@@ -558,6 +568,79 @@ class Al3rtalotPlugin(ProviderPlugin):
             timer = threading.Timer(seconds, self._hide_automation_source, args=(str(target or '').strip().lower(), str(scene or '').strip(), source))
             timer.daemon = True
             self._auto_hide_timers[key] = timer
+            timer.start()
+
+    def _automation_seconds(self, rule: dict[str, Any] | None = None, default: float = 0.0) -> float:
+        try:
+            seconds_raw = (rule or {}).get('hideSeconds') if (rule or {}).get('hideSeconds') is not None else (rule or {}).get('hide_seconds')
+            if seconds_raw is None:
+                seconds_raw = default
+            seconds = float(str(seconds_raw).replace(',', '.'))
+        except Exception:
+            seconds = default
+        return max(0.0, min(3600.0, seconds))
+
+    def _current_automation_scene(self, target: str) -> str:
+        try:
+            if target == 'obs':
+                obs = self._get_plugin('obs_control')
+                if obs is None:
+                    return ''
+                ok, detail = obs.request('GetCurrentProgramScene', {}, timeout=2.0)
+                if ok:
+                    return str((detail or {}).get('currentProgramSceneName') or '')
+            if target == 'meld':
+                meld = self._get_plugin('meld_control')
+                if meld is None:
+                    return ''
+                for method_name in ('getCurrentScene', 'currentScene', 'getActiveScene'):
+                    try:
+                        ok, detail = meld.invoke_meld_method(method_name, [], timeout=1.0)
+                    except Exception:
+                        ok, detail = False, ''
+                    if not ok:
+                        continue
+                    if isinstance(detail, dict):
+                        value = str(detail.get('id') or detail.get('name') or detail.get('scene') or '')
+                    else:
+                        value = str(detail or '')
+                    if value:
+                        return value
+        except Exception:
+            return ''
+        return ''
+
+    def _restore_automation_scene(self, target: str, previous_scene: str) -> None:
+        try:
+            if target == 'obs':
+                obs = self._get_plugin('obs_control')
+                if obs is not None:
+                    obs.request('SetCurrentProgramScene', {'sceneName': previous_scene}, timeout=3.0)
+            elif target == 'meld':
+                meld = self._get_plugin('meld_control')
+                if meld is not None:
+                    meld.invoke_meld_method('showScene', [previous_scene], timeout=3.0)
+        except Exception as exc:
+            self._log(f'scene restore failed: {target} -> {previous_scene}: {exc}')
+
+    def _schedule_scene_restore(self, target: str, scene: str, previous_scene: str, rule: dict[str, Any] | None = None) -> None:
+        seconds = self._automation_seconds(rule, 0.0)
+        previous_scene = str(previous_scene or '').strip()
+        scene = str(scene or '').strip()
+        target = str(target or '').strip().lower()
+        if seconds <= 0 or not previous_scene or previous_scene == scene:
+            return
+        key = '|'.join([target, scene.casefold()])
+        with self._lock:
+            old = self._scene_restore_timers.pop(key, None)
+            if old is not None:
+                try:
+                    old.cancel()
+                except Exception:
+                    pass
+            timer = threading.Timer(seconds, self._restore_automation_scene, args=(target, previous_scene))
+            timer.daemon = True
+            self._scene_restore_timers[key] = timer
             timer.start()
 
     def _find_meld_layer(self, meld: Any, scene_name: str, source_name: str) -> dict[str, Any] | None:
@@ -681,15 +764,26 @@ class Al3rtalotPlugin(ProviderPlugin):
             return True, 'Meld source was re-shown; no supported play function confirmed. ' + ' | '.join(details[-6:])
         return False, f'Unbekannte Aktion: {action}'
 
-    def _apply_obs_rule(self, action: str, scene_name: str, source_name: str, text: str) -> tuple[bool, str]:
+    def _apply_obs_rule(self, action: str, scene_name: str, source_name: str, text: str, filter_name: str = '') -> tuple[bool, str]:
         obs = self._get_plugin('obs_control')
         if obs is None or not getattr(obs, 'is_connected', lambda: False)():
             return False, 'OBS-Control ist nicht verbunden'
-        if action == 'text':
+        def set_obs_text() -> tuple[bool, str]:
             ok, detail = obs.request('SetInputSettings', {'inputName': source_name, 'inputSettings': {'text': text}, 'overlay': True}, timeout=3.0)
+            if not ok:
+                return False, str(detail or 'OBS Text konnte nicht geschrieben werden')
+            verify_ok, verify_detail = obs.request('GetInputSettings', {'inputName': source_name}, timeout=2.0)
+            if verify_ok:
+                current = str((((verify_detail or {}).get('inputSettings') or {}).get('text')) or '')
+                if current != text:
+                    return False, f'OBS hat den Text nicht uebernommen: gelesen={current!r}'
+                return True, 'Text geschrieben und von OBS bestaetigt'
+            return True, f'Text geschrieben; Rueckpruefung fehlgeschlagen: {verify_detail}'
+        if action == 'text':
+            ok, detail = set_obs_text()
             return bool(ok), str(detail or '')
         if action == 'text_show':
-            text_ok, text_detail = obs.request('SetInputSettings', {'inputName': source_name, 'inputSettings': {'text': text}, 'overlay': True}, timeout=3.0)
+            text_ok, text_detail = set_obs_text()
             try:
                 obs.set_source_visible(source_name, False)
                 time.sleep(0.05)
@@ -710,6 +804,19 @@ class Al3rtalotPlugin(ProviderPlugin):
         if action == 'scene':
             ok, detail = obs.request('SetCurrentProgramScene', {'sceneName': scene_name}, timeout=3.0)
             return bool(ok), str(detail or '')
+        if action in {'filter_on', 'filter_off'}:
+            if not scene_name or not filter_name:
+                return False, 'OBS-Szene und Filter muessen ausgewaehlt sein'
+            enabled = action == 'filter_on'
+            ok, detail = obs.request('SetSourceFilterEnabled', {'sourceName': scene_name, 'filterName': filter_name, 'filterEnabled': enabled}, timeout=3.0)
+            if not ok:
+                return False, str(detail or '')
+            verify_ok, verify_detail = obs.request('GetSourceFilter', {'sourceName': scene_name, 'filterName': filter_name}, timeout=2.0)
+            if verify_ok:
+                current = bool((verify_detail or {}).get('filterEnabled'))
+                if current != enabled:
+                    return False, f'OBS Filterstatus stimmt nicht: gelesen={current}'
+            return True, f"Filter {'aktiviert' if enabled else 'deaktiviert'}: {scene_name} / {filter_name}"
         if action == 'play':
             # OBS media sources, browser sources and scene items need different restart edges.
             # Do all safe nudges: hide -> stop/cursor/restart/play -> browser refresh -> show.

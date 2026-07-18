@@ -979,12 +979,15 @@ async function renderChat(){
 async function renderObsMeld(){
   const settings=await api("/api/settings");
   const rules=Array.isArray(settings.automation_rules)?settings.automation_rules:[];
-  const targets={obs:{connected:false,scenes:[],sources:[],sources_by_scene:{}},meld:{connected:false,scenes:[],sources:[],sources_by_scene:{}}};
-  const targetLoad=api("/api/automation/targets").catch(()=>({targets:{}}));
+  const targets={obs:{connected:false,loading:true,scenes:[],sources:[],sources_by_scene:{},filters_by_scene:{}},meld:{connected:false,loading:true,scenes:[],sources:[],sources_by_scene:{}}};
+  const targetLoad=api("/api/automation/targets",{timeoutMs:15000}).catch(()=>({targets:{}}));
   const values={tiktok:[["latest_follow",L("Neuester Follow","Latest follow")],["top_liker",L("Top-Liker","Top liker")],["top_gifter",L("Top-Gifter","Top gifter")],["latest_gift",L("Neuestes Geschenk","Latest gift")],["like_total",L("Like-Zähler","Like counter")]],twitch:[["latest_follow",L("Neuester Follow","Latest follow")],["latest_subscribe",L("Neuestes Abo","Latest subscription")],["latest_raid",L("Letzter Raid","Latest raid")],["latest_donation",L("Letzte Spende","Latest donation")],["latest_bits",L("Letzte Bits","Latest bits")],["latest_viewer_streak",L("Viewer-Streak","Viewer streak")]],youtube:[["latest_member",L("Neuestes Mitglied","Latest member")],["latest_superchat",L("Letzter Superchat","Latest Super Chat")]],kick:[["latest_follow",L("Neuester Follow","Latest follow")],["latest_subscribe",L("Neuestes Abo","Latest subscription")]]};
   const option=(items,selected="")=>items.map(([v,l])=>`<option value="${esc(v)}" ${v===selected?"selected":""}>${esc(l)}</option>`).join("");
-  const targetOptions=Object.entries(targets).map(([key,value])=>[key,`${key.toUpperCase()}${value.connected?"":L(" (nicht verbunden)"," (not connected)")}`]);
-  const actionLabels={text:L("Text schreiben","Write text"),text_show:L("Text schreiben + Quelle kurz einblenden","Write text + briefly show source"),show:L("Quelle einblenden","Show source"),hide:L("Quelle ausblenden","Hide source"),trigger:L("Trigger auslösen","Trigger event"),play:L("Medienquelle abspielen","Play media source"),scene:L("Szene aktivieren","Activate scene")};
+  const targetLabel=(key,value)=>`${key.toUpperCase()}${value.loading?L(" (lädt...)"," (loading...)"):(value.connected?"":L(" (nicht verbunden)"," (not connected)"))}`;
+  const targetOptions=()=>Object.entries(targets).map(([key,value])=>[key,targetLabel(key,value)]);
+  const actionLabels={text:L("Text schreiben","Write text"),text_show:L("Text schreiben + Quelle kurz einblenden","Write text + briefly show source"),show:L("Quelle einblenden","Show source"),play:L("Medienquelle abspielen","Play media source"),scene:L("Szene aktivieren","Activate scene"),filter_on:L("OBS-Szenenfilter aktivieren","Enable OBS scene filter"),filter_off:L("OBS-Szenenfilter deaktivieren","Disable OBS scene filter")};
+  const filterActions=new Set(["filter_on","filter_off"]);
+  const actionOptions=()=>Object.entries(actionLabels).filter(([key])=>$("#ruleTarget")?.value==="obs"||!filterActions.has(key));
   const textActions=new Set(["text","text_show"]);
   const isTextRule=r=>textActions.has(String(r?.action||"text").toLowerCase());
   const isShowRule=r=>String(r?.action||"").toLowerCase()==="show";
@@ -1009,7 +1012,7 @@ async function renderObsMeld(){
     return await api("/api/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(settings)});
   };
 
-  shell("obs_meld","OBS/Meld Integration",L("Dauerhafte Live-Werte gezielt in eine OBS- oder Meld-Quelle schreiben.","Write persistent live values to a specific OBS or Meld source."),`<section class="card integrationBuilder"><div class="integrationHead"><div><h3>${L("Neuen Eintrag anlegen","Create new entry")}</h3><div class="small">${L("Wähle zuerst den Auslöser. Weitere Optionen erscheinen passend zur Aktion.","Choose the trigger first. More options appear depending on the action.")}</div></div></div><div class="integrationFlow"><label><div>1 · ${L("Plattform","Platform")}</div><select id="rulePlatform">${option([["tiktok","TikTok"],["twitch","Twitch"],["youtube","YouTube"],["kick","Kick"]])}</select></label><label><div>2 · ${L("Live-Wert","Live value")}</div><select id="ruleValue"></select></label><label><div>3 · ${L("Ausgabe","Output")}</div><select id="ruleTarget">${option(targetOptions)}</select></label><label><div>4 · ${L("Szene","Scene")}</div><select id="ruleScene"></select></label><label><div>5 · ${L("Quelle","Source")}</div><select id="ruleSource"></select></label></div><div class="integrationName"><label><div>${L("Name dieses Eintrags","Name of this entry")}</div><input id="ruleName" placeholder="${L("z. B. TikTok-Like-Zähler","e.g. TikTok like counter")}"></label><div class="ruleFormActions"><button id="saveRule">${L("Speichern","Save")}</button><button class="secondary" id="clearRule">${L("Ändern abbrechen","Cancel editing")}</button></div></div></section><section class="card integrationListCard"><div class="integrationListHead"><h3>${L("Gespeicherte Einträge","Saved entries")}</h3><span class="small">${L("Neueste zuerst","Newest first")}</span></div><div id="ruleList" class="ruleList"></div></section>`);
+  shell("obs_meld","OBS/Meld Integration",L("Dauerhafte Live-Werte gezielt in eine OBS- oder Meld-Quelle schreiben.","Write persistent live values to a specific OBS or Meld source."),`<section class="card integrationBuilder"><div class="integrationHead"><div><h3>${L("Neuen Eintrag anlegen","Create new entry")}</h3><div class="small">${L("Wähle zuerst den Auslöser. Weitere Optionen erscheinen passend zur Aktion.","Choose the trigger first. More options appear depending on the action.")}</div></div></div><div class="integrationFlow"><label><div>1 · ${L("Plattform","Platform")}</div><select id="rulePlatform">${option([["tiktok","TikTok"],["twitch","Twitch"],["youtube","YouTube"],["kick","Kick"]])}</select></label><label><div>2 · ${L("Live-Wert","Live value")}</div><select id="ruleValue"></select></label><label><div>3 · ${L("Ausgabe","Output")}</div><select id="ruleTarget">${option(targetOptions())}</select></label><label><div>4 · ${L("Szene","Scene")}</div><select id="ruleScene"></select></label><label><div>5 · ${L("Quelle","Source")}</div><select id="ruleSource"></select></label></div><div class="integrationName"><label><div>${L("Name dieses Eintrags","Name of this entry")}</div><input id="ruleName" placeholder="${L("z. B. TikTok-Like-Zähler","e.g. TikTok like counter")}"></label><div class="ruleFormActions"><button id="saveRule">${L("Speichern","Save")}</button><button class="secondary" id="clearRule">${L("Ändern abbrechen","Cancel editing")}</button></div></div></section><section class="card integrationListCard"><div class="integrationListHead"><h3>${L("Gespeicherte Einträge","Saved entries")}</h3><span class="small">${L("Neueste zuerst","Newest first")}</span></div><div id="ruleList" class="ruleList"></div></section>`);
   const reloadButton=document.createElement("button");
   reloadButton.className="secondary targetReload";
   reloadButton.textContent=L("Szenen & Quellen neu laden","Reload scenes & sources");
@@ -1017,7 +1020,7 @@ async function renderObsMeld(){
   $(".integrationBuilder").append(reloadButton);
 
   const actionField=document.createElement("label");
-  actionField.innerHTML=`<div>6 · ${L("Aktion","Action")}</div><select id="ruleAction">${option(Object.entries(actionLabels))}</select>`;
+  actionField.innerHTML=`<div>6 · ${L("Aktion","Action")}</div><select id="ruleAction">${option(actionOptions())}</select>`;
   $(".integrationFlow").append(actionField);
   const likeCounterField=document.createElement("div");
   likeCounterField.className="likeCounterFields";
@@ -1029,8 +1032,12 @@ async function renderObsMeld(){
   $(".integrationFlow").append(viewerStreakField);
   const hideSecondsField=document.createElement("label");
   hideSecondsField.className="hideSecondsField";
-  hideSecondsField.innerHTML=`<div>7 · ${L("Nach X Sekunden ausblenden","Hide after X seconds")}</div><input id="ruleHideSeconds" title="${esc(L("0 = nicht automatisch ausblenden.","0 = do not hide automatically."))}" type="number" min="0" max="3600" step="0.1" value="4">`;
+  hideSecondsField.innerHTML=`<div>7 · ${L("Nach X Sekunden ausblenden/zurück","Hide/back after X seconds")}</div><input id="ruleHideSeconds" title="${esc(L("0 = nicht automatisch ausblenden oder zurückschalten.","0 = do not hide or switch back automatically."))}" type="number" min="0" max="3600" step="0.1" value="4">`;
   $(".integrationFlow").append(hideSecondsField);
+  const filterField=document.createElement("label");
+  filterField.className="filterField";
+  filterField.innerHTML=`<div>7 · ${L("Szenenfilter","Scene filter")}</div><select id="ruleFilter"></select>`;
+  $(".integrationFlow").append(filterField);
   const startupField=document.createElement("label");
   startupField.className="textStartupField";
   startupField.innerHTML=`<div>${L("Text beim Programmstart","Text on tool startup")}</div><select id="ruleStartup"><option value="keep">${L("Letzten Wert behalten","Keep last value")}</option><option value="placeholder">${L("Platzhalter anzeigen","Show placeholder")}</option></select>`;
@@ -1042,16 +1049,19 @@ async function renderObsMeld(){
 
   const fillLikeUserList=()=>{$("#ruleLikeUserList").innerHTML=savedLikeUsers().map(x=>`<option value="${esc(x)}"></option>`).join("");};
   const selectedIsLikeCounter=()=>$("#rulePlatform").value==="tiktok"&&$("#ruleValue").value==="like_total";
-  const toggleTextOptions=()=>{const action=$("#ruleAction").value,text=isTextRule({action}),placeholder=$("#ruleStartup").value==="placeholder",streak=text&&$("#rulePlatform").value==="twitch"&&$("#ruleValue").value==="latest_viewer_streak";startupField.hidden=!text||streak;startupField.style.display=text&&!streak?"":"none";placeholderField.hidden=!text||!placeholder||streak;placeholderField.style.display=text&&placeholder&&!streak?"":"none";likeCounterField.hidden=!selectedIsLikeCounter();likeCounterField.style.display=selectedIsLikeCounter()?"":"none";viewerStreakField.hidden=!streak;viewerStreakField.style.display=streak?"":"none";hideSecondsField.hidden=!["show","text_show"].includes(action);hideSecondsField.style.display=["show","text_show"].includes(action)?"":"none";};
-  $("#ruleAction").onchange=toggleTextOptions;$("#ruleStartup").onchange=toggleTextOptions;
+  const isFilterAction=()=>filterActions.has($("#ruleAction")?.value);
+  const refreshActions=()=>{const select=$("#ruleAction");if(!select)return;const selected=select.value;select.innerHTML=option(actionOptions(),selected);if(selected&&[...select.options].some(item=>item.value===selected))select.value=selected;else select.value="text";};
+  const toggleTextOptions=()=>{const action=$("#ruleAction").value,text=isTextRule({action}),placeholder=$("#ruleStartup").value==="placeholder",streak=text&&$("#rulePlatform").value==="twitch"&&$("#ruleValue").value==="latest_viewer_streak",filterAction=isFilterAction()&&$("#ruleTarget").value==="obs",timedAction=["show","text_show","scene"].includes(action);startupField.hidden=!text||streak;startupField.style.display=text&&!streak?"":"none";placeholderField.hidden=!text||!placeholder||streak;placeholderField.style.display=text&&placeholder&&!streak?"":"none";likeCounterField.hidden=!selectedIsLikeCounter();likeCounterField.style.display=selectedIsLikeCounter()?"":"none";viewerStreakField.hidden=!streak;viewerStreakField.style.display=streak?"":"none";hideSecondsField.hidden=!timedAction;hideSecondsField.style.display=timedAction?"":"none";filterField.hidden=!filterAction;filterField.style.display=filterAction?"":"none";$("#ruleSource").closest("label").hidden=filterAction||action==="scene";};
+  $("#ruleAction").onchange=()=>{toggleTextOptions();refreshFilters();};$("#ruleStartup").onchange=toggleTextOptions;
 
   let editIndex=-1;
-  const refreshSources=()=>{const target=targets[$("#ruleTarget").value]||{},scene=$("#ruleScene").value,sources=(target.sources_by_scene||{})[scene]||[];$("#ruleSource").innerHTML=option(sources.length?sources.map(x=>[x,x]):[["",L("Keine Quelle in dieser Szene","No source in this scene")]]);};
-  const refreshTargets=()=>{const key=$("#ruleTarget").value,target=targets[key]||{},scenes=target.scenes||[];$("#ruleScene").innerHTML=option(scenes.length?scenes.map(x=>[x,x]):[["",L("Zuerst OBS/Meld verbinden","Connect OBS/Meld first")]]);refreshSources();};
+  const refreshFilters=()=>{const target=targets[$("#ruleTarget").value]||{},scene=$("#ruleScene").value,filters=(target.filters_by_scene||{})[scene]||[];$("#ruleFilter").innerHTML=option(filters.length?filters.map(x=>[x,x]):[["",L("Keine Filter in dieser Szene","No filters in this scene")]]);};
+  const refreshSources=()=>{const target=targets[$("#ruleTarget").value]||{},scene=$("#ruleScene").value,sources=(target.sources_by_scene||{})[scene]||[];$("#ruleSource").innerHTML=option(sources.length?sources.map(x=>[x,x]):[["",L("Keine Quelle in dieser Szene","No source in this scene")]]);refreshFilters();};
+  const refreshTargets=()=>{refreshActions();const key=$("#ruleTarget").value,target=targets[key]||{},scenes=target.scenes||[];$("#ruleScene").innerHTML=option(scenes.length?scenes.map(x=>[x,x]):[[target.loading?"loading":"",target.loading?L("Szenen werden geladen...","Loading scenes..."):L("Zuerst OBS/Meld verbinden","Connect OBS/Meld first")]]);refreshSources();toggleTextOptions();};
   const refreshValues=()=>{$("#ruleValue").innerHTML=option(values[$("#rulePlatform").value]||[]);toggleTextOptions();};
   const readRule=()=>{
-    const r={name:$("#ruleName").value.trim()||`${platformLabel($("#rulePlatform").value)} ${$("#ruleValue").selectedOptions[0]?.textContent||L("Wert","Value")}`,platform:$("#rulePlatform").value,value:$("#ruleValue").value,target:$("#ruleTarget").value,scene:$("#ruleScene").value,source:$("#ruleSource").value,action:$("#ruleAction").value,startup:$("#ruleStartup").value,placeholder:$("#rulePlaceholder").value.trim()||"---"};
-    if(["show","text_show"].includes(r.action))r.hideSeconds=Math.max(0,Number($("#ruleHideSeconds").value)||0);
+    const r={name:$("#ruleName").value.trim()||`${platformLabel($("#rulePlatform").value)} ${$("#ruleValue").selectedOptions[0]?.textContent||L("Wert","Value")}`,platform:$("#rulePlatform").value,value:$("#ruleValue").value,target:$("#ruleTarget").value,scene:$("#ruleScene").value,source:$("#ruleSource").value,filter:$("#ruleFilter").value,action:$("#ruleAction").value,startup:$("#ruleStartup").value,placeholder:$("#rulePlaceholder").value.trim()||"---"};
+    if(["show","text_show","scene"].includes(r.action))r.hideSeconds=Math.max(0,Number($("#ruleHideSeconds").value)||0);
     if(isLikeCounterRule(r)){r.likeUser=$("#ruleLikeUser").value.trim();r.likeThreshold=Math.max(1,Number($("#ruleLikeThreshold").value)||1);}
     if(isViewerStreakRule(r))r.streakTemplate=$("#ruleStreakTemplate").value.trim()||L("<user> hat einen Streak von <amount> Streams erreicht","<user> reached a streak of <amount> streams");
     return r;
@@ -1075,11 +1085,14 @@ async function renderObsMeld(){
       const testText=localizedPreview(r,r.testText||defaultPreview(r));
       const valueLabel=(values[r.platform]||[]).find(x=>x[0]===r.value)?.[1]||r.value;
       const condition=isLikeCounterRule(r)?` · ${L("Benutzer","User")}: ${esc(r.likeUser||"-")} · ${L("alle","every")} ${esc(r.likeThreshold||"-")} Likes`:"";
-      const showInfo=["show","text_show"].includes(String(r.action||"").toLowerCase())?` · ${L("ausblenden nach","hide after")} ${esc(r.hideSeconds??4)}s`:"";
+      const actionKey=String(r.action||"").toLowerCase();
+      const sceneSeconds=Number(r.hideSeconds??r.hide_seconds??0)||0;
+      const showInfo=["show","text_show"].includes(actionKey)?` · ${L("ausblenden nach","hide after")} ${esc(r.hideSeconds??4)}s`:actionKey==="scene"?(sceneSeconds>0?` · ${L("zurück nach","back after")} ${esc(sceneSeconds)}s`:` · ${L("bleibt aktiv","stays active")}`):"";
+      const targetItem=["filter_on","filter_off"].includes(actionKey)?`${esc(r.scene||"-")} · ${esc(r.filter||"-")}`:actionKey==="scene"?`${esc(r.scene||"-")}`:`${esc(r.scene||"-")} · ${esc(r.source||"-")}`;
       const testControls=textRule
         ? `<label class="ruleTestField"><span>${L("Testtext","Test text")}</span><input class="savedRuleTestText" data-i="${i}" value="${esc(testText)}" placeholder="${L("Testtext","Test text")}"></label><button class="secondary testSavedRule" data-i="${i}">${L("Testen","Test")}</button>`
         : `<button class="secondary testSavedRule" data-i="${i}">${L("Testen","Test")}</button>`;
-      return `<div class="ruleRow"><div class="ruleMeta"><b>${esc(r.name)}</b><div class="small">${esc(platformLabel(r.platform))} · ${esc(valueLabel)}${condition} → ${esc((r.target||"").toUpperCase())} · ${esc(r.scene||"-")} · ${esc(r.source||"-")} · ${esc(actionLabels[r.action]||r.action||actionLabels.text)}${showInfo}</div></div><div class="ruleActions ${textRule?"hasText":"noText"}">${testControls}<button class="secondary editRule" data-i="${i}">${L("Ändern","Edit")}</button><button class="secondary deleteRule" data-i="${i}">${L("Löschen","Delete")}</button></div></div>`;
+      return `<div class="ruleRow"><div class="ruleMeta"><b>${esc(r.name)}</b><div class="small">${esc(platformLabel(r.platform))} · ${esc(valueLabel)}${condition} → ${esc((r.target||"").toUpperCase())} · ${targetItem} · ${esc(actionLabels[r.action]||r.action||actionLabels.text)}${showInfo}</div></div><div class="ruleActions ${textRule?"hasText":"noText"}">${testControls}<button class="secondary editRule" data-i="${i}">${L("Ändern","Edit")}</button><button class="secondary deleteRule" data-i="${i}">${L("Löschen","Delete")}</button></div></div>`;
     }).join(""):`<div class="hint">${L("Noch keine Einträge. Lege oben einen dauerhaften Live-Wert an.","No entries yet. Create a persistent live value above.")}</div>`;
     $("#ruleList").insertAdjacentHTML("beforeend",`<div class="hint" id="ruleTestResult"></div>`);
     let testTextSaveTimer=null;
@@ -1088,21 +1101,37 @@ async function renderObsMeld(){
       input.oninput=()=>{const i=Number(input.dataset.i);if(!rules[i])return;rules[i].testText=input.value;queueTestTextSave();};
       input.onchange=async()=>{const i=Number(input.dataset.i);if(!rules[i])return;rules[i].testText=input.value;await persistRules();};
     });
-    $$('.testSavedRule').forEach(b=>b.onclick=async()=>{const i=Number(b.dataset.i);const r=rules[i];if(!r)return;const input=$(`.savedRuleTestText[data-i="${i}"]`);if(input){r.testText=input.value;await persistRules();await runRuleTest(r,input.value);}else{await runRuleTest(r);}});
-    $$('.editRule').forEach(b=>b.onclick=()=>{const r=rules[Number(b.dataset.i)];editIndex=Number(b.dataset.i);$("#rulePlatform").value=r.platform;refreshValues();$("#ruleValue").value=r.value;toggleTextOptions();$("#ruleTarget").value=r.target;refreshTargets();$("#ruleScene").value=r.scene||"";refreshSources();$("#ruleSource").value=r.source||"";$("#ruleAction").value=r.action||"text";$("#ruleStartup").value=r.startup||"keep";$("#rulePlaceholder").value=r.placeholder||"---";$("#ruleHideSeconds").value=r.hideSeconds??r.hide_seconds??4;$("#ruleLikeUser").value=r.likeUser||r.like_user||"";$("#ruleLikeThreshold").value=r.likeThreshold||r.like_threshold||10;$("#ruleStreakTemplate").value=r.streakTemplate||r.streak_template||(r.streakOutput==="name"?"<user>":r.streakOutput==="count"?"<amount>":L("<user> hat einen Streak von <amount> Streams erreicht","<user> reached a streak of <amount> streams"));toggleTextOptions();$("#ruleName").value=r.name;$("#saveRule").textContent=L("Änderung speichern","Save changes");});
+    $$('.testSavedRule').forEach(b=>b.onclick=async()=>{
+      const i=Number(b.dataset.i),r=rules[i];
+      if(!r)return;
+      const input=$(`.savedRuleTestText[data-i="${i}"]`);
+      const preview=input?input.value:(r.testText||defaultPreview(r));
+      const old=b.textContent;
+      b.disabled=true;
+      b.textContent=L("Teste...","Testing...");
+      try{
+        if(input)r.testText=input.value;
+        const out=await runRuleTest({...r},preview);
+        if(input&&out.ok)await persistRules();
+      }finally{
+        b.disabled=false;
+        b.textContent=old;
+      }
+    });
+    $$('.editRule').forEach(b=>b.onclick=()=>{const r=rules[Number(b.dataset.i)];editIndex=Number(b.dataset.i);$("#rulePlatform").value=r.platform;refreshValues();$("#ruleValue").value=r.value;$("#ruleTarget").value=r.target;refreshTargets();$("#ruleScene").value=r.scene||"";refreshSources();$("#ruleSource").value=r.source||"";$("#ruleAction").value=r.action||"text";$("#ruleFilter").value=r.filter||r.filterName||r.filter_name||"";$("#ruleStartup").value=r.startup||"keep";$("#rulePlaceholder").value=r.placeholder||"---";$("#ruleHideSeconds").value=r.hideSeconds??r.hide_seconds??4;$("#ruleLikeUser").value=r.likeUser||r.like_user||"";$("#ruleLikeThreshold").value=r.likeThreshold||r.like_threshold||10;$("#ruleStreakTemplate").value=r.streakTemplate||r.streak_template||(r.streakOutput==="name"?"<user>":r.streakOutput==="count"?"<amount>":L("<user> hat einen Streak von <amount> Streams erreicht","<user> reached a streak of <amount> streams"));toggleTextOptions();$("#ruleName").value=r.name;$("#saveRule").textContent=L("Änderung speichern","Save changes");});
     $$('.deleteRule').forEach(b=>b.onclick=async()=>{rules.splice(Number(b.dataset.i),1);await persistRules();renderRules();});
   };
   $("#rulePlatform").onchange=()=>{refreshValues();};$("#ruleValue").onchange=toggleTextOptions;$("#ruleTarget").onchange=refreshTargets;$("#ruleScene").onchange=refreshSources;
   $("#clearRule").onclick=()=>{editIndex=-1;$("#ruleName").value="";$("#ruleLikeUser").value="";$("#ruleLikeThreshold").value=10;$("#ruleHideSeconds").value=4;$("#saveRule").textContent=L("Speichern","Save");};
-  $("#saveRule").onclick=async()=>{const r=readRule();if(isLikeCounterRule(r)&&!r.likeUser){alert(L("Bitte einen Chatter für den Like-Zähler eintragen.","Please enter a chatter for the like counter."));return;}if(editIndex>=0){r.testText=rules[editIndex]?.testText||defaultPreview(r);rules[editIndex]=r;}else{r.testText=defaultPreview(r);rules.push(r);}const out=await persistRules();if(!out.ok){console.warn(L("Regel speichern fehlgeschlagen","Failed to save rule"),out.error);return;}editIndex=-1;$("#ruleName").value="";$("#ruleLikeUser").value="";$("#ruleLikeThreshold").value=10;$("#ruleHideSeconds").value=4;$("#saveRule").textContent=L("Speichern","Save");renderRules();};
+  $("#saveRule").onclick=async()=>{const r=readRule();if(isLikeCounterRule(r)&&!r.likeUser){alert(L("Bitte einen Chatter für den Like-Zähler eintragen.","Please enter a chatter for the like counter."));return;}if(["filter_on","filter_off"].includes(r.action)){if(r.target!=="obs"){alert(L("Filteraktionen sind nur für OBS verfügbar.","Filter actions are only available for OBS."));return;}if(!r.scene||!r.filter){alert(L("Bitte Szene und Filter auswählen.","Please choose a scene and filter."));return;}}if(editIndex>=0){r.testText=rules[editIndex]?.testText||defaultPreview(r);rules[editIndex]=r;}else{r.testText=defaultPreview(r);rules.push(r);}const out=await persistRules();if(!out.ok){console.warn(L("Regel speichern fehlgeschlagen","Failed to save rule"),out.error);return;}editIndex=-1;$("#ruleName").value="";$("#ruleLikeUser").value="";$("#ruleLikeThreshold").value=10;$("#ruleHideSeconds").value=4;$("#saveRule").textContent=L("Speichern","Save");renderRules();};
   fillLikeUserList();refreshValues();refreshTargets();toggleTextOptions();renderRules();
   targetLoad.then(targetData=>{
     const loaded=targetData?.targets||{};
-    for(const key of ["obs","meld"])Object.assign(targets[key],loaded[key]||{});
+    for(const key of ["obs","meld"])Object.assign(targets[key],{loading:false},loaded[key]||{});
     const targetSelect=$("#ruleTarget");
     if(!targetSelect)return;
     const selected=targetSelect.value;
-    targetSelect.innerHTML=option(Object.entries(targets).map(([key,value])=>[key,`${key.toUpperCase()}${value.connected?"":L(" (nicht verbunden)"," (not connected)")}`]),selected);
+    targetSelect.innerHTML=option(targetOptions(),selected);
     if(selected)targetSelect.value=selected;
     refreshTargets();
     renderRules();

@@ -15,7 +15,7 @@ def _sanitize_automation_rules(value):
         return []
     allowed_platforms = {"tiktok", "twitch", "youtube", "kick"}
     allowed_targets = {"obs", "meld"}
-    allowed_actions = {"text", "text_show", "show", "hide", "play", "trigger", "scene"}
+    allowed_actions = {"text", "text_show", "show", "hide", "play", "scene", "filter_on", "filter_off"}
     allowed_startup = {"keep", "placeholder"}
     cleaned = []
     for raw in value:
@@ -35,13 +35,17 @@ def _sanitize_automation_rules(value):
             "target": target,
             "scene": str(raw.get("scene") or "").strip()[:180],
             "source": str(raw.get("source") or "").strip()[:180],
+            "filter": str(raw.get("filter") or raw.get("filterName") or raw.get("filter_name") or "").strip()[:180],
             "action": action,
             "startup": str(raw.get("startup") or "keep").strip().lower(),
             "placeholder": str(raw.get("placeholder") or "---").strip()[:240],
             "testText": str(raw.get("testText") or "").strip()[:300],
         }
         try:
-            item["hideSeconds"] = max(0.0, min(3600.0, float(str(raw.get("hideSeconds") or raw.get("hide_seconds") or 4).replace(",", "."))))
+            seconds_raw = raw.get("hideSeconds") if raw.get("hideSeconds") is not None else raw.get("hide_seconds")
+            if seconds_raw is None:
+                seconds_raw = 4
+            item["hideSeconds"] = max(0.0, min(3600.0, float(str(seconds_raw).replace(",", "."))))
         except Exception:
             item["hideSeconds"] = 4.0
         if platform == "tiktok" and item["value"] == "like_total":
@@ -749,6 +753,17 @@ class WebbasedPluginHost:
         except Exception:
             return None
 
+    def obs_is_connected(self) -> bool:
+        try:
+            cfg = self.state.settings().get("platforms", {}).get("obs", {})
+            ok, _detail = self.state.obs_status(cfg)
+            return bool(ok)
+        except Exception:
+            return False
+
+    def obs_request(self, request_type: str, request_data: dict | None = None, timeout: float = 5.0):
+        return self.state.obs_request(request_type, request_data or {}, timeout=timeout)
+
     def set_status(self, plugin_id: str, status) -> None:
         try:
             st = getattr(status, "state", None) or (status.get("state") if isinstance(status, dict) else None) or str(status)
@@ -1350,6 +1365,7 @@ class AppState:
         self._obs_stop = threading.Event()
         self._obs_lock = threading.RLock()
         self._obs_conn_key = None
+        self._obs_pending_requests = {}
         self.data.mkdir(exist_ok=True)
         try:
             removed = prune_ui_browser_profile_data(self.data)
@@ -3735,13 +3751,54 @@ class AppState:
             self._close_obs_connection()
             return False, f"OBS nicht verbunden: {exc}"
 
+    def obs_request(self, request_type: str, request_data: dict | None = None, timeout: float = 5.0) -> tuple[bool, dict | str]:
+        cfg = self.settings().get("platforms", {}).get("obs", {})
+        ok, detail = self.obs_status(cfg)
+        if not ok:
+            return False, detail
+        timeout = max(0.5, float(timeout or 5.0))
+        request_id = f"webbased-{int(time.time() * 1000)}-{secrets.token_hex(4)}"
+        event = threading.Event()
+        pending = {"event": event, "response": None}
+        try:
+            with self._obs_lock:
+                sock = self._obs_sock
+                if sock is None:
+                    return False, "OBS ist nicht verbunden"
+                self._obs_pending_requests[request_id] = pending
+                _ws_send_text(sock, json.dumps({
+                    "op": 6,
+                    "d": {
+                        "requestType": str(request_type or ""),
+                        "requestId": request_id,
+                        "requestData": request_data or {},
+                    },
+                }))
+            if not event.wait(timeout):
+                return False, "OBS Antwort Timeout"
+            data = pending.get("response")
+            if not isinstance(data, dict):
+                return False, "OBS Antwort ungueltig"
+            body = data.get("d") or {}
+            status = body.get("requestStatus") or {}
+            if bool(status.get("result")):
+                return True, dict(body.get("responseData") or {})
+            return False, str(status.get("comment") or status.get("code") or "OBS Anfrage fehlgeschlagen")
+        except Exception as exc:
+            self._close_obs_connection()
+            host, port = _obs_host_port_from_cfg(cfg or {})
+            return False, _obs_connection_error(host, int(port), exc)
+        finally:
+            with self._obs_lock:
+                self._obs_pending_requests.pop(request_id, None)
+
     def _connect_obs_persistent(self, host: str, port: int, password: str = "", timeout: float = 3.0) -> tuple[bool, str]:
         self._close_obs_connection()
         sock = None
         try:
             sock, detail = _open_obs_identified_socket(host, int(port), password, timeout=timeout)
             try:
-                sock.settimeout(0.25)
+                sock.settimeout(None)
             except Exception:
                 pass
             stop = threading.Event()
@@ -3766,7 +3823,21 @@ class AppState:
     def _obs_pump_loop(self, sock: socket.socket, stop: threading.Event) -> None:
         while not stop.is_set():
             try:
-                _ws_recv_text(sock)
+                text = _ws_recv_text(sock)
+                try:
+                    data = json.loads(text)
+                except Exception:
+                    continue
+                if isinstance(data, dict) and data.get("op") == 7:
+                    request_id = str(((data.get("d") or {}).get("requestId") or ""))
+                    with self._obs_lock:
+                        pending = self._obs_pending_requests.get(request_id)
+                    if pending is not None:
+                        pending["response"] = data
+                        try:
+                            pending["event"].set()
+                        except Exception:
+                            pass
             except (socket.timeout, TimeoutError):
                 continue
             except Exception as exc:
@@ -3775,6 +3846,16 @@ class AppState:
                         self._obs_sock = None
                         self._obs_conn_key = None
                         self._obs_status_cache = {"ts": time.time(), "host": "", "port": 0, "ok": False, "detail": f"OBS getrennt: {exc}", "locked": False}
+                        pending_requests = list(self._obs_pending_requests.values())
+                        self._obs_pending_requests.clear()
+                    else:
+                        pending_requests = []
+                for pending in pending_requests:
+                    pending["response"] = {"op": 7, "d": {"requestStatus": {"result": False, "comment": str(exc)}}}
+                    try:
+                        pending["event"].set()
+                    except Exception:
+                        pass
                 try:
                     sock.close()
                 except Exception:
@@ -3795,6 +3876,14 @@ class AppState:
             sock = self._obs_sock
             self._obs_sock = None
             self._obs_conn_key = None
+            pending_requests = list(self._obs_pending_requests.values())
+            self._obs_pending_requests.clear()
+        for pending in pending_requests:
+            pending["response"] = {"op": 7, "d": {"requestStatus": {"result": False, "comment": "OBS Verbindung wurde geschlossen"}}}
+            try:
+                pending["event"].set()
+            except Exception:
+                pass
         if sock is not None:
             try:
                 sock.close()
@@ -4626,29 +4715,54 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/automation/targets":
             cached_targets = getattr(st, "_automation_targets_cache", None)
-            if isinstance(cached_targets, dict) and time.time() - float(cached_targets.get("ts") or 0) < 15.0:
-                self._json({"ok": True, "targets": cached_targets.get("targets") or {}})
-                return
-            result = {"obs": {"connected": False, "scenes": [], "sources": [], "sources_by_scene": {}}, "meld": {"connected": False, "scenes": [], "sources": [], "sources_by_scene": {}}}
+            if isinstance(cached_targets, dict):
+                cached_value = cached_targets.get("targets") or {}
+                all_known_targets_connected = all(bool((cached_value.get(key) or {}).get("connected")) for key in ("obs", "meld"))
+                cache_ttl = 15.0 if all_known_targets_connected else 2.0
+                if time.time() - float(cached_targets.get("ts") or 0) < cache_ttl:
+                    self._json({"ok": True, "targets": cached_value})
+                    return
+            result = {"obs": {"connected": False, "scenes": [], "sources": [], "sources_by_scene": {}, "filters_by_scene": {}}, "meld": {"connected": False, "scenes": [], "sources": [], "sources_by_scene": {}}}
             try:
+                obs_ok, obs_detail = st.obs_status(st.settings().get("platforms", {}).get("obs", {}))
+                result["obs"]["connected"] = bool(obs_ok)
+                if obs_detail:
+                    result["obs"]["detail"] = str(obs_detail)
                 obs = getattr(st, "plugin_instances", {}).get("obs_control")
-                if obs is not None:
-                    ok, scenes_or_error = obs.get_scene_list()
-                    if ok:
-                        scenes = list(scenes_or_error or [])
-                        result["obs"]["connected"] = True
-                        result["obs"]["scenes"] = [str(row.get("sceneName") or "") for row in scenes if str(row.get("sceneName") or "")]
-                        sources = set()
-                        for scene in scenes:
-                            name = str(scene.get("sceneName") or "")
-                            if not name:
-                                continue
-                            ok_items, items_or_error = obs.request("GetSceneItemList", {"sceneName": name}, timeout=2.0)
-                            if ok_items:
-                                scene_sources = sorted({str(row.get("sourceName") or "") for row in list((items_or_error or {}).get("sceneItems", []) or []) if str(row.get("sourceName") or "")}, key=str.casefold)
-                                result["obs"]["sources_by_scene"][name] = scene_sources
-                                sources.update(scene_sources)
-                        result["obs"]["sources"] = sorted(sources, key=str.casefold)
+                host_obs = getattr(st, "host", None)
+                requesters = []
+                if obs is not None and callable(getattr(obs, "request", None)):
+                    requesters.append(getattr(obs, "request"))
+                if host_obs is not None and callable(getattr(host_obs, "obs_request", None)):
+                    requesters.append(getattr(host_obs, "obs_request"))
+                last_error = "" if obs_ok else str(obs_detail or "")
+                for request_obs in requesters:
+                    ok, scenes_data = request_obs("GetSceneList", {}, timeout=3.0)
+                    if not ok:
+                        last_error = str(scenes_data)
+                        continue
+                    scenes = list((scenes_data or {}).get("scenes", []) or [])
+                    result["obs"]["connected"] = True
+                    result["obs"]["scenes"] = [str(row.get("sceneName") or "") for row in scenes if str(row.get("sceneName") or "")]
+                    sources = set()
+                    for scene in scenes:
+                        name = str(scene.get("sceneName") or "")
+                        if not name:
+                            continue
+                        ok_items, items_or_error = request_obs("GetSceneItemList", {"sceneName": name}, timeout=2.0)
+                        if ok_items:
+                            scene_sources = sorted({str(row.get("sourceName") or "") for row in list((items_or_error or {}).get("sceneItems", []) or []) if str(row.get("sourceName") or "")}, key=str.casefold)
+                            result["obs"]["sources_by_scene"][name] = scene_sources
+                            sources.update(scene_sources)
+                        ok_filters, filters_or_error = request_obs("GetSourceFilterList", {"sourceName": name}, timeout=2.0)
+                        if ok_filters:
+                            scene_filters = sorted({str(row.get("filterName") or "") for row in list((filters_or_error or {}).get("filters", []) or []) if str(row.get("filterName") or "")}, key=str.casefold)
+                            result["obs"]["filters_by_scene"][name] = scene_filters
+                    result["obs"]["sources"] = sorted(sources, key=str.casefold)
+                    last_error = ""
+                    break
+                if not result["obs"]["connected"] or last_error:
+                    result["obs"]["detail"] = last_error or "OBS ist nicht verbunden"
             except Exception as exc:
                 result["obs"]["detail"] = str(exc)
             try:
@@ -4942,6 +5056,7 @@ class Handler(BaseHTTPRequestHandler):
             host, port = _obs_host_port_from_cfg(cfg)
             ok, detail = st._connect_obs_persistent(host, port, str(cfg.get("password") or ""), timeout=3.0)
             st._obs_status_cache = {"ts": time.time(), "host": host, "port": port, "ok": ok, "detail": detail, "locked": bool(ok), "key": (host, int(port), str(cfg.get("password") or ""))}
+            st._automation_targets_cache = None
             self._json({"ok": ok, "status": "verbunden" if ok else "nicht verbunden", "detail": detail})
             return
         if path == "/api/test-platform/youtube":
@@ -5091,6 +5206,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/automation/reload-targets":
             try:
                 st._automation_targets_cache = None
+                obs_cfg = st.settings().get("platforms", {}).get("obs", {})
+                obs_ok, obs_detail = st.obs_status(obs_cfg)
+                st.log("automation", "targets reload", f"OBS status: connected={bool(obs_ok)} detail={obs_detail}")
                 meld = st.plugin_instances.get("meld_control")
                 if meld is not None:
                     ensure = getattr(meld, "ensure_connected", None)
@@ -5112,9 +5230,13 @@ class Handler(BaseHTTPRequestHandler):
                 action = str(data.get("action") or "text").lower()
                 source_name = str(data.get("source") or "").strip()
                 scene_name = str(data.get("scene") or "").strip()
+                filter_name = str(data.get("filter") or data.get("filterName") or data.get("filter_name") or "").strip()
                 preview_text = str(data.get("preview") or "Testwert aus godisalotachat")
                 try:
-                    hide_seconds = max(0.0, min(3600.0, float(str(data.get("hideSeconds") or data.get("hide_seconds") or 4).replace(",", "."))))
+                    seconds_raw = data.get("hideSeconds") if data.get("hideSeconds") is not None else data.get("hide_seconds")
+                    if seconds_raw is None:
+                        seconds_raw = 4
+                    hide_seconds = max(0.0, min(3600.0, float(str(seconds_raw).replace(",", "."))))
                 except Exception:
                     hide_seconds = 4.0
                 if target == "meld":
@@ -5139,7 +5261,27 @@ class Handler(BaseHTTPRequestHandler):
                     except Exception:
                         scene_ref = scene_name
                     if action == "scene":
+                        previous_scene_ref = ""
+                        if hide_seconds > 0:
+                            for method_name in ("getCurrentScene", "currentScene", "getActiveScene"):
+                                try:
+                                    prev_ok, prev_detail = meld.invoke_meld_method(method_name, [], timeout=1.0)
+                                except Exception:
+                                    prev_ok, prev_detail = False, ""
+                                if not prev_ok:
+                                    continue
+                                if isinstance(prev_detail, dict):
+                                    previous_scene_ref = str(prev_detail.get("id") or prev_detail.get("name") or prev_detail.get("scene") or "")
+                                else:
+                                    previous_scene_ref = str(prev_detail or "")
+                                if previous_scene_ref:
+                                    break
                         ok, detail = meld.invoke_meld_method("showScene", [scene_ref], timeout=3.0)
+                        if ok and hide_seconds > 0 and previous_scene_ref and previous_scene_ref != scene_ref:
+                            timer = threading.Timer(hide_seconds, lambda: meld.invoke_meld_method("showScene", [previous_scene_ref], timeout=3.0))
+                            timer.daemon = True
+                            timer.start()
+                            detail = f"{detail or 'Szene aktiviert'} | Rueckschaltung nach {hide_seconds:g}s"
                     else:
                         finder = getattr(meld, "_find_target_layer", None)
                         match = finder(scene_name, source_name) if callable(finder) else None
@@ -5219,10 +5361,21 @@ class Handler(BaseHTTPRequestHandler):
                     if obs is None or not obs.is_connected():
                         st.log("automation", "test", "OBS-Control ist nicht verbunden")
                         return self._json({"ok": False, "error": "OBS-Control ist nicht verbunden."}, 400)
+                    def set_obs_text() -> tuple[bool, str]:
+                        write_ok, write_detail = obs.request("SetInputSettings", {"inputName": source_name, "inputSettings": {"text": preview_text}, "overlay": True}, timeout=3.0)
+                        if not write_ok:
+                            return False, str(write_detail or "OBS Text konnte nicht geschrieben werden")
+                        verify_ok, verify_detail = obs.request("GetInputSettings", {"inputName": source_name}, timeout=2.0)
+                        if verify_ok:
+                            current = str((((verify_detail or {}).get("inputSettings") or {}).get("text")) or "")
+                            if current != preview_text:
+                                return False, f"OBS hat den Text nicht uebernommen: gelesen={current!r}"
+                            return True, f"Text geschrieben: {source_name} = {current[:120]}"
+                        return True, f"Text geschrieben: {source_name}; Rueckpruefung fehlgeschlagen: {verify_detail}"
                     if action == "text":
-                        ok, detail = obs.request("SetInputSettings", {"inputName": source_name, "inputSettings": {"text": preview_text}, "overlay": True}, timeout=3.0)
+                        ok, detail = set_obs_text()
                     elif action == "text_show":
-                        text_ok, text_detail = obs.request("SetInputSettings", {"inputName": source_name, "inputSettings": {"text": preview_text}, "overlay": True}, timeout=3.0)
+                        text_ok, text_detail = set_obs_text()
                         try:
                             obs.set_source_visible(source_name, False)
                             time.sleep(0.05)
@@ -5238,7 +5391,31 @@ class Handler(BaseHTTPRequestHandler):
                     elif action in {"show", "hide"}:
                         ok, detail = obs.set_source_visible(source_name, action == "show")
                     elif action == "scene":
+                        previous_scene = ""
+                        if hide_seconds > 0:
+                            prev_ok, prev_detail = obs.request("GetCurrentProgramScene", {}, timeout=2.0)
+                            if prev_ok:
+                                previous_scene = str((prev_detail or {}).get("currentProgramSceneName") or "")
                         ok, detail = obs.request("SetCurrentProgramScene", {"sceneName": scene_name}, timeout=3.0)
+                        if ok and hide_seconds > 0 and previous_scene and previous_scene != scene_name:
+                            timer = threading.Timer(hide_seconds, lambda: obs.request("SetCurrentProgramScene", {"sceneName": previous_scene}, timeout=3.0))
+                            timer.daemon = True
+                            timer.start()
+                            detail = f"{detail or 'Szene aktiviert'} | Rueckschaltung nach {hide_seconds:g}s"
+                    elif action in {"filter_on", "filter_off"}:
+                        if not scene_name or not filter_name:
+                            return self._json({"ok": False, "error": "OBS-Szene und Filter muessen ausgewaehlt sein."}, 400)
+                        enabled = action == "filter_on"
+                        ok, detail = obs.request("SetSourceFilterEnabled", {"sourceName": scene_name, "filterName": filter_name, "filterEnabled": enabled}, timeout=3.0)
+                        if ok:
+                            verify_ok, verify_detail = obs.request("GetSourceFilter", {"sourceName": scene_name, "filterName": filter_name}, timeout=2.0)
+                            if verify_ok:
+                                current = bool((verify_detail or {}).get("filterEnabled"))
+                                if current != enabled:
+                                    ok = False
+                                    detail = f"OBS Filterstatus stimmt nicht: gelesen={current}"
+                                else:
+                                    detail = f"Filter {'aktiviert' if enabled else 'deaktiviert'}: {scene_name} / {filter_name}"
                     elif action == "play":
                         details = []
                         try:
