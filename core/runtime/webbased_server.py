@@ -4399,6 +4399,7 @@ CHAT_PLATFORM_ICON_PATHS = {
     "meld": "meld.png",
     "openai": "gpt.png",
     "gpt": "gpt.png",
+    "godisalotachat": "godisalotachat.png",
     "no_entry": "no_entry.png",
     "banhammer": "banhammer.png",
     "unban": "unban.png",

@@ -98,12 +98,6 @@ if exist "dist\webbased\modules" rmdir /s /q "dist\webbased\modules"
 robocopy "modules" "dist\webbased\modules" /E /XD __pycache__ /NFL /NDL /NJH /NJS /NP >nul
 if errorlevel 8 goto :fail
 
-rem Diagnosehilfe fuer Rechner, auf denen der PyInstaller-Bootloader Python nicht laden kann.
-copy /Y "build\diagnose_embedded_python.ps1" "dist\webbased\diagnose_embedded_python.ps1" >nul
-if errorlevel 1 goto :fail
-copy /Y "build\diagnose_embedded_python.bat" "dist\webbased\diagnose_embedded_python.bat" >nul
-if errorlevel 1 goto :fail
-
 rem Gemeinsame UI-Bilder neben die EXE legen, damit Desktopfenster und WebUI dieselben Symbole nutzen.
 robocopy "assets" "dist\webbased\assets" /E /R:2 /W:1 /NFL /NDL /NJH /NJS /NP >nul
 if errorlevel 8 goto :fail
@@ -116,6 +110,10 @@ if not exist "dist\webbased\data\plugins" mkdir "dist\webbased\data\plugins"
 
 rem Nur auf dem Main-Rechner vorhanden: privaten Drive-Uploader nach dist legen.
 if exist "build\private\upload_to_google_drive.bat" copy /Y "build\private\upload_to_google_drive.bat" "dist\upload_to_google_drive.bat" >nul
+
+rem Ko-fi Release-ZIP direkt aus dem dist-Ordner erstellen koennen.
+copy /Y "zip.bat" "dist\zip.bat" >nul
+if errorlevel 1 goto :fail
 
 rem Das isolierte Chrome/Edge-Profil fuer die Haupt-UI wird sehr schnell gross.
 rem Fuer die WebUI reichen Local State und die Default-Preferences; alles andere

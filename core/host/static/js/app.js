@@ -1589,10 +1589,71 @@ async function renderEasyslider(){
 }
 async function renderPlugins(){
   const s=await api("/api/plugins");
-  const cards=(s.plugins||[]).map(p=>`<section class="card pluginCard"><div class="pluginHead"><h3>${esc(p.name)}</h3><span class="pluginState ${pluginStateClass(p.state)}">${esc(p.state||"ready")}</span></div><div class="small pluginVersion">Version ${esc(p.version||"-")}</div><div class="small">${esc(p.description||"")}</div><div class="small pluginStatusText">${esc(p.status||p.message||"Bereit")}</div><div class="btnLine"><button type="button" class="pluginSettingsBtn" data-plugin="${esc(p.id)}">Einstellungen</button><a class="btn secondary" href="/dev" title="Protokolle im DEV-Bereich prüfen">Protokolle</a></div></section>`).join("");
-  shell("plugins","Plugins","Hier stellst du jedes gefundene Plugin direkt ein. Der alte nutzlose Bereit-Button ist weg.",`<div id="pluginSettingsMount"></div><div class="pluginGrid">${cards}</div>`);
+  const plugins=s.plugins||[];
+  const activeCount=plugins.filter(p=>p.enabled).length;
+  const errorCount=plugins.filter(p=>["error","failed"].includes(String(p.state||"").toLowerCase())).length;
+  const cards=plugins.map(p=>{
+    const state=String(p.state||"ready");
+    const status=String(p.status||p.message||L("Bereit","Ready"));
+    const icon=pluginIconId(p);
+    const searchable=[p.name,p.id].join(" ").toLowerCase();
+    return `<section class="card pluginCard" data-plugin-card data-enabled="${p.enabled?"1":"0"}" data-state="${esc(state.toLowerCase())}" data-search="${esc(searchable)}"><div class="pluginHead"><div class="pluginIdentity"><span class="pluginGlyph icon-${esc(icon)}" aria-hidden="true"><img src="/platform-icon/${encodeURIComponent(icon)}" alt="" onerror="this.parentElement.classList.add('missingIcon');this.remove()"><b>${esc(String(p.name||p.id||"?").trim().slice(0,1).toUpperCase()||"?")}</b></span><div><h3>${esc(p.name)}</h3><div class="pluginMeta"><span>${L("Version","Version")} ${esc(p.version||"-")}</span><span>${esc(p.id||"")}</span></div></div></div><span class="pluginState ${pluginStateClass(p.state)}">${esc(state)}</span></div><div class="small pluginDescription">${esc(p.description||"")}</div><div class="pluginStatusLine"><span class="pluginEnabled ${p.enabled?"ok":"off"}">${p.enabled?L("Aktiv","Active"):L("Inaktiv","Inactive")}</span><span class="small pluginStatusText">${esc(status)}</span></div><div class="btnLine pluginActions"><button type="button" class="pluginSettingsBtn" data-plugin="${esc(p.id)}">${L("Einstellungen","Settings")}</button><a class="btn secondary" href="/dev" title="${L("Protokolle im DEV-Bereich prüfen","Check logs in DEV area")}">${L("Protokolle","Logs")}</a></div></section>`;
+  }).join("");
+  shell("plugins",L("Plugins","Plugins"),L("Gefundene Plugins durchsuchen, prüfen und direkt konfigurieren.","Search, inspect and configure detected plugins."),`
+    <div id="pluginSettingsMount"></div>
+    <div class="pluginOverview">
+      <div class="pluginStats" aria-label="${L("Plugin Übersicht","Plugin overview")}">
+        <div><b>${plugins.length}</b><span>${L("Gefunden","Found")}</span></div>
+        <div><b>${activeCount}</b><span>${L("Aktiv","Active")}</span></div>
+        <div><b>${errorCount}</b><span>${L("Fehler","Errors")}</span></div>
+      </div>
+      <div class="pluginTools">
+        <label class="pluginSearch"><span>${L("Suchen","Search")}</span><input id="pluginSearch" type="search" placeholder="${L("Plugin suchen...","Search plugins...")}"></label>
+        <div class="pluginFilters" role="group" aria-label="${L("Plugin Filter","Plugin filters")}">
+          <button type="button" class="secondary active" data-plugin-filter="all">${L("Alle","All")}</button>
+          <button type="button" class="secondary" data-plugin-filter="active">${L("Aktiv","Active")}</button>
+          <button type="button" class="secondary" data-plugin-filter="inactive">${L("Inaktiv","Inactive")}</button>
+          <button type="button" class="secondary" data-plugin-filter="issues">${L("Fehler","Issues")}</button>
+        </div>
+      </div>
+    </div>
+    <div class="pluginGrid">${cards||`<section class="card pluginEmpty">${L("Keine Plugins gefunden.","No plugins found.")}</section>`}</div>`);
   $$(".pluginSettingsBtn").forEach(b=>b.onclick=()=>openPluginSettings(b.dataset.plugin));
   addPluginToggleButtons(s.plugins||[]);
+  wirePluginListFilters();
+}
+function pluginIconId(plugin){
+  const id=String(plugin?.id||"").toLowerCase();
+  const name=String(plugin?.name||"").toLowerCase();
+  if(["al3rtalot","botalot","bridg3alot","commands","gam3pick3r","info3ditor","modalot","tutorials"].includes(id))return "godisalotachat";
+  if(["alertalot","bridgalot","gamepicker","infoeditor"].some(alias=>id.includes(alias)||name.includes(alias)))return "godisalotachat";
+  if(id.includes("twitch")||name.includes("twitch"))return "twitch";
+  if(id.includes("tiktok")||name.includes("tiktok"))return "tiktok";
+  if(id.includes("youtube")||name.includes("youtube"))return "youtube";
+  if(id.includes("kick")||name.includes("kick"))return "kick";
+  if(id.includes("spotify")||id.includes("spoti")||name.includes("spotify")||name.includes("spoti"))return "spotify";
+  if(id.includes("obs")||name.includes("obs"))return "obs";
+  if(id.includes("meld")||name.includes("meld"))return "meld";
+  if(id.includes("gpt")||name.includes("openai"))return "gpt";
+  return "gpt";
+}
+function wirePluginListFilters(){
+  const search=$("#pluginSearch");
+  const filters=$$("[data-plugin-filter]");
+  const cards=$$("[data-plugin-card]");
+  const apply=()=>{
+    const query=String(search?.value||"").trim().toLowerCase();
+    const mode=filters.find(b=>b.classList.contains("active"))?.dataset.pluginFilter||"all";
+    cards.forEach(card=>{
+      const state=String(card.dataset.state||"");
+      const enabled=card.dataset.enabled==="1";
+      const matchesText=!query || String(card.dataset.search||"").includes(query);
+      const matchesMode=mode==="all" || (mode==="active"&&enabled) || (mode==="inactive"&&!enabled) || (mode==="issues"&&["error","failed"].includes(state));
+      card.hidden=!(matchesText&&matchesMode);
+    });
+  };
+  if(search)search.oninput=apply;
+  filters.forEach(btn=>btn.onclick=()=>{filters.forEach(b=>b.classList.toggle("active",b===btn));apply();});
 }
 function addPluginToggleButtons(plugins){
   $$(".pluginSettingsBtn").forEach(btn=>{

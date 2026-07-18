@@ -3,4 +3,4 @@
 except ImportError:
     BUILD_SUFFIX = ""
 
-APP_VERSION = "1.42" + BUILD_SUFFIX
+APP_VERSION = "1.48" + BUILD_SUFFIX
