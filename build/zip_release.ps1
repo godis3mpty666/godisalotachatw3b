@@ -121,19 +121,55 @@ function Get-ReleaseRelativePath {
     return $FullName.Substring($sourceDir.Length).TrimStart("\", "/")
 }
 
+function Write-ZipProgress {
+    param(
+        [Parameter(Mandatory = $true)][int]$Current,
+        [Parameter(Mandatory = $true)][int]$Total,
+        [Parameter(Mandatory = $true)][string]$Activity,
+        [string]$CurrentFile = ""
+    )
+
+    if ($Total -le 0) {
+        return
+    }
+
+    $percent = [math]::Min(100, [math]::Floor(($Current / $Total) * 100))
+    $barWidth = 32
+    $filled = [math]::Floor(($percent / 100) * $barWidth)
+    $bar = ("#" * $filled).PadRight($barWidth, "-")
+    $status = ("[{0}] {1,3}% ({2}/{3})" -f $bar, $percent, $Current, $Total)
+
+    Write-Progress -Activity $Activity -Status $status -PercentComplete $percent -CurrentOperation $CurrentFile
+    Write-Host -NoNewline ("`r{0} {1}" -f $Activity, $status)
+}
+
 Add-Type -AssemblyName System.IO.Compression
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $zip = [System.IO.Compression.ZipFile]::Open($zipPath, [System.IO.Compression.ZipArchiveMode]::Create)
 try {
+    Write-Host "Dateien werden vorbereitet..."
     $files = Get-ChildItem -LiteralPath $sourceDir -Recurse -File -Force | Where-Object {
         $relative = Get-ReleaseRelativePath -FullName $_.FullName
         -not (Test-ExcludedPath -RelativePath $relative -IsDirectory:$false)
+    } | Sort-Object FullName
+
+    $total = @($files).Count
+    if ($total -eq 0) {
+        throw "Keine Dateien zum Zippen gefunden."
     }
 
+    Write-Host ("Starte ZIP mit {0} Dateien..." -f $total)
+
+    $index = 0
     foreach ($file in $files) {
+        $index++
         $relative = (Get-ReleaseRelativePath -FullName $file.FullName).Replace("\", "/")
+        Write-ZipProgress -Current $index -Total $total -Activity "ZIP wird erstellt" -CurrentFile $relative
         [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $file.FullName, $relative, [System.IO.Compression.CompressionLevel]::Optimal) | Out-Null
     }
+
+    Write-Progress -Activity "ZIP wird erstellt" -Completed
+    Write-Host ""
 }
 finally {
     $zip.Dispose()
