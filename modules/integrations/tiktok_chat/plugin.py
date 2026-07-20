@@ -3801,7 +3801,10 @@ class TikTokChatPlugin(ThreadedPlugin):
                         continue
 
                     try:
-                        is_live = await client.is_live()
+                        # TikTok's room lookup occasionally never returns while
+                        # the creator is offline. Without a timeout the watcher
+                        # would miss a later live start forever.
+                        is_live = await asyncio.wait_for(client.is_live(), timeout=8.0)
                     except Exception:
                         is_live = None
 
@@ -3881,7 +3884,13 @@ class TikTokChatPlugin(ThreadedPlugin):
                 if not comments_visible_anywhere:
                     return
                 has_chat_emotes = bool(self._comment_emote_rows(event))
-                comment_html = await self._comment_overlay_html(event, text)
+                # Chat delivery must never wait behind a slow/expired TikTok CDN
+                # emote URL. Cache work may continue in its worker thread, while
+                # the readable text reaches the desktop immediately.
+                try:
+                    comment_html = await asyncio.wait_for(self._comment_overlay_html(event, text), timeout=0.15)
+                except (asyncio.TimeoutError, TimeoutError):
+                    comment_html = ''
                 if not text and not comment_html:
                     if not has_chat_emotes:
                         return
@@ -4060,7 +4069,7 @@ class TikTokChatPlugin(ThreadedPlugin):
                 # during the websocket connection itself. Viewer counts are fetched
                 # separately after ConnectEvent via _fetch_fresh_viewer_count().
                 try:
-                    is_live = await client.is_live()
+                    is_live = await asyncio.wait_for(client.is_live(), timeout=8.0)
                 except Exception as exc:
                     if autoconnect and not self._stop.is_set():
                         self._emit_is_live(host, resolved_unique_id, False, force=True)
@@ -4076,6 +4085,7 @@ class TikTokChatPlugin(ThreadedPlugin):
                 task = asyncio.create_task(client.connect(fetch_gift_info=True))
 
                 connected_announced = False
+                connect_started_at = time.monotonic()
                 while not self._stop.is_set():
                     await asyncio.sleep(0.25)
 
@@ -4096,6 +4106,14 @@ class TikTokChatPlugin(ThreadedPlugin):
                                 viewer_check_interval,
                             )
                         )
+
+                    if not connected_signal.is_set() and (time.monotonic() - connect_started_at) >= 30.0:
+                        final_status_text = f'@{resolved_unique_id} connection timed out; retrying.'
+                        if hasattr(host, 'log'):
+                            with contextlib.suppress(Exception):
+                                host.log(self.plugin_id, final_status_text)
+                        should_watch_again = True
+                        break
 
                     if task.done():
                         exc = task.exception()

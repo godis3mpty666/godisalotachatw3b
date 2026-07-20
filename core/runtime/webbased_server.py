@@ -1352,6 +1352,10 @@ class AppState:
         self.desktop_chat_pids = set()
         self.desktop_chat_process = None
         self._desktop_chat_lock = threading.RLock()
+        # Chat sounds are acknowledged by the native desktop window only after
+        # the corresponding row has actually been rendered.  Keeping this
+        # queue separate from the message bus prevents early/late poller sounds.
+        self._desktop_chat_sound_events: list[dict] = []
         self.easyslider_pids = set()
         self.easyslider_process = None
         self._easyslider_lock = threading.RLock()
@@ -1418,6 +1422,44 @@ class AppState:
         with self._chattim3r_lock:
             _json_save(self.chattim3r_path, entries)
 
+    def append_chattim3r_desktop_message(self, text: str, results: dict[str, bool]) -> str:
+        """Show one local copy after a timer was sent to one or more platforms.
+
+        Real bot echoes are deliberately suppressed to prevent bridge/command
+        loops.  This row is display-only and uses the first successful platform
+        in the timer's configured order, so a multi-platform timer appears once.
+        """
+        platform = next((str(name).strip().lower() for name, ok in results.items() if ok), "")
+        clean_text = str(text or "").strip()
+        if not platform or not clean_text:
+            return ""
+        cfg = self.settings().get("platforms", {}).get(platform, {}) or {}
+        user = next((
+            str(cfg.get(key) or "").strip()
+            for key in ("bot_account", "bot_username", "bot", "main_account", "main", "username")
+            if str(cfg.get(key) or "").strip()
+        ), "Chattim3r")
+        now = time.time()
+        self.messages.append({
+            "id": _now_ms(),
+            "created_at": now,
+            "platform": platform,
+            "user": user,
+            "text": clean_text,
+            "content": clean_text,
+            "message_type": "chat",
+            "type": "chat",
+            "event_type": "chat_no_alert",
+            "source_plugin_id": "chattim3r",
+            "source": "chattim3r",
+            "local_outbound": True,
+            "silent": True,
+            "time": time.strftime("%H:%M:%S"),
+        })
+        if len(self.messages) > 300:
+            self.messages = self.messages[-300:]
+        return platform
+
     def chattim3r_loop(self) -> None:
         while not self.shutting_down:
             now = time.time()
@@ -1446,9 +1488,10 @@ class AppState:
                 entry["last_run"] = int(finished)
                 entry["last_results"] = results
                 if sent:
+                    shown_platform = self.append_chattim3r_desktop_message(text, results)
                     entry.pop("last_error", None)
                     entry["next_run"] = int(finished + minutes * 60)
-                    self.log("chattim3r", f"Intervall gesendet: {', '.join(p for p, ok in results.items() if ok)}")
+                    self.log("chattim3r", f"Intervall gesendet: {', '.join(p for p, ok in results.items() if ok)}; Desktop: {shown_platform or '-'}")
                 else:
                     entry["last_error"] = "Keine ausgewaehlte Plattform konnte die Nachricht senden. Neuer Versuch in 30 Sekunden."
                     entry["next_run"] = int(finished + 30)
@@ -5008,6 +5051,12 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/desktop-chat/state":
             self._json({"editing": bool(st.desktop_chat_editing), "open": _desktop_chat_is_open(st)})
             return
+        if path == "/api/desktop-chat/sound-events":
+            with st._desktop_chat_lock:
+                events = list(st._desktop_chat_sound_events)
+                st._desktop_chat_sound_events.clear()
+            self._json({"events": events})
+            return
         if path == "/api/nowplaying":
             self._json(self._nowplaying())
             return
@@ -5186,6 +5235,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"ok": False, "error": "Entry not found."}, 404)
             text = str(entry.get("text") or "").strip()
             results = {str(platform): st.plugin_manager.host.send_platform_message(str(platform), text, sender="chattim3r") for platform in entry.get("platforms") or []}
+            if any(results.values()):
+                st.append_chattim3r_desktop_message(text, results)
             if not any(results.values()):
                 return self._json({"ok": False, "error": "The message could not be sent to any selected platform.", "results": results}, 502)
             return self._json({"ok": True, "results": results})
@@ -5899,6 +5950,20 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/desktop-chat/edit":
             st.desktop_chat_editing = bool(data.get("editing", False)) if isinstance(data, dict) else False
             return self._json({"ok": True, "editing": st.desktop_chat_editing})
+        if path == "/api/desktop-chat/message-visible":
+            raw_ids = data.get("ids") if isinstance(data, dict) else []
+            ids = {str(value) for value in raw_ids[:100]} if isinstance(raw_ids, list) else set()
+            visible = []
+            if ids:
+                for item in st.messages[-100:]:
+                    msg_type = str(item.get("message_type") or item.get("type") or "chat").lower()
+                    if str(item.get("id")) in ids and msg_type in {"chat", "message", "comment"} and not bool(item.get("silent")):
+                        visible.append(dict(item))
+            if visible:
+                with st._desktop_chat_lock:
+                    st._desktop_chat_sound_events.extend(visible)
+                    st._desktop_chat_sound_events = st._desktop_chat_sound_events[-100:]
+            return self._json({"ok": True, "queued": len(visible)})
         if path == "/api/desktop-chat/open":
             try:
                 proc, opened = _open_desktop_chat(st)

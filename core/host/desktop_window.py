@@ -253,6 +253,7 @@ class DesktopTkOverlay:
         self.layout_url = f"{base}/api/desktop-chat/layout"
         self.state_url = f"{base}/api/desktop-chat/state"
         self.chat_url = f"{base}/api/chat-state"
+        self.message_visible_url = f"{base}/api/desktop-chat/message-visible"
         self.nowplaying_url = f"{base}/api/nowplaying"
         self.language = "de"
 
@@ -309,6 +310,8 @@ class DesktopTkOverlay:
         self._chat_media_failures: dict[str, float] = {}
         self._chat_media_retry_scheduled = False
         self._chat_media_animation_scheduled = False
+        self._visible_chat_baseline_ready = False
+        self._visible_chat_ids: set[str] = set()
 
         self.canvas.bind("<ButtonPress-1>", self._pointer_down)
         self.canvas.bind("<B1-Motion>", self._pointer_move)
@@ -533,14 +536,24 @@ class DesktopTkOverlay:
         except Exception as exc:
             _log(f"edit-state konnte nicht gelesen werden: {exc}")
 
+        newly_visible_ids: list[str] = []
         try:
             chat = _fetch_json(self.chat_url, timeout=0.65)
             if isinstance(chat, dict):
+                chat_items = [
+                    item for item in (chat.get("messages") or [])
+                    if str(item.get("message_type") or item.get("type") or "chat").lower() in {"chat", "message", "comment"}
+                ]
+                current_chat_ids = {str(item.get("id")) for item in chat_items if item.get("id") is not None}
+                if self._visible_chat_baseline_ready:
+                    newly_visible_ids = [msg_id for msg_id in current_chat_ids if msg_id not in self._visible_chat_ids]
                 new_key = self._stable_json_key(chat)
                 old_key = self._stable_json_key(self.last_chat_state)
                 if new_key != old_key:
                     self.last_chat_state = chat
                     needs_render = True
+                self._visible_chat_ids = current_chat_ids
+                self._visible_chat_baseline_ready = True
         except Exception as exc:
             _log(f"chat-state konnte nicht gelesen werden: {exc}")
 
@@ -570,6 +583,13 @@ class DesktopTkOverlay:
 
         if needs_render:
             self.render()
+            # Tk has now received the drawing commands for the new chat row.
+            # Only at this point may the browser audio output play its sound.
+            if newly_visible_ids:
+                try:
+                    _post_json(self.message_visible_url, {"ids": newly_visible_ids}, timeout=0.45)
+                except Exception as exc:
+                    _log(f"sichtbare Chatnachricht konnte nicht bestaetigt werden: {exc}")
 
         self.root.after(900, self._poll)
 

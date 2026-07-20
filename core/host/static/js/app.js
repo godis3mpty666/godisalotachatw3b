@@ -2027,10 +2027,14 @@ let soundRuntimeConfig=null;
 let soundSeen=new Set();
 let soundBaselineReady=false;
 let soundPollBusy=false;
+let visibleChatSoundPollBusy=false;
 let incomingSoundQueue=Promise.resolve();
 function soundMessageKey(item){return [item.id||"",item.message_id||"",item.platform||"",item.time||"",item.user||"",item.text||"",item.event_type||item.alert_type||item.message_type||""].join("|");}
 function enqueueIncomingSound(name,isAlert,cfg){
   const snapshot={...cfg,alerts:{...(cfg.alerts||{})}};
+  // A chat notification belongs to the instant its row appears; it must not
+  // wait behind an older sound in the alert queue.
+  if(!isAlert){playSoundForAudience(name,false,snapshot,false,false);return;}
   incomingSoundQueue=incomingSoundQueue.catch(()=>false).then(()=>playSoundForAudience(name,isAlert,snapshot,false,true));
 }
 async function playConfiguredSound(name,deviceId="",fallbackToDefault=false,requestPermission=false,waitUntilEnded=false,volume=100){
@@ -2092,13 +2096,34 @@ async function pollIncomingSounds(){
     if(!soundBaselineReady){messages.forEach(item=>soundSeen.add(soundMessageKey(item)));soundBaselineReady=true;return;}
     for(const item of messages){
       const key=soundMessageKey(item);if(soundSeen.has(key))continue;soundSeen.add(key);
-      const name=configuredSoundForMessage(item,soundRuntimeConfig);
       const type=String(item.message_type||item.type||"chat").toLowerCase();
+      // Chat audio is triggered exclusively by the native desktop window once
+      // the new row is rendered. This poller remains responsible for alerts.
+      if(["chat","message","comment"].includes(type))continue;
+      const name=configuredSoundForMessage(item,soundRuntimeConfig);
       const isAlert=!["chat","message","comment"].includes(type);
       if(name)enqueueIncomingSound(name,isAlert,soundRuntimeConfig);
     }
     if(soundSeen.size>600)soundSeen=new Set(messages.map(soundMessageKey));
   }catch(_){}finally{soundPollBusy=false;}
+}
+async function pollVisibleChatSounds(){
+  if(visibleChatSoundPollBusy)return;
+  visibleChatSoundPollBusy=true;
+  try{
+    const out=await api("/api/desktop-chat/sound-events");
+    const events=Array.isArray(out.events)?out.events:[];
+    if(!events.length)return;
+    if(!soundRuntimeConfig){
+      const all=await api("/api/settings");soundRuntimeConfig=all.general?.sound||{};
+      const devices=await audioOutputDevices();
+      soundRuntimeConfig.output_device=resolveSavedDeviceId(devices,soundRuntimeConfig.output_device,soundRuntimeConfig.output_device_label);
+    }
+    for(const item of events){
+      const name=configuredSoundForMessage(item,soundRuntimeConfig);
+      if(name)enqueueIncomingSound(name,false,soundRuntimeConfig);
+    }
+  }catch(_){}finally{visibleChatSoundPollBusy=false;}
 }
 async function bootPage(){
   try{
@@ -2117,7 +2142,9 @@ async function bootPage(){
 }
 bootPage();
 pollIncomingSounds();
+pollVisibleChatSounds();
 setInterval(pollIncomingSounds,1000);
+setInterval(pollVisibleChatSounds,100);
 setInterval(()=>{
   if(page==="dashboard"||page==="chat") refreshMessages().catch(()=>{});
   if(page==="dashboard"||page==="spotify") refreshNowPlaying().catch(()=>{});
