@@ -8,6 +8,32 @@ let internalNavigation = false;
 let shutdownInProgress = false;
 // Startup timing can be tuned here without editing the splash markup or CSS.
 const STARTUP_SPLASH={minVisibleMs:3900,fadeInMs:1350,fadeOutMs:1200,videoPlaybackRate:.78};
+const windowsColorScheme=window.matchMedia?.("(prefers-color-scheme: light)");
+let selectedColorScheme="system";
+const COLOR_SCHEMES=["system","dark","light","neon","purple","ocean","forest","custom"];
+const DEFAULT_CUSTOM_COLORS={background:"#070914",panel:"#111421",text:"#f7f8ff",accent:"#865cff",secondary:"#5fd7ff"};
+function applyColorScheme(value,customColors=null){
+  selectedColorScheme=COLOR_SCHEMES.includes(String(value))?String(value):"system";
+  const effective=selectedColorScheme==="system"?(windowsColorScheme?.matches?"light":"dark"):selectedColorScheme;
+  document.documentElement.dataset.colorScheme=effective;
+  for(const name of ["--bg","--panel","--panel2","--soft","--line","--text","--muted","--purple","--cyan"])document.documentElement.style.removeProperty(name);
+  if(effective==="custom"){
+    const colors={...DEFAULT_CUSTOM_COLORS,...(customColors||{})};
+    document.documentElement.style.setProperty("--bg",colors.background);
+    document.documentElement.style.setProperty("--panel",colors.panel);
+    document.documentElement.style.setProperty("--panel2",colors.panel);
+    document.documentElement.style.setProperty("--soft",colors.panel);
+    document.documentElement.style.setProperty("--line",colors.secondary);
+    document.documentElement.style.setProperty("--text",colors.text);
+    document.documentElement.style.setProperty("--muted",colors.text);
+    document.documentElement.style.setProperty("--purple",colors.accent);
+    document.documentElement.style.setProperty("--cyan",colors.secondary);
+  }
+  try{localStorage.setItem("godisalotachat.colorScheme",JSON.stringify({scheme:selectedColorScheme,custom_colors:customColors||{}}));}catch(_){}
+}
+function normalizedVolume(value){const number=Number(value);return Number.isFinite(number)?Math.max(0,Math.min(100,number)):100;}
+try{const stored=JSON.parse(localStorage.getItem("godisalotachat.colorScheme")||"{}");applyColorScheme(stored.scheme||"system",stored.custom_colors);}catch(_){applyColorScheme("system");}
+windowsColorScheme?.addEventListener?.("change",()=>{if(selectedColorScheme==="system")applyColorScheme("system");});
 
 function prepareStartupSplash(){
   const splash=$("#startupSplash");
@@ -979,13 +1005,23 @@ async function renderChat(){
 async function renderObsMeld(){
   const settings=await api("/api/settings");
   const rules=Array.isArray(settings.automation_rules)?settings.automation_rules:[];
+  rules.forEach((rule,index)=>{if(!rule.id)rule.id=`rule-${Date.now()}-${index}-${Math.random().toString(16).slice(2)}`;});
   const targets={obs:{connected:false,loading:true,scenes:[],sources:[],sources_by_scene:{},filters_by_scene:{}},meld:{connected:false,loading:true,scenes:[],sources:[],sources_by_scene:{}}};
-  const targetLoad=api("/api/automation/targets",{timeoutMs:15000}).catch(()=>({targets:{}}));
+  const targetLoad=(async()=>{
+    let data={targets:{}};
+    for(let attempt=0;attempt<4;attempt++){
+      data=await api("/api/automation/targets",{timeoutMs:5000});
+      const meld=data?.targets?.meld||{};
+      if(meld.connected||(meld.scenes||[]).length||attempt===3)break;
+      await new Promise(resolve=>setTimeout(resolve,500));
+    }
+    return data;
+  })();
   const values={tiktok:[["latest_follow",L("Neuester Follow","Latest follow")],["top_liker",L("Top-Liker","Top liker")],["top_gifter",L("Top-Gifter","Top gifter")],["latest_gift",L("Neuestes Geschenk","Latest gift")],["like_total",L("Like-Zähler","Like counter")]],twitch:[["latest_follow",L("Neuester Follow","Latest follow")],["latest_subscribe",L("Neuestes Abo","Latest subscription")],["latest_raid",L("Letzter Raid","Latest raid")],["latest_donation",L("Letzte Spende","Latest donation")],["latest_bits",L("Letzte Bits","Latest bits")],["latest_viewer_streak",L("Viewer-Streak","Viewer streak")]],youtube:[["latest_member",L("Neuestes Mitglied","Latest member")],["latest_superchat",L("Letzter Superchat","Latest Super Chat")]],kick:[["latest_follow",L("Neuester Follow","Latest follow")],["latest_subscribe",L("Neuestes Abo","Latest subscription")]]};
   const option=(items,selected="")=>items.map(([v,l])=>`<option value="${esc(v)}" ${v===selected?"selected":""}>${esc(l)}</option>`).join("");
-  const targetLabel=(key,value)=>`${key.toUpperCase()}${value.loading?L(" (lädt...)"," (loading...)"):(value.connected?"":L(" (nicht verbunden)"," (not connected)"))}`;
+  const targetLabel=(key,value)=>`${key.toUpperCase()}${value.loading?L(" (lädt...)"," (loading...)"):(value.connected?"":String(value.detail||"").includes("aufgebaut")?L(" (verbindet...)"," (connecting...)"):L(" (nicht verbunden)"," (not connected)"))}`;
   const targetOptions=()=>Object.entries(targets).map(([key,value])=>[key,targetLabel(key,value)]);
-  const actionLabels={text:L("Text schreiben","Write text"),text_show:L("Text schreiben + Quelle kurz einblenden","Write text + briefly show source"),show:L("Quelle einblenden","Show source"),play:L("Medienquelle abspielen","Play media source"),scene:L("Szene aktivieren","Activate scene"),filter_on:L("OBS-Szenenfilter aktivieren","Enable OBS scene filter"),filter_off:L("OBS-Szenenfilter deaktivieren","Disable OBS scene filter")};
+  const actionLabels={text:L("Text schreiben + zeitweise einblenden","Write text + show temporarily"),text_show:L("Text schreiben + Quelle neu einblenden","Write text + re-show source"),show:L("Quelle einblenden","Show source"),play:L("Medienquelle abspielen","Play media source"),scene:L("Szene aktivieren","Activate scene"),filter_on:L("OBS-Szenenfilter aktivieren","Enable OBS scene filter"),filter_off:L("OBS-Szenenfilter deaktivieren","Disable OBS scene filter")};
   const filterActions=new Set(["filter_on","filter_off"]);
   const actionOptions=()=>Object.entries(actionLabels).filter(([key])=>$("#ruleTarget")?.value==="obs"||!filterActions.has(key));
   const textActions=new Set(["text","text_show"]);
@@ -1008,11 +1044,10 @@ async function renderObsMeld(){
     return `Test: ${label}`;
   };
   const persistRules=async()=>{
-    settings.automation_rules=rules;
-    return await api("/api/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(settings)});
+    return await api("/api/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({automation_rules:rules})});
   };
 
-  shell("obs_meld","OBS/Meld Integration",L("Dauerhafte Live-Werte gezielt in eine OBS- oder Meld-Quelle schreiben.","Write persistent live values to a specific OBS or Meld source."),`<section class="card integrationBuilder"><div class="integrationHead"><div><h3>${L("Neuen Eintrag anlegen","Create new entry")}</h3><div class="small">${L("Wähle zuerst den Auslöser. Weitere Optionen erscheinen passend zur Aktion.","Choose the trigger first. More options appear depending on the action.")}</div></div></div><div class="integrationFlow"><label><div>1 · ${L("Plattform","Platform")}</div><select id="rulePlatform">${option([["tiktok","TikTok"],["twitch","Twitch"],["youtube","YouTube"],["kick","Kick"]])}</select></label><label><div>2 · ${L("Live-Wert","Live value")}</div><select id="ruleValue"></select></label><label><div>3 · ${L("Ausgabe","Output")}</div><select id="ruleTarget">${option(targetOptions())}</select></label><label><div>4 · ${L("Szene","Scene")}</div><select id="ruleScene"></select></label><label><div>5 · ${L("Quelle","Source")}</div><select id="ruleSource"></select></label></div><div class="integrationName"><label><div>${L("Name dieses Eintrags","Name of this entry")}</div><input id="ruleName" placeholder="${L("z. B. TikTok-Like-Zähler","e.g. TikTok like counter")}"></label><div class="ruleFormActions"><button id="saveRule">${L("Speichern","Save")}</button><button class="secondary" id="clearRule">${L("Ändern abbrechen","Cancel editing")}</button></div></div></section><section class="card integrationListCard"><div class="integrationListHead"><h3>${L("Gespeicherte Einträge","Saved entries")}</h3><span class="small">${L("Neueste zuerst","Newest first")}</span></div><div id="ruleList" class="ruleList"></div></section>`);
+  shell("obs_meld","OBS/Meld Integration",L("Dauerhafte Live-Werte gezielt in eine OBS- oder Meld-Quelle schreiben.","Write persistent live values to a specific OBS or Meld source."),`<section class="card integrationBuilder"><div class="integrationHead"><div><h3>${L("Neuen Eintrag anlegen","Create new entry")}</h3><div class="small">${L("Wähle zuerst den Auslöser. Weitere Optionen erscheinen passend zur Aktion.","Choose the trigger first. More options appear depending on the action.")}</div></div></div><div class="integrationFlow"><label><div>1 · ${L("Plattform","Platform")}</div><select id="rulePlatform">${option([["tiktok","TikTok"],["twitch","Twitch"],["youtube","YouTube"],["kick","Kick"]])}</select></label><label><div>2 · ${L("Live-Wert","Live value")}</div><select id="ruleValue"></select></label><label><div>3 · ${L("Ausgabe","Output")}</div><select id="ruleTarget">${option(targetOptions())}</select></label><label><div>4 · ${L("Szene","Scene")}</div><select id="ruleScene"></select></label><label><div>5 · ${L("Quelle","Source")}</div><select id="ruleSource"></select></label></div><div class="integrationName"><label><div>${L("Name dieses Eintrags","Name of this entry")}</div><input id="ruleName" placeholder="${L("z. B. TikTok-Like-Zähler","e.g. TikTok like counter")}"></label><div class="ruleFormActions"><button id="saveRule">${L("Speichern","Save")}</button><button class="secondary" id="clearRule">${L("Ändern abbrechen","Cancel editing")}</button></div></div></section><section class="card integrationListCard"><div class="integrationListHead"><div><h3>${L("Gespeicherte Einträge","Saved entries")}</h3><span class="small">${L("Einträge aufeinander ziehen, um sie zu gruppieren.","Drag entries onto each other to group them.")}</span></div></div><div id="ruleUngroupDrop" class="ruleUngroupDrop">${L("Eintrag hier ablegen, um ihn aus der Gruppe zu lösen","Drop entry here to remove it from its group")}</div><div id="ruleList" class="ruleList"></div></section>`);
   const reloadButton=document.createElement("button");
   reloadButton.className="secondary targetReload";
   reloadButton.textContent=L("Szenen & Quellen neu laden","Reload scenes & sources");
@@ -1026,9 +1061,9 @@ async function renderObsMeld(){
   likeCounterField.className="likeCounterFields";
   likeCounterField.innerHTML=`<label><div>7 · Chatter</div><input id="ruleLikeUser" title="${esc(L("TikTok-Name exakt eingeben","Enter exact TikTok name"))}" list="ruleLikeUserList" placeholder="${L("TikTok-Name exakt eingeben","Enter exact TikTok name")}"></label><label><div>8 · ${L("Auslösen alle X Likes","Trigger every X likes")}</div><input id="ruleLikeThreshold" title="${esc(L("Die Aktion wird bei jedem Intervall erneut ausgeführt, z. B. bei 50, 100 und 150 Likes.","The action repeats at every interval, e.g. at 50, 100 and 150 likes."))}" type="number" min="1" step="1" value="10"></label><datalist id="ruleLikeUserList"></datalist>`;
   $(".integrationFlow").append(likeCounterField);
-  const viewerStreakField=document.createElement("label");
+  const viewerStreakField=document.createElement("div");
   viewerStreakField.className="viewerStreakFields";
-  viewerStreakField.innerHTML=`<div>7 · ${L("Gesendeter Text","Text to send")}</div><input id="ruleStreakTemplate" title="${esc(L("Vorlagen: <user> = Twitch-Name, <amount> = Anzahl der Streams","Templates: <user> = Twitch name, <amount> = stream count"))}" value="${esc(L("<user> hat einen Streak von <amount> Streams erreicht","<user> reached a streak of <amount> streams"))}">`;
+  viewerStreakField.innerHTML=`<label><div>7 · ${L("Gesendeter Text","Text to send")}</div><input id="ruleStreakTemplate" title="${esc(L("Vorlagen: <user> = Twitch-Name, <amount> = Anzahl der Streams","Templates: <user> = Twitch name, <amount> = stream count"))}" value="${esc(L("<user> hat einen Streak von <amount> Streams erreicht","<user> reached a streak of <amount> streams"))}"></label><label class="settingsBool"><input id="ruleWriteToFile" type="checkbox"><span>${L("Zusätzlich in Datei schreiben","Also write to file")}</span></label><label class="viewerFileField"><div>${L("Ordner unter data","Folder under data")}</div><input id="ruleFileDirectory" value="twitch_alert" placeholder="twitch_alert"></label><label class="viewerFileField"><div>${L("Dateiname","File name")}</div><input id="ruleFileName" value="viewerstreak.txt" placeholder="viewerstreak.txt"></label>`;
   $(".integrationFlow").append(viewerStreakField);
   const hideSecondsField=document.createElement("label");
   hideSecondsField.className="hideSecondsField";
@@ -1049,10 +1084,12 @@ async function renderObsMeld(){
 
   const fillLikeUserList=()=>{$("#ruleLikeUserList").innerHTML=savedLikeUsers().map(x=>`<option value="${esc(x)}"></option>`).join("");};
   const selectedIsLikeCounter=()=>$("#rulePlatform").value==="tiktok"&&$("#ruleValue").value==="like_total";
+  const updateViewerFileFields=()=>{$$(".viewerFileField").forEach(field=>field.hidden=!$("#ruleWriteToFile").checked);};
   const isFilterAction=()=>filterActions.has($("#ruleAction")?.value);
   const refreshActions=()=>{const select=$("#ruleAction");if(!select)return;const selected=select.value;select.innerHTML=option(actionOptions(),selected);if(selected&&[...select.options].some(item=>item.value===selected))select.value=selected;else select.value="text";};
-  const toggleTextOptions=()=>{const action=$("#ruleAction").value,text=isTextRule({action}),placeholder=$("#ruleStartup").value==="placeholder",streak=text&&$("#rulePlatform").value==="twitch"&&$("#ruleValue").value==="latest_viewer_streak",filterAction=isFilterAction()&&$("#ruleTarget").value==="obs",timedAction=["show","text_show","scene"].includes(action);startupField.hidden=!text||streak;startupField.style.display=text&&!streak?"":"none";placeholderField.hidden=!text||!placeholder||streak;placeholderField.style.display=text&&placeholder&&!streak?"":"none";likeCounterField.hidden=!selectedIsLikeCounter();likeCounterField.style.display=selectedIsLikeCounter()?"":"none";viewerStreakField.hidden=!streak;viewerStreakField.style.display=streak?"":"none";hideSecondsField.hidden=!timedAction;hideSecondsField.style.display=timedAction?"":"none";filterField.hidden=!filterAction;filterField.style.display=filterAction?"":"none";$("#ruleSource").closest("label").hidden=filterAction||action==="scene";};
+  const toggleTextOptions=()=>{const action=$("#ruleAction").value,text=isTextRule({action}),placeholder=$("#ruleStartup").value==="placeholder",streak=text&&$("#rulePlatform").value==="twitch"&&$("#ruleValue").value==="latest_viewer_streak",filterAction=isFilterAction()&&$("#ruleTarget").value==="obs",timedAction=["text","show","text_show","play","scene"].includes(action);startupField.hidden=!text||streak;startupField.style.display=text&&!streak?"":"none";placeholderField.hidden=!text||!placeholder||streak;placeholderField.style.display=text&&placeholder&&!streak?"":"none";likeCounterField.hidden=!selectedIsLikeCounter();likeCounterField.style.display=selectedIsLikeCounter()?"":"none";viewerStreakField.hidden=!streak;viewerStreakField.style.display=streak?"":"none";hideSecondsField.hidden=!timedAction;hideSecondsField.style.display=timedAction?"":"none";filterField.hidden=!filterAction;filterField.style.display=filterAction?"":"none";$("#ruleSource").closest("label").hidden=filterAction||action==="scene";};
   $("#ruleAction").onchange=()=>{toggleTextOptions();refreshFilters();};$("#ruleStartup").onchange=toggleTextOptions;
+  $("#ruleWriteToFile").onchange=updateViewerFileFields;
 
   let editIndex=-1;
   const refreshFilters=()=>{const target=targets[$("#ruleTarget").value]||{},scene=$("#ruleScene").value,filters=(target.filters_by_scene||{})[scene]||[];$("#ruleFilter").innerHTML=option(filters.length?filters.map(x=>[x,x]):[["",L("Keine Filter in dieser Szene","No filters in this scene")]]);};
@@ -1060,10 +1097,12 @@ async function renderObsMeld(){
   const refreshTargets=()=>{refreshActions();const key=$("#ruleTarget").value,target=targets[key]||{},scenes=target.scenes||[];$("#ruleScene").innerHTML=option(scenes.length?scenes.map(x=>[x,x]):[[target.loading?"loading":"",target.loading?L("Szenen werden geladen...","Loading scenes..."):L("Zuerst OBS/Meld verbinden","Connect OBS/Meld first")]]);refreshSources();toggleTextOptions();};
   const refreshValues=()=>{$("#ruleValue").innerHTML=option(values[$("#rulePlatform").value]||[]);toggleTextOptions();};
   const readRule=()=>{
-    const r={name:$("#ruleName").value.trim()||`${platformLabel($("#rulePlatform").value)} ${$("#ruleValue").selectedOptions[0]?.textContent||L("Wert","Value")}`,platform:$("#rulePlatform").value,value:$("#ruleValue").value,target:$("#ruleTarget").value,scene:$("#ruleScene").value,source:$("#ruleSource").value,filter:$("#ruleFilter").value,action:$("#ruleAction").value,startup:$("#ruleStartup").value,placeholder:$("#rulePlaceholder").value.trim()||"---"};
-    if(["show","text_show","scene"].includes(r.action))r.hideSeconds=Math.max(0,Number($("#ruleHideSeconds").value)||0);
+    const previous=editIndex>=0?rules[editIndex]:{};
+    const r={id:previous.id||`rule-${Date.now()}-${Math.random().toString(16).slice(2)}`,parentTrigger:previous.parentTrigger||previous.parent_trigger||"",groupName:previous.groupName||previous.group_name||"",name:$("#ruleName").value.trim()||`${platformLabel($("#rulePlatform").value)} ${$("#ruleValue").selectedOptions[0]?.textContent||L("Wert","Value")}`,platform:$("#rulePlatform").value,value:$("#ruleValue").value,target:$("#ruleTarget").value,scene:$("#ruleScene").value,source:$("#ruleSource").value,filter:$("#ruleFilter").value,action:$("#ruleAction").value,startup:$("#ruleStartup").value,placeholder:$("#rulePlaceholder").value.trim()||"---"};
+    if(["text","show","text_show","play","scene"].includes(r.action))r.hideSeconds=Math.max(0,Number($("#ruleHideSeconds").value)||0);
     if(isLikeCounterRule(r)){r.likeUser=$("#ruleLikeUser").value.trim();r.likeThreshold=Math.max(1,Number($("#ruleLikeThreshold").value)||1);}
     if(isViewerStreakRule(r))r.streakTemplate=$("#ruleStreakTemplate").value.trim()||L("<user> hat einen Streak von <amount> Streams erreicht","<user> reached a streak of <amount> streams");
+    if(isViewerStreakRule(r)){r.writeToFile=$("#ruleWriteToFile").checked;r.fileDirectory=$("#ruleFileDirectory").value.trim()||"twitch_alert";r.fileName=$("#ruleFileName").value.trim()||"viewerstreak.txt";}
     return r;
   };
   const runRuleTest=async (r,previewText)=>{
@@ -1085,22 +1124,70 @@ async function renderObsMeld(){
       const testText=localizedPreview(r,r.testText||defaultPreview(r));
       const valueLabel=(values[r.platform]||[]).find(x=>x[0]===r.value)?.[1]||r.value;
       const condition=isLikeCounterRule(r)?` · ${L("Benutzer","User")}: ${esc(r.likeUser||"-")} · ${L("alle","every")} ${esc(r.likeThreshold||"-")} Likes`:"";
+      const fileInfo=isViewerStreakRule(r)&&(r.writeToFile??r.write_to_file)?` · ${L("Datei","File")}: data/${esc(r.fileDirectory||r.file_directory||"twitch_alert")}/${esc(r.fileName||r.file_name||"viewerstreak.txt")}`:"";
       const actionKey=String(r.action||"").toLowerCase();
       const sceneSeconds=Number(r.hideSeconds??r.hide_seconds??0)||0;
-      const showInfo=["show","text_show"].includes(actionKey)?` · ${L("ausblenden nach","hide after")} ${esc(r.hideSeconds??4)}s`:actionKey==="scene"?(sceneSeconds>0?` · ${L("zurück nach","back after")} ${esc(sceneSeconds)}s`:` · ${L("bleibt aktiv","stays active")}`):"";
+      const showInfo=["text","show","text_show","play"].includes(actionKey)?` · ${L("ausblenden nach","hide after")} ${esc(r.hideSeconds??4)}s`:actionKey==="scene"?(sceneSeconds>0?` · ${L("zurück nach","back after")} ${esc(sceneSeconds)}s`:` · ${L("bleibt aktiv","stays active")}`):"";
       const targetItem=["filter_on","filter_off"].includes(actionKey)?`${esc(r.scene||"-")} · ${esc(r.filter||"-")}`:actionKey==="scene"?`${esc(r.scene||"-")}`:`${esc(r.scene||"-")} · ${esc(r.source||"-")}`;
       const testControls=textRule
         ? `<label class="ruleTestField"><span>${L("Testtext","Test text")}</span><input class="savedRuleTestText" data-i="${i}" value="${esc(testText)}" placeholder="${L("Testtext","Test text")}"></label><button class="secondary testSavedRule" data-i="${i}">${L("Testen","Test")}</button>`
         : `<button class="secondary testSavedRule" data-i="${i}">${L("Testen","Test")}</button>`;
-      return `<div class="ruleRow"><div class="ruleMeta"><b>${esc(r.name)}</b><div class="small">${esc(platformLabel(r.platform))} · ${esc(valueLabel)}${condition} → ${esc((r.target||"").toUpperCase())} · ${targetItem} · ${esc(actionLabels[r.action]||r.action||actionLabels.text)}${showInfo}</div></div><div class="ruleActions ${textRule?"hasText":"noText"}">${testControls}<button class="secondary editRule" data-i="${i}">${L("Ändern","Edit")}</button><button class="secondary deleteRule" data-i="${i}">${L("Löschen","Delete")}</button></div></div>`;
+      return `<div class="ruleRow" draggable="true" data-rule-index="${i}" title="${L("Ziehen, um diesen Eintrag zu gruppieren oder zu lösen","Drag to group or ungroup this entry")}"><span class="ruleDragHandle" aria-hidden="true">⠿</span><div class="ruleMeta"><b>${esc(r.name)}</b><div class="small">${esc(platformLabel(r.platform))} · ${esc(valueLabel)}${condition}${fileInfo} → ${esc((r.target||"").toUpperCase())} · ${targetItem} · ${esc(actionLabels[r.action]||r.action||actionLabels.text)}${showInfo}</div></div><div class="ruleActions ${textRule?"hasText":"noText"}">${testControls}<button class="secondary editRule" data-i="${i}">${L("Ändern","Edit")}</button><button class="secondary deleteRule" data-i="${i}">${L("Löschen","Delete")}</button></div></div>`;
     }).join(""):`<div class="hint">${L("Noch keine Einträge. Lege oben einen dauerhaften Live-Wert an.","No entries yet. Create a persistent live value above.")}</div>`;
     $("#ruleList").insertAdjacentHTML("beforeend",`<div class="hint" id="ruleTestResult"></div>`);
+    rules.forEach((root,rootIndex)=>{
+      if(root.parentTrigger)return;
+      const childIndices=rules.map((rule,index)=>String(rule.parentTrigger||rule.parent_trigger||"")===String(root.id)?index:-1).filter(index=>index>=0);
+      if(!childIndices.length)return;
+      const rootRow=$(`.editRule[data-i="${rootIndex}"]`)?.closest(".ruleRow");if(!rootRow)return;
+      const folder=document.createElement("section");folder.className="triggerFolder";folder.dataset.rootIndex=String(rootIndex);folder.innerHTML=`<header class="triggerFolderHeader"><span>${L("Gemeinsamer Eintrag","Combined entry")}</span><input class="triggerGroupName" data-i="${rootIndex}" value="${esc(root.groupName||root.group_name||L("Neue Gruppe","New group"))}" aria-label="${L("Gruppenname","Group name")}"></header>`;rootRow.parentNode.insertBefore(folder,rootRow);folder.append(rootRow);rootRow.classList.add("triggerFolderMain");
+      const groupButton=document.createElement("button");groupButton.type="button";groupButton.className="secondary testRuleGroup";groupButton.dataset.indices=[rootIndex,...childIndices].join(",");groupButton.textContent=L("Gruppe testen","Test group");$(".triggerFolderHeader",folder)?.append(groupButton);
+      childIndices.forEach(index=>{const row=$(`.editRule[data-i="${index}"]`)?.closest(".ruleRow");if(row){row.classList.add("triggerFolderChild");folder.append(row);}});
+    });
     let testTextSaveTimer=null;
     const queueTestTextSave=()=>{clearTimeout(testTextSaveTimer);testTextSaveTimer=setTimeout(()=>persistRules(),450);};
     $$('.savedRuleTestText').forEach(input=>{
       input.oninput=()=>{const i=Number(input.dataset.i);if(!rules[i])return;rules[i].testText=input.value;queueTestTextSave();};
       input.onchange=async()=>{const i=Number(input.dataset.i);if(!rules[i])return;rules[i].testText=input.value;await persistRules();};
     });
+    $$('.triggerGroupName').forEach(input=>{
+      input.onkeydown=event=>{if(event.key==="Enter")input.blur();};
+      input.onchange=async()=>{const root=rules[Number(input.dataset.i)];if(!root)return;root.groupName=input.value.trim()||L("Neue Gruppe","New group");input.value=root.groupName;await persistRules();};
+    });
+    let draggedRuleIndex=-1;
+    const rootIndexOf=index=>{const parentId=String(rules[index]?.parentTrigger||rules[index]?.parent_trigger||"");if(!parentId)return index;const rootIndex=rules.findIndex(rule=>String(rule.id)===parentId);return rootIndex>=0?rootIndex:index;};
+    const groupRules=async(sourceIndex,targetIndex)=>{
+      if(!rules[sourceIndex]||!rules[targetIndex]||sourceIndex===targetIndex)return;
+      const targetRootIndex=rootIndexOf(targetIndex),sourceRootIndex=rootIndexOf(sourceIndex);
+      if(targetRootIndex===sourceRootIndex)return;
+      const source=rules[sourceIndex],targetRoot=rules[targetRootIndex];
+      const sourceId=String(source.id||""),targetId=String(targetRoot.id||"");
+      if(!sourceId||!targetId)return;
+      rules.forEach(rule=>{if(String(rule.parentTrigger||rule.parent_trigger||"")===sourceId)rule.parentTrigger=targetId;});
+      source.parentTrigger=targetId;source.groupName="";
+      targetRoot.parentTrigger="";
+      if(!String(targetRoot.groupName||targetRoot.group_name||"").trim())targetRoot.groupName=`${targetRoot.name||L("Eintrag","Entry")} + ${source.name||L("Eintrag","Entry")}`;
+      await persistRules();renderRules();
+    };
+    const ungroupRule=async sourceIndex=>{
+      const source=rules[sourceIndex];if(!source)return;
+      const parentId=String(source.parentTrigger||source.parent_trigger||"");
+      if(parentId){source.parentTrigger="";source.groupName="";await persistRules();renderRules();return;}
+      const children=rules.filter(rule=>String(rule.parentTrigger||rule.parent_trigger||"")===String(source.id));
+      if(!children.length)return;
+      const promoted=children[0];promoted.parentTrigger="";promoted.groupName=source.groupName||source.group_name||L("Neue Gruppe","New group");
+      children.slice(1).forEach(rule=>{rule.parentTrigger=promoted.id;});source.groupName="";
+      await persistRules();renderRules();
+    };
+    $$('.ruleRow').forEach(row=>{
+      row.ondragstart=event=>{if(event.target.closest?.("button,input,select,textarea")){event.preventDefault();return;}draggedRuleIndex=Number(row.dataset.ruleIndex);row.classList.add("dragging");event.dataTransfer.effectAllowed="move";event.dataTransfer.setData("text/plain",String(draggedRuleIndex));$("#ruleUngroupDrop")?.classList.add("active");};
+      row.ondragend=()=>{row.classList.remove("dragging");$$('.dragOver').forEach(item=>item.classList.remove("dragOver"));$("#ruleUngroupDrop")?.classList.remove("active","dragOver");draggedRuleIndex=-1;};
+      row.ondragover=event=>{event.preventDefault();event.dataTransfer.dropEffect="move";row.classList.add("dragOver");};
+      row.ondragleave=()=>row.classList.remove("dragOver");
+      row.ondrop=event=>{event.preventDefault();event.stopPropagation();row.classList.remove("dragOver");const source=draggedRuleIndex>=0?draggedRuleIndex:Number(event.dataTransfer.getData("text/plain"));groupRules(source,Number(row.dataset.ruleIndex));};
+    });
+    $$('.triggerFolder').forEach(folder=>{folder.ondragover=event=>{event.preventDefault();folder.classList.add("dragOver");};folder.ondragleave=event=>{if(!folder.contains(event.relatedTarget))folder.classList.remove("dragOver");};folder.ondrop=event=>{event.preventDefault();folder.classList.remove("dragOver");const source=draggedRuleIndex>=0?draggedRuleIndex:Number(event.dataTransfer.getData("text/plain"));groupRules(source,Number(folder.dataset.rootIndex));};});
+    const ungroupDrop=$("#ruleUngroupDrop");if(ungroupDrop){ungroupDrop.ondragover=event=>{event.preventDefault();ungroupDrop.classList.add("dragOver");};ungroupDrop.ondragleave=()=>ungroupDrop.classList.remove("dragOver");ungroupDrop.ondrop=event=>{event.preventDefault();ungroupDrop.classList.remove("dragOver");const source=draggedRuleIndex>=0?draggedRuleIndex:Number(event.dataTransfer.getData("text/plain"));ungroupRule(source);};}
     $$('.testSavedRule').forEach(b=>b.onclick=async()=>{
       const i=Number(b.dataset.i),r=rules[i];
       if(!r)return;
@@ -1118,13 +1205,14 @@ async function renderObsMeld(){
         b.textContent=old;
       }
     });
-    $$('.editRule').forEach(b=>b.onclick=()=>{const r=rules[Number(b.dataset.i)];editIndex=Number(b.dataset.i);$("#rulePlatform").value=r.platform;refreshValues();$("#ruleValue").value=r.value;$("#ruleTarget").value=r.target;refreshTargets();$("#ruleScene").value=r.scene||"";refreshSources();$("#ruleSource").value=r.source||"";$("#ruleAction").value=r.action||"text";$("#ruleFilter").value=r.filter||r.filterName||r.filter_name||"";$("#ruleStartup").value=r.startup||"keep";$("#rulePlaceholder").value=r.placeholder||"---";$("#ruleHideSeconds").value=r.hideSeconds??r.hide_seconds??4;$("#ruleLikeUser").value=r.likeUser||r.like_user||"";$("#ruleLikeThreshold").value=r.likeThreshold||r.like_threshold||10;$("#ruleStreakTemplate").value=r.streakTemplate||r.streak_template||(r.streakOutput==="name"?"<user>":r.streakOutput==="count"?"<amount>":L("<user> hat einen Streak von <amount> Streams erreicht","<user> reached a streak of <amount> streams"));toggleTextOptions();$("#ruleName").value=r.name;$("#saveRule").textContent=L("Änderung speichern","Save changes");});
-    $$('.deleteRule').forEach(b=>b.onclick=async()=>{rules.splice(Number(b.dataset.i),1);await persistRules();renderRules();});
+    $$('.testRuleGroup').forEach(button=>button.onclick=async()=>{const indices=String(button.dataset.indices||"").split(",").map(Number).filter(Number.isFinite);const old=button.textContent;button.disabled=true;button.textContent=L("Gruppe läuft...","Testing group...");try{await Promise.all(indices.map(index=>{const rule=rules[index];return rule?runRuleTest({...rule},rule.testText||defaultPreview(rule)):Promise.resolve();}));}finally{button.disabled=false;button.textContent=old;}});
+    $$('.editRule').forEach(b=>b.onclick=()=>{const r=rules[Number(b.dataset.i)];editIndex=Number(b.dataset.i);$("#rulePlatform").value=r.platform;refreshValues();$("#ruleValue").value=r.value;$("#ruleTarget").value=r.target;refreshTargets();$("#ruleScene").value=r.scene||"";refreshSources();$("#ruleSource").value=r.source||"";$("#ruleAction").value=r.action||"text";$("#ruleFilter").value=r.filter||r.filterName||r.filter_name||"";$("#ruleStartup").value=r.startup||"keep";$("#rulePlaceholder").value=r.placeholder||"---";$("#ruleHideSeconds").value=r.hideSeconds??r.hide_seconds??4;$("#ruleLikeUser").value=r.likeUser||r.like_user||"";$("#ruleLikeThreshold").value=r.likeThreshold||r.like_threshold||10;$("#ruleStreakTemplate").value=r.streakTemplate||r.streak_template||(r.streakOutput==="name"?"<user>":r.streakOutput==="count"?"<amount>":L("<user> hat einen Streak von <amount> Streams erreicht","<user> reached a streak of <amount> streams"));$("#ruleWriteToFile").checked=!!(r.writeToFile??r.write_to_file);$("#ruleFileDirectory").value=r.fileDirectory||r.file_directory||"twitch_alert";$("#ruleFileName").value=r.fileName||r.file_name||"viewerstreak.txt";updateViewerFileFields();toggleTextOptions();$("#ruleName").value=r.name;$("#saveRule").textContent=L("Änderung speichern","Save changes");});
+    $$('.deleteRule').forEach(b=>b.onclick=async()=>{const index=Number(b.dataset.i),removedId=String(rules[index]?.id||"");rules.splice(index,1);if(removedId)rules.forEach(rule=>{if(String(rule.parentTrigger||rule.parent_trigger||"")===removedId)rule.parentTrigger="";});await persistRules();renderRules();});
   };
   $("#rulePlatform").onchange=()=>{refreshValues();};$("#ruleValue").onchange=toggleTextOptions;$("#ruleTarget").onchange=refreshTargets;$("#ruleScene").onchange=refreshSources;
-  $("#clearRule").onclick=()=>{editIndex=-1;$("#ruleName").value="";$("#ruleLikeUser").value="";$("#ruleLikeThreshold").value=10;$("#ruleHideSeconds").value=4;$("#saveRule").textContent=L("Speichern","Save");};
+  $("#clearRule").onclick=()=>{editIndex=-1;$("#ruleName").value="";$("#ruleLikeUser").value="";$("#ruleLikeThreshold").value=10;$("#ruleHideSeconds").value=4;$("#ruleWriteToFile").checked=false;updateViewerFileFields();$("#saveRule").textContent=L("Speichern","Save");};
   $("#saveRule").onclick=async()=>{const r=readRule();if(isLikeCounterRule(r)&&!r.likeUser){alert(L("Bitte einen Chatter für den Like-Zähler eintragen.","Please enter a chatter for the like counter."));return;}if(["filter_on","filter_off"].includes(r.action)){if(r.target!=="obs"){alert(L("Filteraktionen sind nur für OBS verfügbar.","Filter actions are only available for OBS."));return;}if(!r.scene||!r.filter){alert(L("Bitte Szene und Filter auswählen.","Please choose a scene and filter."));return;}}if(editIndex>=0){r.testText=rules[editIndex]?.testText||defaultPreview(r);rules[editIndex]=r;}else{r.testText=defaultPreview(r);rules.push(r);}const out=await persistRules();if(!out.ok){console.warn(L("Regel speichern fehlgeschlagen","Failed to save rule"),out.error);return;}editIndex=-1;$("#ruleName").value="";$("#ruleLikeUser").value="";$("#ruleLikeThreshold").value=10;$("#ruleHideSeconds").value=4;$("#saveRule").textContent=L("Speichern","Save");renderRules();};
-  fillLikeUserList();refreshValues();refreshTargets();toggleTextOptions();renderRules();
+  fillLikeUserList();refreshValues();refreshTargets();toggleTextOptions();updateViewerFileFields();renderRules();
   targetLoad.then(targetData=>{
     const loaded=targetData?.targets||{};
     for(const key of ["obs","meld"])Object.assign(targets[key],{loading:false},loaded[key]||{});
@@ -1869,6 +1957,8 @@ function resolveSavedDeviceId(devices,id,label){
 async function renderSettings(){
   const [all,soundData,devices]=await Promise.all([api("/api/settings"),api("/api/sounds"),audioOutputDevices()]);
   const cfg=all.general?.sound||{}, sounds=Array.isArray(soundData.sounds)?soundData.sounds:[], alerts=cfg.alerts||{};
+  const volume=normalizedVolume(cfg.volume),uiCfg=all.ui||{},colorScheme=String(uiCfg.color_scheme||"system"),customColors={...DEFAULT_CUSTOM_COLORS,...(uiCfg.custom_colors||{})};
+  applyColorScheme(colorScheme,customColors);
   cfg.output_device=resolveSavedDeviceId(devices,cfg.output_device,cfg.output_device_label);
   cfg.stream_output_device=resolveSavedDeviceId(devices,cfg.stream_output_device,cfg.stream_output_device_label);
   const deviceRows=devices.map((d,i)=>`<option value="${esc(d.deviceId)}">${esc(d.label||`${L("Audiogerät","Audio device")} ${i+1}`)}</option>`).join("");
@@ -1879,30 +1969,46 @@ async function renderSettings(){
   const streamDeviceOptions=`<option value="">${L("Nicht ausgeben","No output")}</option><option value="__default__">${L("System-Standardgerät","System default device")}</option>${savedStream}${deviceRows}`;
   const tabs=[["general",L("Allgemein","General")],...Object.keys(SOUND_ALERTS).map(p=>[p,platformLabel(p)])];
   const groups=tabs.map(([tab,label],index)=>{
-    if(tab==="general")return `<div class="soundSettingsGroup ${index===0?"active":""}" data-sound-tab="general"><div class="soundSettingsGrid"><label><div>${L("Broadcaster-Ausgabe (Chat + Alerts)","Broadcaster output (chat + alerts)")}</div><select id="soundDevice">${deviceOptions}</select></label><label><div>${L("Stream-Ausgabe (nur Alerts)","Stream output (alerts only)")}</div><select id="streamSoundDevice">${streamDeviceOptions}</select></label><label><div>${L("Alle eingehenden Chatnachrichten","All incoming chat messages")}</div><select id="chatSound">${soundOptions(sounds,cfg.chat_sound||"")}</select></label></div><div class="btnLine soundDeviceActions"><button type="button" class="secondary" id="loadSoundDevices">${L("Geräteliste aktualisieren","Refresh device list")}</button><button type="button" class="secondary" id="openSoundFolder">${L("Soundordner öffnen","Open sound folder")}</button><span class="small" id="soundDeviceHint">${L("Der Broadcaster hört Chat und Alerts. An den Stream werden ausschließlich Alerts ausgegeben.","The broadcaster hears chat and alerts. Only alerts are sent to the stream output.")}</span></div><div class="hint">${L("Sounddateien kommen aus assets/sound. Unterstützt werden MP3, WAV, OGG, M4A, AAC und FLAC.","Sound files are loaded from assets/sound. MP3, WAV, OGG, M4A, AAC and FLAC are supported.")}</div></div>`;
+    if(tab==="general")return `<div class="soundSettingsGroup ${index===0?"active":""}" data-sound-tab="general"><div class="soundSettingsGrid"><label><div>${L("Broadcaster-Ausgabe (Chat + Alerts)","Broadcaster output (chat + alerts)")}</div><select id="soundDevice">${deviceOptions}</select></label><label><div>${L("Stream-Ausgabe (nur Alerts)","Stream output (alerts only)")}</div><select id="streamSoundDevice">${streamDeviceOptions}</select></label><label><div>${L("Alle eingehenden Chatnachrichten","All incoming chat messages")}</div><select id="chatSound">${soundOptions(sounds,cfg.chat_sound||"")}</select></label><label class="soundVolumeControl"><div>${L("Lautstärke","Volume")} <output id="soundVolumeValue">${volume}%</output></div><input id="soundVolume" type="range" min="0" max="100" step="1" value="${volume}"></label></div><div class="btnLine soundDeviceActions"><button type="button" class="secondary" id="authorizeSoundDevices">${L("Audiogeräte freigeben","Authorize audio devices")}</button><button type="button" class="secondary" id="loadSoundDevices">${L("Geräteliste aktualisieren","Refresh device list")}</button><button type="button" class="secondary" id="openSoundFolder">${L("Soundordner öffnen","Open sound folder")}</button><span class="small" id="soundDeviceHint">${L("Der Broadcaster hört Chat und Alerts. An den Stream werden ausschließlich Alerts ausgegeben.","The broadcaster hears chat and alerts. Only alerts are sent to the stream output.")}</span></div><div class="hint">${L("Sounddateien kommen aus assets/sound. Unterstützt werden MP3, WAV, OGG, M4A, AAC und FLAC.","Sound files are loaded from assets/sound. MP3, WAV, OGG, M4A, AAC and FLAC are supported.")}</div></div>`;
     const pCfg=alerts[tab]||{};
     return `<div class="soundSettingsGroup" data-sound-tab="${tab}"><div class="soundPlatformHead">${platformBadge(tab)}<h3>${label}</h3></div><div class="soundSettingsGrid">${SOUND_ALERTS[tab].map(([key,name])=>`<label><div>${esc(name)}</div><select data-sound-platform="${tab}" data-sound-event="${key}">${soundOptions(sounds,pCfg[key]||"")}</select></label>`).join("")}</div></div>`;
   }).join("");
-  shell("settings",L("Einstellungen","Settings"),L("Allgemeine Einstellungen für das gesamte Tool.","General settings for the entire tool."),`<section class="card pluginSettingsCard"><h3 class="settingsSectionTitle">${L("Sounds","Sounds")}</h3><div class="pluginSettingsTabs">${tabs.map(([key,label],i)=>`<button type="button" class="pluginSettingsTabBtn soundTab ${i===0?"active":""}" data-tab="${key}">${label}</button>`).join("")}</div><form id="soundSettingsForm">${groups}<div class="btnLine"><button type="submit">${L("Speichern","Save")}</button><button type="button" class="secondary" id="testSelectedSound">${L("Ausgewählten Sound testen","Test selected sound")}</button><span class="small" id="soundSettingsResult"></span></div></form></section>`);
+  const themeOptions=[["system",L("Windows-Systemeinstellung","Windows system setting")],["dark",L("Dunkel","Dark")],["light",L("Hell","Light")],["neon","Neon"],["purple",L("Violett","Purple")],["ocean",L("Ozean","Ocean")],["forest",L("Wald","Forest")],["custom",L("Eigenes Farbschema","Custom color scheme")]];
+  const colorField=(key,label)=>`<label><div>${label}</div><input type="color" data-custom-color="${key}" value="${esc(customColors[key])}"></label>`;
+  shell("settings",L("Einstellungen","Settings"),L("Allgemeine Einstellungen für das gesamte Tool.","General settings for the entire tool."),`<section class="card pluginSettingsCard"><h3 class="settingsSectionTitle">${L("Sounds","Sounds")}</h3><div class="pluginSettingsTabs">${tabs.map(([key,label],i)=>`<button type="button" class="pluginSettingsTabBtn soundTab ${i===0?"active":""}" data-tab="${key}">${label}</button>`).join("")}</div><form id="soundSettingsForm">${groups}<div class="btnLine"><button type="submit">${L("Speichern","Save")}</button><button type="button" class="secondary" id="testSelectedSound">${L("Ausgewählten Sound testen","Test selected sound")}</button><span class="small" id="soundSettingsResult"></span></div></form></section><section class="card pluginSettingsCard colorSchemeCard"><h3 class="settingsSectionTitle">${L("Farbschema","Color scheme")}</h3><form id="colorSchemeForm"><div class="soundSettingsGrid"><label><div>${L("Farbschema auswählen","Select color scheme")}</div><select id="colorScheme">${themeOptions.map(([value,label])=>`<option value="${value}">${label}</option>`).join("")}</select></label></div><div id="customColorFields" class="customColorFields">${colorField("background",L("Hintergrund","Background"))}${colorField("panel",L("Flächen","Panels"))}${colorField("text",L("Text","Text"))}${colorField("accent",L("Akzentfarbe","Accent color"))}${colorField("secondary",L("Zweitfarbe","Secondary color"))}</div><div class="btnLine"><button type="submit">${L("Farbschema speichern","Save color scheme")}</button><span class="small" id="colorSchemeResult"></span></div></form></section>`);
   $("#soundDevice").value=cfg.output_device||"";
   $("#streamSoundDevice").value=cfg.stream_output_device||"";
+  $("#colorScheme").value=COLOR_SCHEMES.includes(colorScheme)?colorScheme:"system";
+  const collectCustomColors=()=>Object.fromEntries($$("[data-custom-color]").map(input=>[input.dataset.customColor,input.value]));
+  const previewColorScheme=()=>{const scheme=$("#colorScheme").value;$("#customColorFields").hidden=scheme!=="custom";applyColorScheme(scheme,collectCustomColors());};
+  $("#colorScheme").onchange=previewColorScheme;
+  $$("[data-custom-color]").forEach(input=>input.oninput=previewColorScheme);
+  previewColorScheme();
+  $("#soundVolume").oninput=()=>{$("#soundVolumeValue").textContent=`${$("#soundVolume").value}%`;};
   $$(".soundTab").forEach(btn=>btn.onclick=()=>{$$(".soundTab").forEach(x=>x.classList.toggle("active",x===btn));$$(".soundSettingsGroup").forEach(x=>x.classList.toggle("active",x.dataset.soundTab===btn.dataset.tab));});
   $$('#soundSettingsForm select:not(#soundDevice)').forEach(select=>select.onchange=()=>{if(select.value&&select.value!=="__off__")playConfiguredSound(select.value,$("#soundDevice")?.value||"");});
   $("#openSoundFolder").onclick=async()=>{const out=await api("/api/sounds/open-folder",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"});if(!out.ok)$("#soundDeviceHint").textContent=out.error||L("Soundordner konnte nicht geöffnet werden.","Could not open the sound folder.");};
   $("#loadSoundDevices").onclick=async()=>{
     const button=$("#loadSoundDevices"),hint=$("#soundDeviceHint"),select=$("#soundDevice");button.disabled=true;
     try{
-      let chosen=null;
-      if(typeof navigator.mediaDevices?.selectAudioOutput==="function")chosen=await navigator.mediaDevices.selectAudioOutput();
-      else if(typeof navigator.mediaDevices?.getUserMedia==="function"){const stream=await navigator.mediaDevices.getUserMedia({audio:true});stream.getTracks().forEach(track=>track.stop());}
       const streamSelect=$("#streamSoundDevice"),oldStream=streamSelect.value,oldStreamLabel=streamSelect.selectedOptions[0]?.textContent||"";
       const oldBroadcaster=select.value,oldBroadcasterLabel=select.selectedOptions[0]?.textContent||"";
-      const found=await audioOutputDevices(),selected=chosen?.deviceId||oldBroadcaster;
+      const found=await audioOutputDevices(),selected=resolveSavedDeviceId(found,oldBroadcaster,oldBroadcasterLabel);
       select.innerHTML=`<option value="">${L("System-Standardgerät","System default device")}</option>`+found.map((d,i)=>`<option value="${esc(d.deviceId)}">${esc(d.label||`${L("Audiogerät","Audio device")} ${i+1}`)}</option>`).join("");
       streamSelect.innerHTML=`<option value="">${L("Nicht ausgeben","No output")}</option><option value="__default__">${L("System-Standardgerät","System default device")}</option>`+found.map((d,i)=>`<option value="${esc(d.deviceId)}">${esc(d.label||`${L("Audiogerät","Audio device")} ${i+1}`)}</option>`).join("");
-      select.value=selected;if(select.value!==selected&&selected)select.append(new Option(chosen?.label||oldBroadcasterLabel||L("Gespeichertes Broadcaster-Gerät","Saved broadcaster device"),selected,true,true));
+      select.value=selected;if(select.value!==selected&&selected)select.append(new Option(oldBroadcasterLabel||L("Gespeichertes Broadcaster-Gerät","Saved broadcaster device"),selected,true,true));
       streamSelect.value=oldStream;if(streamSelect.value!==oldStream&&oldStream)streamSelect.append(new Option(oldStreamLabel||L("Gespeichertes Stream-Gerät","Saved stream device"),oldStream,true,true));
       hint.textContent=found.length?L(`${found.length} Audiogerät(e) gefunden.`,`Found ${found.length} audio device(s).`):L("Keine Audiogeräte gefunden.","No audio devices found.");
+    }catch(e){hint.textContent=L("Gerätefreigabe wurde abgebrochen oder vom Browser blockiert.","Device access was cancelled or blocked by the browser.");}
+    finally{button.disabled=false;}
+  };
+  $("#authorizeSoundDevices").onclick=async()=>{
+    const button=$("#authorizeSoundDevices"),hint=$("#soundDeviceHint"),saved=$("#soundDevice")?.value||"";button.disabled=true;
+    try{
+      if(typeof navigator.mediaDevices?.selectAudioOutput==="function")await navigator.mediaDevices.selectAudioOutput(saved?{deviceId:saved}:undefined);
+      else if(typeof navigator.mediaDevices?.getUserMedia==="function"){const mediaStream=await navigator.mediaDevices.getUserMedia({audio:true});mediaStream.getTracks().forEach(track=>track.stop());}
+      await $("#loadSoundDevices").onclick();
+      hint.textContent=L("Audiogeräte wurden freigegeben und vollständig neu geladen.","Audio devices were authorized and fully reloaded.");
     }catch(e){hint.textContent=L("Gerätefreigabe wurde abgebrochen oder vom Browser blockiert.","Device access was cancelled or blocked by the browser.");}
     finally{button.disabled=false;}
   };
@@ -1910,35 +2016,54 @@ async function renderSettings(){
     const group=$(".soundSettingsGroup.active"),isChatTest=group?.dataset.soundTab==="general";
     const select=isChatTest?$("#chatSound"):group?.querySelector('[data-sound-event]');
     const name=select?.value;if(!name)return;
-    if(isChatTest)await playConfiguredSound(name,$("#soundDevice")?.value||"",true);
-    else await playSoundForAudience(name,true,{output_device:$("#soundDevice")?.value||"",stream_output_device:$("#streamSoundDevice")?.value||""});
+    const testVolume=Number($("#soundVolume")?.value??100);
+    if(isChatTest)await playConfiguredSound(name,$("#soundDevice")?.value||"",true,true,false,testVolume);
+    else await playSoundForAudience(name,true,{output_device:$("#soundDevice")?.value||"",stream_output_device:$("#streamSoundDevice")?.value||"",volume:testVolume},true);
   };
-  $("#soundSettingsForm").onsubmit=async ev=>{ev.preventDefault();const broadcaster=$("#soundDevice"),stream=$("#streamSoundDevice");const next={enabled:true,output_device:broadcaster.value,output_device_label:broadcaster.selectedOptions[0]?.textContent||"",stream_output_device:stream.value,stream_output_device_label:stream.selectedOptions[0]?.textContent||"",chat_sound:$("#chatSound").value,alerts:{}};$$('[data-sound-platform]').forEach(el=>{const p=el.dataset.soundPlatform;next.alerts[p]=next.alerts[p]||{};next.alerts[p][el.dataset.soundEvent]=el.value;});const out=await api("/api/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({general:{sound:next}})});$("#soundSettingsResult").textContent=out.ok?L("Gespeichert.","Saved."):out.error||L("Fehler beim Speichern.","Could not save.");if(out.ok)soundRuntimeConfig=next;};
+  $("#soundSettingsForm").onsubmit=async ev=>{ev.preventDefault();const broadcaster=$("#soundDevice"),stream=$("#streamSoundDevice");const next={enabled:true,output_device:broadcaster.value,output_device_label:broadcaster.selectedOptions[0]?.textContent||"",stream_output_device:stream.value,stream_output_device_label:stream.selectedOptions[0]?.textContent||"",chat_sound:$("#chatSound").value,volume:Number($("#soundVolume").value),alerts:{}};$$('[data-sound-platform]').forEach(el=>{const p=el.dataset.soundPlatform;next.alerts[p]=next.alerts[p]||{};next.alerts[p][el.dataset.soundEvent]=el.value;});const out=await api("/api/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({general:{sound:next}})});$("#soundSettingsResult").textContent=out.ok?L("Gespeichert.","Saved."):out.error||L("Fehler beim Speichern.","Could not save.");if(out.ok)soundRuntimeConfig=next;};
+  $("#colorSchemeForm").onsubmit=async ev=>{ev.preventDefault();const next={color_scheme:$("#colorScheme").value,custom_colors:collectCustomColors()};const out=await api("/api/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({ui:next})});$("#colorSchemeResult").textContent=out.ok?L("Gespeichert.","Saved."):out.error||L("Fehler beim Speichern.","Could not save.");if(out.ok)applyColorScheme(next.color_scheme,next.custom_colors);};
 }
 let soundRuntimeConfig=null;
 let soundSeen=new Set();
 let soundBaselineReady=false;
+let soundPollBusy=false;
+let incomingSoundQueue=Promise.resolve();
 function soundMessageKey(item){return [item.id||"",item.message_id||"",item.platform||"",item.time||"",item.user||"",item.text||"",item.event_type||item.alert_type||item.message_type||""].join("|");}
-async function playConfiguredSound(name,deviceId="",fallbackToDefault=false){
+function enqueueIncomingSound(name,isAlert,cfg){
+  const snapshot={...cfg,alerts:{...(cfg.alerts||{})}};
+  incomingSoundQueue=incomingSoundQueue.catch(()=>false).then(()=>playSoundForAudience(name,isAlert,snapshot,false,true));
+}
+async function playConfiguredSound(name,deviceId="",fallbackToDefault=false,requestPermission=false,waitUntilEnded=false,volume=100){
   if(!name||name==="__off__")return false;
   try{
     const audio=new Audio(`/sound-asset/${encodeURIComponent(name)}`);
+    audio.volume=normalizedVolume(volume)/100;
     if(deviceId&&deviceId!=="__default__"&&typeof audio.setSinkId==="function"){
       try{await audio.setSinkId(deviceId);}
-      catch(error){console.warn("Audiogerät ist nicht verfügbar",error);return false;}
+      catch(error){
+        if(requestPermission&&typeof navigator.mediaDevices?.selectAudioOutput==="function"){
+          try{
+            const chosen=await navigator.mediaDevices.selectAudioOutput({deviceId});
+            await audio.setSinkId(chosen.deviceId);
+          }catch(permissionError){console.warn("Audiogerät wurde nicht freigegeben",permissionError);return false;}
+        }else{console.warn("Audiogerät ist nicht verfügbar",error);return false;}
+      }
     }
     await audio.play();
+    if(waitUntilEnded)await new Promise(resolve=>{const done=()=>resolve();audio.addEventListener("ended",done,{once:true});audio.addEventListener("error",done,{once:true});setTimeout(done,30000);});
     return true;
   }catch(e){console.warn("Sound konnte nicht abgespielt werden",e);return false;}
 }
-async function playSoundForAudience(name,isAlert,cfg){
+async function playSoundForAudience(name,isAlert,cfg,requestPermission=false,waitUntilEnded=false){
   const broadcaster=cfg.output_device||"";
-  const broadcasterPlay=playConfiguredSound(name,broadcaster,true);
-  if(!isAlert)return;
+  const volume=normalizedVolume(cfg.volume);
+  const broadcasterPlay=playConfiguredSound(name,broadcaster,true,requestPermission,waitUntilEnded,volume);
+  if(!isAlert)return broadcasterPlay;
   const stream=cfg.stream_output_device||"";
   const sameDevice=stream==="__default__"?(broadcaster===""||broadcaster==="default"):(stream&&stream===broadcaster);
-  if(stream&&!sameDevice)playConfiguredSound(name,stream,false);
-  return broadcasterPlay;
+  const streamPlay=stream&&!sameDevice?playConfiguredSound(name,stream,false,requestPermission,waitUntilEnded,volume):Promise.resolve(true);
+  const [played]=await Promise.all([broadcasterPlay,streamPlay]);
+  return played;
 }
 function configuredSoundForMessage(item,cfg){
   const platform=String(item.platform||"").toLowerCase();
@@ -1952,9 +2077,12 @@ function configuredSoundForMessage(item,cfg){
   return "";
 }
 async function pollIncomingSounds(){
+  if(soundPollBusy)return;
+  soundPollBusy=true;
   try{
     if(!soundRuntimeConfig){
       const all=await api("/api/settings");soundRuntimeConfig=all.general?.sound||{};
+      applyColorScheme(all.ui?.color_scheme||"system",all.ui?.custom_colors||null);
       const devices=await audioOutputDevices();
       soundRuntimeConfig.output_device=resolveSavedDeviceId(devices,soundRuntimeConfig.output_device,soundRuntimeConfig.output_device_label);
       soundRuntimeConfig.stream_output_device=resolveSavedDeviceId(devices,soundRuntimeConfig.stream_output_device,soundRuntimeConfig.stream_output_device_label);
@@ -1967,10 +2095,10 @@ async function pollIncomingSounds(){
       const name=configuredSoundForMessage(item,soundRuntimeConfig);
       const type=String(item.message_type||item.type||"chat").toLowerCase();
       const isAlert=!["chat","message","comment"].includes(type);
-      if(name)playSoundForAudience(name,isAlert,soundRuntimeConfig);
+      if(name)enqueueIncomingSound(name,isAlert,soundRuntimeConfig);
     }
     if(soundSeen.size>600)soundSeen=new Set(messages.map(soundMessageKey));
-  }catch(_){}
+  }catch(_){}finally{soundPollBusy=false;}
 }
 async function bootPage(){
   try{

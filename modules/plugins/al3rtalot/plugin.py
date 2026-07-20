@@ -427,13 +427,20 @@ class Al3rtalotPlugin(ProviderPlugin):
         rules = settings.get('automation_rules')
         if not isinstance(rules, list):
             return
-        matching = [r for r in rules if isinstance(r, dict) and str(r.get('platform') or '').lower() == platform and str(r.get('value') or '').lower() == value]
+        matching = [r for r in rules if isinstance(r, dict) and not str(r.get('parentTrigger') or r.get('parent_trigger') or '').strip() and str(r.get('platform') or '').lower() == platform and str(r.get('value') or '').lower() == value]
         if not matching:
             return
         for rule in matching:
             streak_template = str(rule.get('streakTemplate') or rule.get('streak_template') or rule.get('streakOutput') or rule.get('streak_output') or '')
             text = self._automation_text(platform, value, user, amount, streak_template)
             self._run_automation_rule(rule, text)
+            parent_id = str(rule.get('id') or '').strip()
+            for child in rules:
+                if not isinstance(child, dict) or str(child.get('parentTrigger') or child.get('parent_trigger') or '').strip() != parent_id:
+                    continue
+                child_template = str(child.get('streakTemplate') or child.get('streak_template') or '')
+                child_text = self._automation_text(platform, value, user, amount, child_template) if child_template else text
+                self._run_automation_rule(child, child_text)
 
     def _apply_alert_automation(self, item: dict[str, Any]) -> None:
         platform = str(item.get('platform') or '').strip().lower()
@@ -457,6 +464,8 @@ class Al3rtalotPlugin(ProviderPlugin):
         text = self._automation_text('tiktok', 'like_total', username, total)
         for rule in rules:
             if not isinstance(rule, dict):
+                continue
+            if str(rule.get('parentTrigger') or rule.get('parent_trigger') or '').strip():
                 continue
             if str(rule.get('platform') or '').strip().lower() != 'tiktok':
                 continue
@@ -494,6 +503,11 @@ class Al3rtalotPlugin(ProviderPlugin):
                     self._like_threshold_fired.add(fire_key)
                 self._log(f'Like-Zähler ausgelöst: {username} hat {total} Likes erreicht, Intervall {threshold}, Stufe {reached_at}')
                 self._run_automation_rule(rule, text)
+                parent_id = str(rule.get('id') or '').strip()
+                for child in rules:
+                    if not isinstance(child, dict) or str(child.get('parentTrigger') or child.get('parent_trigger') or '').strip() != parent_id:
+                        continue
+                    self._run_automation_rule(child, text)
 
     def _run_automation_rule(self, rule: dict[str, Any], text: str, *, force: bool = False) -> bool:
         target = str(rule.get('target') or '').strip().lower()
@@ -513,6 +527,8 @@ class Al3rtalotPlugin(ProviderPlugin):
             if len(self._automation_recent) > 200:
                 self._automation_recent = {k: v for k, v in self._automation_recent.items() if now - v < 30}
         try:
+            if as_bool(rule.get('writeToFile') if rule.get('writeToFile') is not None else rule.get('write_to_file'), False):
+                self._write_automation_text_file(rule, text)
             previous_scene = ''
             if action == 'scene':
                 previous_scene = self._current_automation_scene(target)
@@ -525,7 +541,7 @@ class Al3rtalotPlugin(ProviderPlugin):
             if not ok:
                 self._log(f'automation failed: {target} {action} {scene}/{source}: {detail}')
                 return False
-            if action in {'show', 'text_show'}:
+            if action in {'text', 'show', 'text_show', 'play'}:
                 self._schedule_auto_hide(target, scene, source, rule)
             if action == 'scene':
                 self._schedule_scene_restore(target, scene, previous_scene, rule)
@@ -533,6 +549,20 @@ class Al3rtalotPlugin(ProviderPlugin):
         except Exception as exc:
             self._log(f'automation failed: {target} {action} {scene}/{source}: {exc}')
             return False
+
+    def _write_automation_text_file(self, rule: dict[str, Any], text: str) -> None:
+        folder = str(rule.get('fileDirectory') or rule.get('file_directory') or 'twitch_alert').replace('\\', '/').strip(' /')
+        safe_parts = [part for part in folder.split('/') if part not in {'', '.', '..'} and not any(char in part for char in '<>:"|?*')]
+        filename = Path(str(rule.get('fileName') or rule.get('file_name') or 'viewerstreak.txt')).name
+        if not filename.lower().endswith('.txt'):
+            filename += '.txt'
+        data_root = DATA_DIR.parent.resolve()
+        destination = (data_root.joinpath(*safe_parts) / filename).resolve()
+        if data_root != destination and data_root not in destination.parents:
+            raise ValueError('Dateipfad muss innerhalb von data liegen')
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(str(text or ''), encoding='utf-8')
+        self._log(f'Viewer-Streak in Datei geschrieben: {destination}')
 
     def _hide_automation_source(self, target: str, scene: str, source: str) -> None:
         try:
@@ -542,6 +572,45 @@ class Al3rtalotPlugin(ProviderPlugin):
                 self._apply_obs_rule('hide', scene, source, '')
         except Exception as exc:
             self._log(f'auto hide failed: {target} {scene}/{source}: {exc}')
+
+    def _resolve_auto_hide_callback(self, target: str, scene: str, source: str):
+        target = str(target or '').strip().lower()
+        if target == 'meld':
+            meld = self._get_plugin('meld_control')
+            layer = self._find_meld_layer(meld, scene, source)
+            layer_id = str((layer or {}).get('id') or '')
+            if meld is not None and layer_id:
+                def hide_meld() -> None:
+                    current_meld = self._get_plugin('meld_control') or meld
+                    ensure = getattr(current_meld, 'ensure_connected', None)
+                    if callable(ensure):
+                        connected, connect_detail = ensure(timeout=4.0)
+                        if not connected:
+                            self._log(f'auto hide meld reconnect failed: {connect_detail}')
+                            return
+                    current = self._find_meld_layer(current_meld, scene, source)
+                    current_id = str((current or {}).get('id') or layer_id)
+                    ok, detail = current_meld.set_session_property(current_id, 'visible', False, timeout=3.0)
+                    self._log(f'auto hide meld layer={current_id} ok={bool(ok)} detail={detail}')
+                return hide_meld
+        if target == 'obs':
+            obs = self._get_plugin('obs_control')
+            if obs is not None:
+                ok, matches = obs.find_matching_scene_items(source)
+                resolved = list(matches or []) if ok else []
+                if scene:
+                    scene_matches = [item for item in resolved if str(item.get('sceneName') or '').casefold() == str(scene).casefold()]
+                    if scene_matches:
+                        resolved = scene_matches
+                if resolved:
+                    def hide_obs() -> None:
+                        results = []
+                        for item in resolved:
+                            step_ok, detail = obs.request('SetSceneItemEnabled', {'sceneName': item['sceneName'], 'sceneItemId': int(item['sceneItemId']), 'sceneItemEnabled': False}, timeout=3.0)
+                            results.append(f"{item['sceneName']}:{item['sceneItemId']}={bool(step_ok)}:{detail}")
+                        self._log('auto hide obs ' + ' | '.join(results))
+                    return hide_obs
+        return lambda: self._hide_automation_source(target, scene, source)
 
     def _schedule_auto_hide(self, target: str, scene: str, source: str, rule: dict[str, Any] | None = None) -> None:
         source = str(source or '').strip()
@@ -565,7 +634,8 @@ class Al3rtalotPlugin(ProviderPlugin):
                     old.cancel()
                 except Exception:
                     pass
-            timer = threading.Timer(seconds, self._hide_automation_source, args=(str(target or '').strip().lower(), str(scene or '').strip(), source))
+            callback = self._resolve_auto_hide_callback(target, scene, source)
+            timer = threading.Timer(seconds, callback)
             timer.daemon = True
             self._auto_hide_timers[key] = timer
             timer.start()
@@ -711,8 +781,10 @@ class Al3rtalotPlugin(ProviderPlugin):
             return False, 'Meld-Quelle nicht gefunden'
         layer_id = str(layer.get('id') or '')
         if action == 'text':
-            ok, detail = meld.set_session_property(layer_id, 'text', text, timeout=3.0)
-            return bool(ok), str(detail or '')
+            text_ok, text_detail = meld.set_session_property(layer_id, 'text', text, timeout=3.0)
+            self._show_meld_parent_chain(meld, layer)
+            show_ok, show_detail = meld.set_session_property(layer_id, 'visible', True, timeout=3.0)
+            return bool(text_ok) and bool(show_ok), f'text={bool(text_ok)}:{text_detail} | show={bool(show_ok)}:{show_detail}'
         if action == 'text_show':
             text_ok, text_detail = meld.set_session_property(layer_id, 'text', text, timeout=3.0)
             self._show_meld_parent_chain(meld, layer)
@@ -780,8 +852,9 @@ class Al3rtalotPlugin(ProviderPlugin):
                 return True, 'Text geschrieben und von OBS bestaetigt'
             return True, f'Text geschrieben; Rueckpruefung fehlgeschlagen: {verify_detail}'
         if action == 'text':
-            ok, detail = set_obs_text()
-            return bool(ok), str(detail or '')
+            text_ok, text_detail = set_obs_text()
+            show_ok, show_detail = obs.set_source_visible(source_name, True)
+            return bool(text_ok) and bool(show_ok), f'text={bool(text_ok)}:{text_detail} | show={bool(show_ok)}:{show_detail}'
         if action == 'text_show':
             text_ok, text_detail = set_obs_text()
             try:

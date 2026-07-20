@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import contextlib
 import hashlib
 import json
 import os
@@ -521,6 +522,7 @@ class MeldControlPlugin(ThreadedPlugin):
     def __init__(self) -> None:
         super().__init__()
         self._lock = threading.Lock()
+        self._connect_lock = threading.Lock()
         self._response_cond = threading.Condition(self._lock)
         self._ws: _SimpleMeldWebSocket | None = None
         self._connected = False
@@ -848,11 +850,14 @@ class MeldControlPlugin(ThreadedPlugin):
 
             if not connected or ws is None:
                 try:
-                    ws, detail = self._connect_and_verify(settings, host)
-                    with self._lock:
-                        self._ws = ws
-                        self._connected = True
-                        self._last_detail = detail
+                    connected_ok, detail = self.ensure_connected(timeout=4.0)
+                    if connected_ok:
+                        with self._lock:
+                            ws = self._ws
+                            self._connected = True
+                            self._last_detail = detail
+                    else:
+                        raise RuntimeError(detail or 'Meld connect failed')
                     host.set_status(self.plugin_id, PluginStatus('connected', detail))
                     self._clear_throttled_log('meld_connecting')
                     self._clear_throttled_log('meld_connect_failed')
@@ -925,32 +930,53 @@ class MeldControlPlugin(ThreadedPlugin):
         with self._lock:
             if self._connected and self._ws is not None:
                 return True, self._last_detail or 'Connected'
+        with self._connect_lock:
+            with self._lock:
+                if self._connected and self._ws is not None:
+                    return True, self._last_detail or 'Connected'
+            settings = self._effective_settings(getattr(self, '_settings', {}) or {}, self._host)
+            deadline = time.time() + max(0.5, float(timeout or 5.0))
+            last_detail = 'Meld is not connected'
+            while time.time() < deadline and not self._stop.is_set():
+                try:
+                    ws, detail = self._connect_and_verify(settings, self._host)
+                    with self._lock:
+                        old_ws = self._ws
+                        self._ws = ws
+                        self._connected = True
+                        self._last_detail = detail
+                    if old_ws is not None and old_ws is not ws:
+                        with contextlib.suppress(Exception):
+                            old_ws.close()
+                    host = self._host
+                    if host is not None:
+                        with contextlib.suppress(Exception):
+                            host.set_status(self.plugin_id, PluginStatus('connected', detail))
+                        with contextlib.suppress(Exception):
+                            host.log(self.plugin_id, f'Meld reconnect OK: {detail}')
+                    return True, detail
+                except Exception as exc:
+                    last_detail = 'Meld ist nicht gestartet oder nicht erreichbar.' if self._is_connection_refused(exc) else f'Meld reconnect failed: {exc}'
+                    self._drop_connection()
+                    time.sleep(0.35)
+            return False, last_detail
+
+    def refresh_session(self, timeout: float = 6.0) -> tuple[bool, str, int]:
+        """Read a fresh snapshot without interrupting the active Meld connection."""
         settings = self._effective_settings(getattr(self, '_settings', {}) or {}, self._host)
-        deadline = time.time() + max(0.5, float(timeout or 5.0))
-        last_detail = 'Meld is not connected'
-        while time.time() < deadline and not self._stop.is_set():
-            try:
-                ws, detail = self._connect_and_verify(settings, self._host)
-                with self._lock:
-                    old_ws = self._ws
-                    self._ws = ws
-                    self._connected = True
-                    self._last_detail = detail
-                if old_ws is not None and old_ws is not ws:
-                    with contextlib.suppress(Exception):
-                        old_ws.close()
-                host = self._host
-                if host is not None:
-                    with contextlib.suppress(Exception):
-                        host.set_status(self.plugin_id, PluginStatus('connected', detail))
-                    with contextlib.suppress(Exception):
-                        host.log(self.plugin_id, f'Meld reconnect OK: {detail}')
-                return True, detail
-            except Exception as exc:
-                last_detail = 'Meld ist nicht gestartet oder nicht erreichbar.' if self._is_connection_refused(exc) else f'Meld reconnect failed: {exc}'
-                self._drop_connection()
-                time.sleep(0.35)
-        return False, last_detail
+        snapshot_ws = None
+        try:
+            with self._connect_lock:
+                snapshot_ws, detail = self._connect_and_verify(settings, self._host)
+            count = len(self.get_session_items())
+            return True, str(detail or 'Session refreshed'), count
+        except Exception as exc:
+            detail = 'Meld ist nicht gestartet oder nicht erreichbar.' if self._is_connection_refused(exc) else f'Meld session refresh failed: {exc}'
+            return False, detail, len(self.get_session_items())
+        finally:
+            if snapshot_ws is not None:
+                with contextlib.suppress(Exception):
+                    snapshot_ws.close()
 
     def get_session_items(self) -> dict[str, dict[str, Any]]:
         with self._lock:

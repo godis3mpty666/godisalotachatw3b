@@ -9,6 +9,27 @@ from shared.version import APP_VERSION
 APP_NAME = "godisalotachat webbased"
 VERSION = APP_VERSION
 
+def _automation_file_settings(raw: dict) -> tuple[bool, str, str]:
+    enabled_raw = raw.get("writeToFile") if raw.get("writeToFile") is not None else raw.get("write_to_file", False)
+    enabled = enabled_raw if isinstance(enabled_raw, bool) else str(enabled_raw).strip().lower() in {"1", "true", "yes", "ja", "on"}
+    folder = str(raw.get("fileDirectory") or raw.get("file_directory") or "twitch_alert").replace("\\", "/").strip(" /")
+    safe_parts = [part for part in folder.split("/") if part not in {"", ".", ".."} and not any(char in part for char in '<>:"|?*')]
+    folder = "/".join(safe_parts)[:240] or "twitch_alert"
+    filename = Path(str(raw.get("fileName") or raw.get("file_name") or "viewerstreak.txt")).name
+    if not filename.lower().endswith(".txt"):
+        filename += ".txt"
+    return bool(enabled), folder, filename[:160]
+
+def _write_automation_text_file(data_root: Path, raw: dict, text: str) -> Path:
+    _enabled, folder, filename = _automation_file_settings(raw)
+    root = Path(data_root).resolve()
+    destination = (root / folder / filename).resolve()
+    if root != destination and root not in destination.parents:
+        raise ValueError("Dateipfad muss innerhalb von data liegen")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(str(text or ""), encoding="utf-8")
+    return destination
+
 
 def _sanitize_automation_rules(value):
     if not isinstance(value, list):
@@ -29,6 +50,9 @@ def _sanitize_automation_rules(value):
         if action not in allowed_actions:
             action = "text"
         item = {
+            "id": str(raw.get("id") or secrets.token_hex(8)).strip()[:80],
+            "parentTrigger": str(raw.get("parentTrigger") or raw.get("parent_trigger") or "").strip()[:80],
+            "groupName": str(raw.get("groupName") or raw.get("group_name") or "").strip()[:120],
             "name": str(raw.get("name") or "").strip()[:120],
             "platform": platform,
             "value": str(raw.get("value") or "").strip().lower()[:80],
@@ -66,6 +90,10 @@ def _sanitize_automation_rules(value):
                 else:
                     streak_template = "<user> hat einen Streak von <amount> Streams erreicht"
             item["streakTemplate"] = streak_template
+            write_enabled, file_directory, file_name = _automation_file_settings(raw)
+            item["writeToFile"] = write_enabled
+            item["fileDirectory"] = file_directory
+            item["fileName"] = file_name
         if item["startup"] not in allowed_startup:
             item["startup"] = "keep"
         if not item["name"]:
@@ -244,22 +272,17 @@ def _desktop_dir() -> Path:
     return home
 
 
-UI_BROWSER_PROFILE_KEEP_FILES = {
-    ("Local State",),
-    ("Last Browser",),
-    ("Last Version",),
-    ("Variations",),
-    ("Default", "Preferences"),
-    ("Default", "Secure Preferences"),
-}
-UI_BROWSER_PROFILE_KEEP_DIRS = {
-    (),
-    ("Default",),
+UI_BROWSER_PROFILE_CACHE_DIRS = {
+    "cache", "code cache", "gpucache", "grshadercache", "shadercache",
+    "browsermetrics", "optimization_guide_model_store", "crashpad",
+    "blob_storage", "safe browsing", "extensions_crx_cache",
+    "component_crx_cache", "gpupersistentcache", "dawncache",
+    "dawngraphitecache", "dawnwebgpucache",
 }
 
 
 def prune_ui_browser_profile(profile_dir: Path | str) -> int:
-    """Keep only the portable UI browser profile bits worth carrying forward."""
+    """Remove disposable Chromium caches while preserving permissions and device salts."""
     profile = Path(profile_dir)
     removed = 0
     if not profile.exists():
@@ -268,12 +291,6 @@ def prune_ui_browser_profile(profile_dir: Path | str) -> int:
         profile = profile.resolve()
     except Exception:
         pass
-
-    def rel_parts(path: Path) -> tuple[str, ...]:
-        try:
-            return path.relative_to(profile).parts
-        except Exception:
-            return ()
 
     def remove_path(path: Path) -> None:
         nonlocal removed
@@ -292,21 +309,16 @@ def prune_ui_browser_profile(profile_dir: Path | str) -> int:
         except Exception:
             return
         for child in children:
-            parts = rel_parts(child)
             if child.is_dir():
-                if parts in UI_BROWSER_PROFILE_KEEP_DIRS:
-                    prune_dir(child)
-                else:
+                if child.name.lower() in UI_BROWSER_PROFILE_CACHE_DIRS:
                     remove_path(child)
+                else:
+                    prune_dir(child)
                 continue
-            if parts not in UI_BROWSER_PROFILE_KEEP_FILES:
+            if child.suffix.lower() == ".pma":
                 remove_path(child)
 
     prune_dir(profile)
-    try:
-        (profile / "Default").mkdir(parents=True, exist_ok=True)
-    except Exception:
-        pass
     return removed
 
 
@@ -4714,7 +4726,7 @@ class Handler(BaseHTTPRequestHandler):
             if isinstance(cached_targets, dict):
                 cached_value = cached_targets.get("targets") or {}
                 all_known_targets_connected = all(bool((cached_value.get(key) or {}).get("connected")) for key in ("obs", "meld"))
-                cache_ttl = 15.0 if all_known_targets_connected else 2.0
+                cache_ttl = 15.0 if all_known_targets_connected else 0.25
                 if time.time() - float(cached_targets.get("ts") or 0) < cache_ttl:
                     self._json({"ok": True, "targets": cached_value})
                     return
@@ -4764,9 +4776,6 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 meld = getattr(st, "plugin_instances", {}).get("meld_control")
                 if meld is not None:
-                    ensure = getattr(meld, "ensure_connected", None)
-                    if callable(ensure):
-                        ensure(timeout=2.5)
                     items = meld.get_session_items()
                     rows = [dict(value, id=key) for key, value in items.items()]
                     result["meld"]["scenes"] = sorted({str(row.get("name") or "") for row in rows if str(row.get("type") or "").lower() == "scene" and str(row.get("name") or "")}, key=str.casefold)
@@ -4783,6 +4792,8 @@ class Handler(BaseHTTPRequestHandler):
                         result["meld"]["sources_by_scene"][scene] = sorted(set(scene_layers), key=str.casefold)
                     result["meld"]["sources"] = sorted({source for names in result["meld"]["sources_by_scene"].values() for source in names}, key=str.casefold)
                     result["meld"]["connected"] = bool(getattr(meld, "is_connected", lambda: False)()) or bool(result["meld"]["scenes"] or result["meld"]["sources"])
+                    if not result["meld"]["connected"]:
+                        result["meld"]["detail"] = "Meld-Verbindung wird aufgebaut"
                     st.log("automation", "meld targets", f"connected={result['meld']['connected']} scenes={len(result['meld']['scenes'])} layers={len(result['meld']['sources'])}")
                 else:
                     result["meld"]["detail"] = "Meld-Control-Plugin ist nicht gestartet"
@@ -5207,12 +5218,17 @@ class Handler(BaseHTTPRequestHandler):
                 st.log("automation", "targets reload", f"OBS status: connected={bool(obs_ok)} detail={obs_detail}")
                 meld = st.plugin_instances.get("meld_control")
                 if meld is not None:
-                    ensure = getattr(meld, "ensure_connected", None)
-                    if callable(ensure):
-                        ensure(timeout=3.0)
+                    refresh = getattr(meld, "refresh_session", None)
+                    if callable(refresh):
+                        meld_ok, meld_detail, refreshed_count = refresh(timeout=6.0)
+                        st.log("automation", "targets reload", f"Meld session refreshed: ok={bool(meld_ok)} items={refreshed_count} detail={meld_detail}")
+                    else:
+                        ensure = getattr(meld, "ensure_connected", None)
+                        if callable(ensure):
+                            ensure(timeout=3.0)
                     items = meld.get_session_items() if hasattr(meld, "get_session_items") else {}
                     connected = bool(getattr(meld, "is_connected", lambda: False)())
-                    st.log("automation", "targets reload", f"Meld cache gelesen: connected={connected} items={len(items) if isinstance(items, dict) else 0}")
+                    st.log("automation", "targets reload", f"Meld cache neu gelesen: connected={connected} items={len(items) if isinstance(items, dict) else 0}")
                 else:
                     st.log("automation", "targets reload", "Meld-Control-Plugin ist nicht gestartet")
                 return self._json({"ok": True})
@@ -5235,6 +5251,13 @@ class Handler(BaseHTTPRequestHandler):
                     hide_seconds = max(0.0, min(3600.0, float(str(seconds_raw).replace(",", "."))))
                 except Exception:
                     hide_seconds = 4.0
+                write_enabled, _file_directory, _file_name = _automation_file_settings(data)
+                if write_enabled and str(data.get("platform") or "").lower() == "twitch" and str(data.get("value") or "").lower() == "latest_viewer_streak":
+                    try:
+                        written_path = _write_automation_text_file(st.data, data, preview_text)
+                        st.log("automation", "test file", f"Viewer-Streak geschrieben: {written_path}")
+                    except Exception as exc:
+                        return self._json({"ok": False, "error": f"Viewer-Streak-Datei konnte nicht geschrieben werden: {exc}"}, 400)
                 if target == "meld":
                     meld = st.plugin_instances.get("meld_control")
                     if meld is None:
@@ -5287,8 +5310,61 @@ class Handler(BaseHTTPRequestHandler):
                             st.log("automation", "test", f"Meld Quelle nicht gefunden: scene={scene_name} source={source_name}")
                             return self._json({"ok": False, "error": f"Gewählte Meld-Quelle wurde nicht gefunden: {scene_name} / {source_name}"}, 400)
                         matched_layer = str(match.get("_full_path") or match.get("name") or source_name)
+                        def schedule_test_meld_hide(layer_id):
+                            if hide_seconds <= 0:
+                                return
+                            def hide_source():
+                                current_meld = st.plugin_instances.get("meld_control") or meld
+                                ensure = getattr(current_meld, "ensure_connected", None)
+                                if callable(ensure):
+                                    connected, connect_detail = ensure(timeout=4.0)
+                                    if not connected:
+                                        st.log("automation", "test auto hide", f"meld reconnect failed: {connect_detail}")
+                                        return
+                                current_items = current_meld.get_session_items()
+                                finder = getattr(current_meld, "_find_target_layer", None)
+                                current = finder(scene_name, source_name) if callable(finder) else None
+                                current_id = str((current or {}).get("id") or layer_id)
+                                hide_ok, hide_detail = current_meld.set_session_property(current_id, "visible", False, timeout=3.0)
+                                st.log("automation", "test auto hide", f"meld layer={current_id} action={action} ok={bool(hide_ok)} detail={hide_detail}")
+                            timer = threading.Timer(hide_seconds, hide_source)
+                            timer.daemon = True
+                            timer.start()
                         if action == "text":
-                            ok, detail = meld.set_session_property(str(match["id"]), "text", preview_text, timeout=3.0)
+                            layer_id = str(match["id"])
+                            text_ok, text_detail = meld.set_session_property(layer_id, "text", preview_text, timeout=3.0)
+                            parent_id = str(match.get("parentId") or match.get("parent_id") or match.get("parent") or match.get("groupId") or match.get("group_id") or "")
+                            visited = set()
+                            while parent_id and parent_id not in visited:
+                                visited.add(parent_id)
+                                parent = items.get(parent_id)
+                                if not isinstance(parent, dict) or str(parent.get("type") or "").lower() == "scene":
+                                    break
+                                meld.set_session_property(parent_id, "visible", True, timeout=3.0)
+                                parent_id = str(parent.get("parentId") or parent.get("parent_id") or parent.get("parent") or parent.get("groupId") or parent.get("group_id") or "")
+                            show_ok, show_detail = meld.set_session_property(layer_id, "visible", True, timeout=3.0)
+                            if hide_seconds > 0:
+                                def hide_test_meld():
+                                    current_meld = st.plugin_instances.get("meld_control") or meld
+                                    ensure = getattr(current_meld, "ensure_connected", None)
+                                    if callable(ensure):
+                                        connected, connect_detail = ensure(timeout=4.0)
+                                        if not connected:
+                                            st.log("automation", "test auto hide", f"meld reconnect failed: {connect_detail}")
+                                            return
+                                    current_items = current_meld.get_session_items()
+                                    finder = getattr(current_meld, "_find_target_layer", None)
+                                    current = finder(scene_name, source_name) if callable(finder) else None
+                                    if current is None:
+                                        current = next((dict(value, id=key) for key, value in current_items.items() if str(value.get("name") or "").casefold() == source_name.casefold() and current_meld._item_matches_scene(value, scene_name.casefold(), current_items)), None)
+                                    current_id = str((current or {}).get("id") or layer_id)
+                                    hide_ok, hide_detail = current_meld.set_session_property(current_id, "visible", False, timeout=3.0)
+                                    st.log("automation", "test auto hide", f"meld layer={current_id} ok={bool(hide_ok)} detail={hide_detail}")
+                                timer = threading.Timer(hide_seconds, hide_test_meld)
+                                timer.daemon = True
+                                timer.start()
+                            ok = bool(text_ok) and bool(show_ok)
+                            detail = f"text={bool(text_ok)}:{text_detail} | show={bool(show_ok)}:{show_detail} | ausblenden nach {hide_seconds:g}s"
                         elif action == "text_show":
                             text_ok, text_detail = meld.set_session_property(str(match["id"]), "text", preview_text, timeout=3.0)
                             parent_id = str(match.get("parentId") or match.get("parent_id") or match.get("parent") or match.get("groupId") or match.get("group_id") or "")
@@ -5329,6 +5405,8 @@ class Handler(BaseHTTPRequestHandler):
                                     meld.set_session_property(parent_id, "visible", True, timeout=3.0)
                                     parent_id = str(parent.get("parentId") or parent.get("parent_id") or parent.get("parent") or parent.get("groupId") or parent.get("group_id") or "")
                             ok, detail = meld.set_session_property(str(match["id"]), "visible", visible, timeout=3.0)
+                            if visible:
+                                schedule_test_meld_hide(str(match["id"]))
                         elif action == "play":
                             layer_id = str(match["id"])
                             details = []
@@ -5347,6 +5425,7 @@ class Handler(BaseHTTPRequestHandler):
                             if not ok:
                                 ok = True
                                 detail = "Quelle neu sichtbar geschaltet; Meld hat keine Play-Funktion bestätigt. " + " | ".join(str(x) for x in details[-6:])
+                            schedule_test_meld_hide(layer_id)
                         else:
                             st.log("automation", "test", f"Unbekannte Aktion: {action}")
                             return self._json({"ok": False, "error": "Unbekannte Aktion."}, 400)
@@ -5369,7 +5448,17 @@ class Handler(BaseHTTPRequestHandler):
                             return True, f"Text geschrieben: {source_name} = {current[:120]}"
                         return True, f"Text geschrieben: {source_name}; Rueckpruefung fehlgeschlagen: {verify_detail}"
                     if action == "text":
-                        ok, detail = set_obs_text()
+                        text_ok, text_detail = set_obs_text()
+                        show_ok, show_detail = obs.set_source_visible(source_name, True)
+                        if hide_seconds > 0:
+                            def hide_test_obs():
+                                hide_ok, hide_detail = obs.set_source_visible(source_name, False)
+                                st.log("automation", "test auto hide", f"obs source={source_name} ok={bool(hide_ok)} detail={hide_detail}")
+                            timer = threading.Timer(hide_seconds, hide_test_obs)
+                            timer.daemon = True
+                            timer.start()
+                        ok = bool(text_ok) and bool(show_ok)
+                        detail = f"text={bool(text_ok)}:{text_detail} | show={bool(show_ok)}:{show_detail} | ausblenden nach {hide_seconds:g}s"
                     elif action == "text_show":
                         text_ok, text_detail = set_obs_text()
                         try:
@@ -5386,6 +5475,10 @@ class Handler(BaseHTTPRequestHandler):
                         detail = f"text={bool(text_ok)}:{text_detail} | show={bool(show_ok)}:{show_detail}"
                     elif action in {"show", "hide"}:
                         ok, detail = obs.set_source_visible(source_name, action == "show")
+                        if action == "show" and hide_seconds > 0:
+                            timer = threading.Timer(hide_seconds, lambda: obs.set_source_visible(source_name, False))
+                            timer.daemon = True
+                            timer.start()
                     elif action == "scene":
                         previous_scene = ""
                         if hide_seconds > 0:
@@ -5436,6 +5529,10 @@ class Handler(BaseHTTPRequestHandler):
                         details.append(f"show={bool(show_ok)}:{show_detail}")
                         ok = bool(show_ok)
                         detail = " | ".join(str(x) for x in details[-6:])
+                        if hide_seconds > 0:
+                            timer = threading.Timer(hide_seconds, lambda: obs.set_source_visible(source_name, False))
+                            timer.daemon = True
+                            timer.start()
                     else:
                         st.log("automation", "test", f"Unbekannte Aktion: {action}")
                         return self._json({"ok": False, "error": "Unbekannte Aktion."}, 400)

@@ -43,6 +43,12 @@ rem Zuletzt in der EXE verwendete Einstellungen, Tokens und Plugin-Daten sichern
 rem Wichtig: vorhandene Root-Auth vorher sichern. Ein leerer/frischer dist\webbased\data
 rem darf beim Rebuild keine funktionierenden OAuth-Dateien im Projektroot plattmachen.
 if exist temp rmdir /s /q temp
+if exist ".build_runtime_backup" rmdir /s /q ".build_runtime_backup"
+if exist "dist\webbased\data\ui_browser_profile" (
+    mkdir ".build_runtime_backup\ui_browser_profile" >nul 2>nul
+    robocopy "dist\webbased\data\ui_browser_profile" ".build_runtime_backup\ui_browser_profile" /E /R:5 /W:1 /NFL /NDL /NJH /NJS /NP >nul
+    if errorlevel 8 goto :fail
+)
 if exist "data\auth" (
     mkdir "temp\root_auth_backup" >nul 2>nul
     robocopy "data\auth" "temp\root_auth_backup" /E /R:2 /W:1 /NFL /NDL /NJH /NJS /NP >nul
@@ -115,10 +121,16 @@ rem Ko-fi Release-ZIP direkt aus dem dist-Ordner erstellen koennen.
 copy /Y "zip.bat" "dist\zip.bat" >nul
 if errorlevel 1 goto :fail
 
-rem Das isolierte Chrome/Edge-Profil fuer die Haupt-UI wird sehr schnell gross.
-rem Fuer die WebUI reichen Local State und die Default-Preferences; alles andere
-rem wird von Chromium beim naechsten Start neu erzeugt.
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$src=Join-Path (Resolve-Path 'data').Path 'ui_browser_profile'; $dst=Join-Path (Resolve-Path 'dist\webbased\data').Path 'ui_browser_profile'; if(Test-Path $dst){ Remove-Item -LiteralPath $dst -Recurse -Force -ErrorAction SilentlyContinue }; New-Item -ItemType Directory -Force -Path (Join-Path $dst 'Default') | Out-Null; $keep=@('Local State','Last Browser','Last Version','Variations','Default\Preferences','Default\Secure Preferences'); foreach($rel in $keep){ $from=Join-Path $src $rel; if(Test-Path -LiteralPath $from){ $to=Join-Path $dst $rel; New-Item -ItemType Directory -Force -Path (Split-Path $to -Parent) | Out-Null; Copy-Item -LiteralPath $from -Destination $to -Force -ErrorAction SilentlyContinue } }; $zip=Join-Path (Resolve-Path 'dist\webbased\data').Path 'ui_browser_profile.zip'; if(Test-Path $zip){ Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue }"
+rem Das bestehende Build-Browserprofil ueber den Rebuild hinweg erhalten. Darin
+rem liegen neben Preferences auch MediaDeviceSalts und die Lautsprecherfreigaben.
+if exist "dist\webbased\data\ui_browser_profile" rmdir /s /q "dist\webbased\data\ui_browser_profile"
+if exist ".build_runtime_backup\ui_browser_profile" (
+    robocopy ".build_runtime_backup\ui_browser_profile" "dist\webbased\data\ui_browser_profile" /E /R:5 /W:1 /NFL /NDL /NJH /NJS /NP >nul
+    if errorlevel 8 goto :fail
+) else if exist "data\ui_browser_profile" (
+    robocopy "data\ui_browser_profile" "dist\webbased\data\ui_browser_profile" /E /R:5 /W:1 /NFL /NDL /NJH /NJS /NP >nul
+    if errorlevel 8 goto :fail
+)
 
 rem Safety net fuer andere Chromium-Laufzeitdaten ausserhalb des UI-Profils.
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$data=(Resolve-Path 'dist\webbased\data').Path; $names=@('Cache','Code Cache','GPUCache','GrShaderCache','ShaderCache','BrowserMetrics','optimization_guide_model_store','Crashpad','blob_storage','Safe Browsing','extensions_crx_cache','component_crx_cache','GPUPersistentCache','DawnCache','DawnGraphiteCache','DawnWebGPUCache'); Get-ChildItem -LiteralPath $data -Directory -Recurse -Force | Where-Object { $names -contains $_.Name } | Sort-Object FullName -Descending | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue; Get-ChildItem -LiteralPath $data -File -Recurse -Force -Filter '*.pma' | Remove-Item -Force -ErrorAction SilentlyContinue"
@@ -127,6 +139,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "build\bump_build_version.ps
 if errorlevel 1 goto :fail
 
 if exist temp rmdir /s /q temp
+if exist ".build_runtime_backup" rmdir /s /q ".build_runtime_backup"
 set ERRORLEVEL=0
 echo.
 echo Fertig: dist\webbased\webbased.exe
