@@ -45,6 +45,7 @@ ASSETS_DIR = PLUGIN_DIR / 'assets'
 CORE_FILE = PLUGIN_DIR / 'spotis3mptify_core.py'
 LEGACY_TOKEN_FILE = PLUGIN_DIR / 'spotis3mptify_tokens.json'
 LOCAL_CONFIG_FILE = CONFIG_DIR / 'spotis3mptify_plugin_config.json'
+SRB_STATE_FILE = STATE_DIR / 'song_request_battle.json'
 
 
 def _ensure_data_dirs() -> None:
@@ -110,6 +111,15 @@ def _as_bool(value: Any, default: bool = False) -> bool:
     return default
 
 
+def _as_int(value: Any, default: int) -> int:
+    try:
+        if value is None or str(value).strip() == '':
+            return int(default)
+        return int(float(value))
+    except (TypeError, ValueError):
+        return int(default)
+
+
 def _safe_text(value: Any) -> str:
     return str(value or '').strip()
 
@@ -155,15 +165,17 @@ def _extract_service_command(text: str) -> str:
     if not raw:
         return ''
     low = raw.lower().strip()
-    for cmd in ('!sr+', '!sr', '!yt'):
+    if raw.lstrip().startswith('!'):
+        return raw.strip()
+    for cmd in ('!srb', '!stop', '!sr+', '!sr', '!yt'):
         if low == cmd or low.startswith(cmd + ' '):
             return raw.strip()
-    mention_match = re.search(r'(?i)(?:^|\s)@\S+\s+(!(?:sr\+?|yt)(?:\s+.+)?$)', raw.strip())
+    mention_match = re.search(r'(?i)(?:^|\s)@\S+\s+(!(?:srb|stop|sr\+?|yt)(?:\s+.+)?$)', raw.strip())
     if mention_match:
         return mention_match.group(1).strip()
     # Accept old bridge text like "Name from TT: !sr song" but only keep the
     # actual command, never the bridge label.
-    match = re.search(r'(?i)(?:^|:\s)(!(?:sr\+?|yt)(?:\s+.+)?$)', raw.strip())
+    match = re.search(r'(?i)(?:^|:\s)(!(?:srb|stop|sr\+?|yt)(?:\s+.+)?$)', raw.strip())
     return match.group(1).strip() if match else ''
 
 
@@ -422,7 +434,7 @@ class _DashboardWindow(QtWidgets.QWidget if QtWidgets is not None else object): 
 class Spotis3mptifyPlugin(ProviderPlugin):
     plugin_id = 'spotis3mptify'
     display_name = 'spotis3mptify'
-    version = '0.01'
+    version = '0.19'
     description = 'Spotify songrequests + Browseranzeige als godisalotachat Plugin.'
 
     def __init__(self) -> None:
@@ -433,6 +445,9 @@ class Spotis3mptifyPlugin(ProviderPlugin):
         self._recent_msg_keys: dict[str, float] = {}
         self._dashboard = None
         self._lock = threading.RLock()
+        self._srb_state: dict[str, Any] = {'points': {}, 'battle': None}
+        self._srb_stop = threading.Event()
+        self._srb_thread: threading.Thread | None = None
 
     def settings_schema(self) -> list[dict[str, Any]]:
         return [
@@ -457,6 +472,22 @@ class Spotis3mptifyPlugin(ProviderPlugin):
             {'key': 'play_now', 'type': 'bool', 'label': 'Request sofort spielen', 'default': False, 'tab': 'Requests'},
             {'key': 'queue_then_skip', 'type': 'bool', 'label': 'In Queue + direkt skippen', 'default': False, 'tab': 'Requests'},
             {'key': 'repeat_guard', 'type': 'bool', 'label': 'Repeat Track automatisch ausschalten', 'default': True, 'tab': 'Requests'},
+            {'key': 'srb_enabled', 'type': 'bool', 'label': 'Song Request Battle aktiv', 'default': True, 'tab': 'SR Battle'},
+            {'key': 'srb_test_enabled', 'type': 'bool', 'label': 'Testablauf mit !srb @test erlauben', 'default': False, 'tab': 'SR Battle'},
+            {'key': 'srb_command', 'label': 'Battle-Befehl', 'default': '!srb', 'tab': 'SR Battle'},
+            {'key': 'srb_stop_command', 'label': 'Stop-Befehl', 'default': '!stop', 'tab': 'SR Battle'},
+            {'key': 'srb_required_points', 'type': 'number', 'label': 'Benötigte Punkte', 'default': 3, 'min': 0, 'max': 1000, 'tab': 'SR Battle'},
+            {'key': 'srb_start_cost', 'type': 'number', 'label': 'Kosten beim Start', 'default': 2, 'min': 0, 'max': 1000, 'tab': 'SR Battle'},
+            {'key': 'srb_win_points', 'type': 'number', 'label': 'Punkte für Gewinner', 'default': 3, 'min': 0, 'max': 1000, 'tab': 'SR Battle'},
+            {'key': 'srb_stop_seconds', 'type': 'number', 'label': 'Zeit bis Stop (Sek.)', 'default': 30, 'min': 5, 'max': 600, 'tab': 'SR Battle'},
+            {'key': 'srb_request_seconds', 'type': 'number', 'label': 'Zeit für Request (Sek.)', 'default': 60, 'min': 5, 'max': 1800, 'tab': 'SR Battle'},
+            {'key': 'srb_text_started', 'type': 'template', 'label': 'Text: Battle gestartet', 'default': '{challenger} fordert {opponent} heraus! {opponent}, schreibe {stop_command}. Du hast {seconds} Sekunden.', 'tokens': ['{user}', '{challenger}', '{opponent}', '{points}', '{cost}', '{seconds}', '{stop_command}', '{request_command}'], 'wide': True, 'tab': 'SR Battle Texte'},
+            {'key': 'srb_text_letter', 'type': 'template', 'label': 'Text: Buchstabe', 'default': '{opponent} hat gestoppt. Buchstabe: {letter}. Requeste jetzt mit {request_command} eine passende Band und einen Song!', 'tokens': ['{user}', '{challenger}', '{opponent}', '{letter}', '{seconds}', '{stop_command}', '{request_command}'], 'wide': True, 'tab': 'SR Battle Texte'},
+            {'key': 'srb_text_wrong', 'type': 'template', 'label': 'Text: falscher Künstler', 'default': '{opponent}: {artist} beginnt nicht mit {letter}. Versuche es erneut – noch {seconds} Sekunden.', 'tokens': ['{user}', '{challenger}', '{opponent}', '{letter}', '{artist}', '{song}', '{seconds}'], 'wide': True, 'tab': 'SR Battle Texte'},
+            {'key': 'srb_text_winner', 'type': 'template', 'label': 'Text: gewonnen', 'default': '{winner} gewinnt mit {artist} – {song} und erhält {reward} Requestpunkte!', 'tokens': ['{user}', '{challenger}', '{opponent}', '{winner}', '{loser}', '{letter}', '{artist}', '{song}', '{points}', '{reward}'], 'wide': True, 'tab': 'SR Battle Texte'},
+            {'key': 'srb_text_timeout', 'type': 'template', 'label': 'Text: Zeit abgelaufen', 'default': 'Zeit abgelaufen! {winner} gewinnt und erhält {reward} Requestpunkte.', 'tokens': ['{user}', '{challenger}', '{opponent}', '{winner}', '{loser}', '{letter}', '{points}', '{reward}'], 'wide': True, 'tab': 'SR Battle Texte'},
+            {'key': 'srb_text_points', 'type': 'template', 'label': 'Text: Punktestand', 'default': '{user} hat {points} Requestpunkte.', 'tokens': ['{user}', '{points}', '{required}', '{cost}', '{reward}'], 'wide': True, 'tab': 'SR Battle Texte'},
+            {'key': 'srb_text_not_enough_points', 'type': 'template', 'label': 'Text: nicht genug Punkte', 'default': '@{user}, du hast erst {points} von {required} benötigten Requestpunkten. Requeste zunächst normale Songs oder gewinne ein Battle, zu dem du herausgefordert wurdest.', 'tokens': ['{user}', '{points}', '{required}', '{cost}', '{reward}', '{request_command}'], 'wide': True, 'tab': 'SR Battle Texte'},
             {'key': 'srplus_duration_min', 'type': 'number', 'label': 'SR+ Minuten', 'default': 15, 'min': 1, 'max': 240, 'tab': 'SR+'},
             {'key': 'srplus_once_per_stream', 'type': 'bool', 'label': 'SR+ nur einmal pro Stream', 'default': True, 'tab': 'SR+'},
             {'key': 'srplus_shuffle', 'type': 'bool', 'label': 'SR+ Shuffle', 'default': True, 'tab': 'SR+'},
@@ -489,6 +520,22 @@ class Spotis3mptifyPlugin(ProviderPlugin):
             'play_now': False,
             'queue_then_skip': False,
             'repeat_guard': True,
+            'srb_enabled': True,
+            'srb_test_enabled': False,
+            'srb_command': '!srb',
+            'srb_stop_command': '!stop',
+            'srb_required_points': 3,
+            'srb_start_cost': 2,
+            'srb_win_points': 3,
+            'srb_stop_seconds': 30,
+            'srb_request_seconds': 60,
+            'srb_text_started': '{challenger} fordert {opponent} heraus! {opponent}, schreibe {stop_command}. Du hast {seconds} Sekunden.',
+            'srb_text_letter': '{opponent} hat gestoppt. Buchstabe: {letter}. Requeste jetzt mit {request_command} eine passende Band und einen Song!',
+            'srb_text_wrong': '{opponent}: {artist} beginnt nicht mit {letter}. Versuche es erneut – noch {seconds} Sekunden.',
+            'srb_text_winner': '{winner} gewinnt mit {artist} – {song} und erhält {reward} Requestpunkte!',
+            'srb_text_timeout': 'Zeit abgelaufen! {winner} gewinnt und erhält {reward} Requestpunkte.',
+            'srb_text_points': '{user} hat {points} Requestpunkte.',
+            'srb_text_not_enough_points': '@{user}, du hast erst {points} von {required} benötigten Requestpunkten. Requeste zunächst normale Songs oder gewinne ein Battle, zu dem du herausgefordert wurdest.',
             'srplus_duration_min': 15,
             'srplus_once_per_stream': True,
             'srplus_shuffle': True,
@@ -665,8 +712,14 @@ class Spotis3mptifyPlugin(ProviderPlugin):
         self._settings['custom_overlay_url'] = url
         host.set_status(self.plugin_id, PluginStatus('connected', f'Overlay {url}'))
         self._log(f'Plugin gestartet Â· Spotify-only Â· Overlay {url}')
+        self._srb_load()
+        self._srb_stop.clear()
+        if self._srb_thread is None or not self._srb_thread.is_alive():
+            self._srb_thread = threading.Thread(target=self._srb_watch, name='spotis3mptify-srb', daemon=True)
+            self._srb_thread.start()
 
     def stop(self) -> None:
+        self._srb_stop.set()
         try:
             if self._core is not None:
                 self._core.stop_server()
@@ -777,10 +830,17 @@ class Spotis3mptifyPlugin(ProviderPlugin):
             return
         cmd = str(self._settings.get('sr_command') or '!sr').strip() or '!sr'
         cmd_plus = str(self._settings.get('srplus_command') or '!sr+').strip() or '!sr+'
+        cmd_srb = str(self._settings.get('srb_command') or '!srb').strip() or '!srb'
+        cmd_stop = str(self._settings.get('srb_stop_command') or '!stop').strip() or '!stop'
         low = text.lower().strip()
         action = ''
         query = ''
-        if low == cmd_plus.lower() or low.startswith(cmd_plus.lower() + ' '):
+        if low == cmd_stop.lower():
+            action = 'srb_stop'
+        elif low == cmd_srb.lower() or low.startswith(cmd_srb.lower() + ' '):
+            action = 'srb'
+            query = text[len(cmd_srb):].strip()
+        elif low == cmd_plus.lower() or low.startswith(cmd_plus.lower() + ' '):
             action = 'srplus'
             query = text[len(cmd_plus):].strip()
         elif low == cmd.lower() or low.startswith(cmd.lower() + ' '):
@@ -797,7 +857,11 @@ class Spotis3mptifyPlugin(ProviderPlugin):
             if key in self._recent_msg_keys:
                 return
             self._recent_msg_keys[key] = now
-        if action == 'srplus':
+        if action == 'srb_stop':
+            self._handle_srb_stop(platform, username)
+        elif action == 'srb':
+            self._handle_srb_start(platform, username, query)
+        elif action == 'srplus':
             self._handle_srplus(platform, username)
         elif query:
             self._handle_sr(platform, username, query)
@@ -815,11 +879,221 @@ class Spotis3mptifyPlugin(ProviderPlugin):
         with urllib.request.urlopen(req, timeout=25) as resp:
             return json.loads(resp.read().decode('utf-8', 'ignore') or '{}')
 
+    @staticmethod
+    def _srb_user_key(username: str) -> str:
+        return _clean_request_user(username).casefold()
+
+    def _srb_load(self) -> None:
+        with self._lock:
+            try:
+                data = json.loads(SRB_STATE_FILE.read_text(encoding='utf-8')) if SRB_STATE_FILE.exists() else {}
+            except Exception as exc:
+                self._log(f'SR Battle Zustand konnte nicht geladen werden: {exc}')
+                data = {}
+            points = data.get('points') if isinstance(data.get('points'), dict) else {}
+            battle = data.get('battle') if isinstance(data.get('battle'), dict) else None
+            if isinstance(battle, dict) and battle.get('phase') == 'resolving':
+                battle['phase'] = 'request'
+                battle['deadline'] = time.time() + max(5, _as_int(self._settings.get('srb_request_seconds'), 60))
+            self._srb_state = {'points': {str(k): max(0, int(v or 0)) for k, v in points.items()}, 'battle': battle}
+
+    def _srb_save_locked(self) -> None:
+        try:
+            SRB_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+            tmp = SRB_STATE_FILE.with_suffix('.tmp')
+            tmp.write_text(json.dumps(self._srb_state, ensure_ascii=False, indent=2), encoding='utf-8')
+            tmp.replace(SRB_STATE_FILE)
+        except Exception as exc:
+            self._log(f'SR Battle Zustand konnte nicht gespeichert werden: {exc}')
+
+    def _srb_points(self, username: str) -> int:
+        with self._lock:
+            return int((self._srb_state.get('points') or {}).get(self._srb_user_key(username), 0) or 0)
+
+    def _srb_add_points(self, username: str, amount: int) -> int:
+        key = self._srb_user_key(username)
+        with self._lock:
+            points = self._srb_state.setdefault('points', {})
+            points[key] = max(0, int(points.get(key, 0) or 0) + int(amount))
+            self._srb_save_locked()
+            return int(points[key])
+
+    def _srb_values(self, battle: dict[str, Any] | None = None, **extra: Any) -> dict[str, Any]:
+        battle = battle or {}
+        winner = str(extra.get('winner') or '')
+        challenger = str(battle.get('challenger') or '')
+        opponent = str(battle.get('opponent') or '')
+        loser = opponent if winner and self._srb_user_key(winner) == self._srb_user_key(challenger) else challenger
+        values: dict[str, Any] = {
+            'user': extra.get('user') or winner or challenger,
+            'challenger': challenger, 'opponent': opponent, 'winner': winner, 'loser': loser if winner else '',
+            'letter': battle.get('letter') or '', 'artist': extra.get('artist') or '', 'song': extra.get('song') or '',
+            'points': extra.get('points', ''), 'required': _as_int(self._settings.get('srb_required_points'), 3),
+            'cost': _as_int(self._settings.get('srb_start_cost'), 2),
+            'reward': _as_int(self._settings.get('srb_win_points'), 3),
+            'seconds': extra.get('seconds', ''),
+            'stop_command': str(self._settings.get('srb_stop_command') or '!stop'),
+            'request_command': str(self._settings.get('sr_command') or '!sr'),
+            'platform': battle.get('platform') or extra.get('platform') or '',
+        }
+        values.update(extra)
+        return values
+
+    def _srb_reply(self, platform: str, template_key: str, battle: dict[str, Any] | None = None, **extra: Any) -> None:
+        default = str(self.default_settings().get(template_key) or '')
+        template = str(self._settings.get(template_key) or default)
+        values = self._srb_values(battle, platform=platform, **extra)
+        try:
+            message = template.format_map({k: str(v) for k, v in values.items()})
+        except Exception as exc:
+            self._log(f'SR Battle Textvorlage {template_key} ungültig: {exc}')
+            message = default.format_map({k: str(v) for k, v in values.items()})
+        if message.strip():
+            self._reply(platform, message.strip())
+
+    def _srb_active_for_request(self, username: str) -> dict[str, Any] | None:
+        with self._lock:
+            battle = self._srb_state.get('battle')
+            if not isinstance(battle, dict) or battle.get('phase') != 'request':
+                return None
+            if self._srb_user_key(username) != str(battle.get('opponent_key') or ''):
+                return None
+            if float(battle.get('deadline') or 0) <= time.time():
+                return None
+            snapshot = dict(battle)
+            battle['phase'] = 'resolving'
+            self._srb_save_locked()
+            return snapshot
+
+    def _srb_resume_request(self, battle_snapshot: dict[str, Any] | None) -> None:
+        if not battle_snapshot:
+            return
+        with self._lock:
+            battle = self._srb_state.get('battle')
+            if not isinstance(battle, dict) or battle.get('phase') != 'resolving':
+                return
+            if battle.get('started_at') != battle_snapshot.get('started_at'):
+                return
+            battle['phase'] = 'request'
+            self._srb_save_locked()
+
+    def _handle_srb_start(self, platform: str, username: str, target: str) -> None:
+        if not _as_bool(self._settings.get('srb_enabled'), True):
+            return
+        target = _clean_request_user(target) if str(target or '').strip() else ''
+        if not str(target or '').strip() or target == 'someone':
+            points = self._srb_points(username)
+            self._srb_reply(platform, 'srb_text_points', user=username, points=points)
+            return
+        challenger_key = self._srb_user_key(username)
+        opponent_key = self._srb_user_key(target)
+        is_test_target = opponent_key in {'test', 'testen'}
+        test_mode = is_test_target and _as_bool(self._settings.get('srb_test_enabled'), False)
+        if is_test_target and not test_mode:
+            self._reply(platform, f'@{username} der SR-Battle-Testmodus ist deaktiviert.')
+            return
+        if test_mode:
+            opponent_key = challenger_key
+        elif challenger_key == opponent_key:
+            self._reply(platform, f'@{username} du kannst dich nicht selbst herausfordern.')
+            return
+        required = max(0, _as_int(self._settings.get('srb_required_points'), 3))
+        cost = max(0, _as_int(self._settings.get('srb_start_cost'), 2))
+        stop_seconds = max(5, _as_int(self._settings.get('srb_stop_seconds'), 30))
+        with self._lock:
+            if isinstance(self._srb_state.get('battle'), dict):
+                self._reply(platform, 'Es läuft bereits ein Song Request Battle.')
+                return
+            points = int(self._srb_state.setdefault('points', {}).get(challenger_key, 0) or 0)
+            if not test_mode and points < required:
+                self._srb_reply(platform, 'srb_text_not_enough_points', user=username,
+                                points=points, required=required)
+                return
+            if not test_mode:
+                self._srb_state['points'][challenger_key] = max(0, points - cost)
+            started = time.time()
+            battle = {'phase': 'stopping', 'challenger': username, 'challenger_key': challenger_key,
+                      'opponent': target, 'opponent_key': opponent_key, 'platform': platform,
+                      'started_at': started, 'deadline': started + stop_seconds, 'letter': '',
+                      'test_mode': test_mode}
+            self._srb_state['battle'] = battle
+            self._srb_save_locked()
+        self._srb_reply(platform, 'srb_text_started', battle, user=username,
+                        points=points if test_mode else max(0, points - cost),
+                        cost=0 if test_mode else cost, seconds=stop_seconds)
+        if test_mode:
+            self._reply(platform, f'@{username} Testmodus aktiv: Du übernimmst @test und schreibst selbst '
+                                  f'{self._settings.get("srb_stop_command") or "!stop"}.')
+
+    def _handle_srb_stop(self, platform: str, username: str) -> None:
+        now = time.time()
+        with self._lock:
+            battle = self._srb_state.get('battle')
+            if not isinstance(battle, dict) or battle.get('phase') != 'stopping':
+                return
+            if self._srb_user_key(username) != str(battle.get('opponent_key') or ''):
+                return
+            if float(battle.get('deadline') or 0) <= now:
+                return
+            elapsed = max(0.0, now - float(battle.get('started_at') or now))
+            letter = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'[int(elapsed / 0.20) % 26]
+            request_seconds = max(5, _as_int(self._settings.get('srb_request_seconds'), 60))
+            battle.update({'phase': 'request', 'letter': letter, 'deadline': now + request_seconds})
+            self._srb_save_locked()
+            snapshot = dict(battle)
+        self._srb_reply(platform, 'srb_text_letter', snapshot, user=username, seconds=request_seconds)
+
+    def _srb_finish(self, platform: str, winner: str, artist: str = '', song: str = '', timeout: bool = False) -> None:
+        with self._lock:
+            battle = self._srb_state.get('battle')
+            if not isinstance(battle, dict):
+                return
+            snapshot = dict(battle)
+            reward = max(0, _as_int(self._settings.get('srb_win_points'), 3))
+            key = self._srb_user_key(winner)
+            points = self._srb_state.setdefault('points', {})
+            if snapshot.get('test_mode'):
+                total = int(points.get(key, 0) or 0)
+            else:
+                points[key] = max(0, int(points.get(key, 0) or 0) + reward)
+                total = int(points[key])
+            self._srb_state['battle'] = None
+            self._srb_save_locked()
+        template = 'srb_text_timeout' if timeout else 'srb_text_winner'
+        self._srb_reply(platform or str(snapshot.get('platform') or ''), template, snapshot,
+                        user=winner, winner=winner, artist=artist, song=song, points=total,
+                        reward=0 if snapshot.get('test_mode') else reward)
+        if snapshot.get('test_mode'):
+            self._reply(platform or str(snapshot.get('platform') or ''),
+                        'SR-Battle-Test beendet – der Punktestand wurde nicht verändert.')
+
+    def _srb_watch(self) -> None:
+        while not self._srb_stop.wait(1.0):
+            expired: dict[str, Any] | None = None
+            with self._lock:
+                battle = self._srb_state.get('battle')
+                if (isinstance(battle, dict) and battle.get('phase') in {'stopping', 'request'}
+                        and float(battle.get('deadline') or 0) <= time.time()):
+                    expired = dict(battle)
+            if expired:
+                self._srb_finish(str(expired.get('platform') or ''), str(expired.get('challenger') or ''), timeout=True)
+
     def _handle_sr(self, platform: str, username: str, query: str) -> None:
         try:
-            res = self._post_json('/sr', {'q': query, 'user': username})
+            battle = self._srb_active_for_request(username)
+            payload = {'q': query, 'user': username}
+            if battle:
+                payload['expected_initial'] = battle.get('letter') or ''
+            res = self._post_json('/sr', payload)
             if not res.get('ok'):
                 err = str(res.get('error') or 'Request fehlgeschlagen')
+                if err == 'BATTLE_INITIAL' and battle:
+                    self._srb_resume_request(battle)
+                    remaining = max(0, int(float(battle.get('deadline') or 0) - time.time()))
+                    self._srb_reply(platform, 'srb_text_wrong', battle, user=username,
+                                    artist=str(res.get('artist') or ''), song=str(res.get('title') or ''), seconds=remaining)
+                    return
+                self._srb_resume_request(battle)
                 self._reply(platform, f'@{username} {_friendly_sr_error(err)}')
                 self._log(f'SR fehlgeschlagen: {username}@{platform} -> {query} Â· {err}')
                 return
@@ -829,7 +1103,12 @@ class Spotis3mptifyPlugin(ProviderPlugin):
             self._reply(platform, msg)
             self._broadcast_queue_reply(platform, msg)
             self._log(f'SR OK: {username}@{platform} -> {artist} - {title}')
+            if battle:
+                self._srb_finish(platform, winner=username, artist=artist, song=title, timeout=False)
+            else:
+                self._srb_add_points(username, 1)
         except urllib.error.HTTPError as exc:
+            self._srb_resume_request(locals().get('battle'))
             body = ''
             try:
                 body = exc.read().decode('utf-8', 'ignore')
@@ -842,6 +1121,7 @@ class Spotis3mptifyPlugin(ProviderPlugin):
             self._reply(platform, f'@{username} {msg}')
             self._log(f'SR HTTP Fehler: {msg}')
         except Exception as exc:
+            self._srb_resume_request(locals().get('battle'))
             self._reply(platform, f'@{username} Songrequest Fehler: {exc}')
             self._log(f'SR Fehler: {exc}')
 

@@ -1,7 +1,7 @@
 ﻿# File: spotis3mptify_core.py
 from __future__ import annotations
 import http.server, socketserver, threading, time, os, re, urllib.parse, urllib.request, urllib.error
-import json, random, sys, socket, ssl, select, base64, hashlib, shutil, subprocess
+import json, random, sys, socket, ssl, select, base64, hashlib, shutil, subprocess, unicodedata
 from typing import Callable, Optional, Dict, Any, Tuple
 
 # ======================= PORTABLE PATHS =======================
@@ -2002,7 +2002,15 @@ def _clean_sr_query(text):
     s = re.sub(r"\s+", " ", s).strip()
     return s
 
-def _handle_sr(q_raw, user):
+def _artist_battle_initial(artist):
+    """Return the first letter used by SR Battle (leading 'The' is ignored)."""
+    value = re.sub(r"^the\s+", "", str(artist or "").strip(), flags=re.I)
+    value = unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode("ascii")
+    match = re.search(r"[A-Za-z]", value)
+    return match.group(0).upper() if match else ""
+
+
+def _handle_sr(q_raw, user, expected_initial=""):
     rid = f"sr#{random.randint(100000,999999)}"
     at = _ensure_access_token()
     q = _clean_sr_query(urllib.parse.unquote_plus((q_raw or "").strip()))
@@ -2010,6 +2018,13 @@ def _handle_sr(q_raw, user):
     if not meta or not meta.get("uri"):
         logw(f"SR resolve failed for query: {q}")
         return None, "No track found"
+
+    expected = str(expected_initial or "").strip().upper()[:1]
+    actual = _artist_battle_initial(meta.get("artist"))
+    if expected and actual != expected:
+        return {"ok": False, "error": "BATTLE_INITIAL", "expected_initial": expected,
+                "actual_initial": actual, "id": meta.get("id", ""),
+                "title": meta.get("title", ""), "artist": meta.get("artist", "")}, "BATTLE_INITIAL"
 
     looks_like_link = "open.spotify.com" in q.lower() or "spoti.fi" in q.lower() or "spotify.link" in q.lower() or q.lower().startswith("spotify:track:")
     if looks_like_link:
@@ -3701,8 +3716,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 raw_q = (body.get("q") or ""); raw_user = (body.get("user") or "")
                 if not raw_q: return self._fail(400,"Missing q")
                 try:
-                    result, err = _handle_sr(raw_q, raw_user)
-                    if err: return self._ok({"ok":False,"error":err})
+                    expected_initial = (body.get("expected_initial") or "")
+                    result, err = _handle_sr(raw_q, raw_user, expected_initial)
+                    if err:
+                        if isinstance(result, dict): return self._ok(result)
+                        return self._ok({"ok":False,"error":err})
                     return self._ok(result)
                 except Exception as e:
                     return self._fail(500,str(e))
