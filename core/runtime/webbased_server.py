@@ -3734,6 +3734,14 @@ class AppState:
             cfg.setdefault("viewer_join_alerts", True)
         cfg["_ui_language"] = normalize_language(self.settings().get("ui", {}).get("language", "de"))
         cfg["_main_ui_base"] = f"http://127.0.0.1:{self.port}"
+        try:
+            normalize_settings = getattr(plugin, "normalize_settings", None)
+            if callable(normalize_settings):
+                normalized = normalize_settings(cfg, cfg["_ui_language"])
+                if isinstance(normalized, dict):
+                    cfg = normalized
+        except Exception:
+            pass
         return cfg
 
     def plugin_list(self):
@@ -4904,7 +4912,7 @@ class Handler(BaseHTTPRequestHandler):
                 for raw_field in schema:
                     field = dict(raw_field) if isinstance(raw_field, dict) else raw_field
                     if isinstance(field, dict):
-                        for base_key in ("label", "help", "placeholder", "button_text", "tab", "ui_tab", "category"):
+                        for base_key in ("label", "help", "placeholder", "button_text", "tab", "ui_tab", "category", "default"):
                             english_key = base_key + "_en"
                             if field.get(english_key):
                                 field[base_key] = field[english_key]

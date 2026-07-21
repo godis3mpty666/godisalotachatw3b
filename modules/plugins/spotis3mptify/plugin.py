@@ -47,6 +47,43 @@ LEGACY_TOKEN_FILE = PLUGIN_DIR / 'spotis3mptify_tokens.json'
 LOCAL_CONFIG_FILE = CONFIG_DIR / 'spotis3mptify_plugin_config.json'
 SRB_STATE_FILE = STATE_DIR / 'song_request_battle.json'
 
+SRB_TEXT_DEFAULTS_DE = {
+    'srb_text_started': '{challenger} fordert {opponent} heraus! {opponent}, schreibe {stop_command}. Du hast {seconds} Sekunden.',
+    'srb_text_letter': '{opponent} hat gestoppt. Buchstabe: {letter}. Requeste jetzt mit {request_command} eine passende Band und einen Song!',
+    'srb_text_wrong': '{opponent}: {artist} beginnt nicht mit {letter}. Versuche es erneut - noch {seconds} Sekunden.',
+    'srb_text_winner': '{winner} gewinnt mit {artist} - {song} und erhält {reward} Requestpunkte!',
+    'srb_text_timeout': 'Zeit abgelaufen! {winner} gewinnt und erhält {reward} Requestpunkte.',
+    'srb_text_points': '{user} hat {points} Requestpunkte.',
+    'srb_text_not_enough_points': '@{user}, du hast erst {points} von {required} benötigten Requestpunkten. Requeste zunächst normale Songs oder gewinne ein Battle, zu dem du herausgefordert wurdest.',
+}
+
+SRB_TEXT_DEFAULTS_EN = {
+    'srb_text_started': '{challenger} challenges {opponent}! {opponent}, type {stop_command}. You have {seconds} seconds.',
+    'srb_text_letter': '{opponent} stopped the timer. Letter: {letter}. Request a matching artist and song with {request_command} now!',
+    'srb_text_wrong': '{opponent}: {artist} does not start with {letter}. Try again - {seconds} seconds left.',
+    'srb_text_winner': '{winner} wins with {artist} - {song} and gets {reward} request points!',
+    'srb_text_timeout': 'Time is up! {winner} wins and gets {reward} request points.',
+    'srb_text_points': '{user} has {points} request points.',
+    'srb_text_not_enough_points': '@{user}, you only have {points} of {required} required request points. Request normal songs first or win a battle you were challenged to.',
+}
+
+SRB_TEXT_DEFAULT_ALIASES = {
+    'srb_text_started': {
+        '{challenger} fordert {opponent} heraus! {opponent}, schreibe {stop_command}. Du hast {Sekunden} Sekunden.',
+        '{challenger} fordert {opponent} heraus! {opponent}, schreibe {stop_command}. Du hast {seconds} seconds.',
+    },
+    'srb_text_letter': {
+        '{opponent} hat gestoppt. Buchstabe: {letter}. Requeste jetzt mit {request_command} eine passende Band und einen Lied!',
+        '{opponent} hat gestoppt. Buchstabe: {letter}. Requeste jetzt with {request_command} eine passende Band and einen Song!',
+    },
+    'srb_text_wrong': {
+        '{opponent}: {artist} beginnt nicht mit {letter}. Versuche es erneut – noch {Sekunden} Sekunden.',
+    },
+    'srb_text_winner': {
+        '{winner} gewinnt mit {artist} – {song} und erhält {reward} Requestpunkte!',
+    },
+}
+
 
 def _ensure_data_dirs() -> None:
     for path in (DATA_DIR, AUTH_DIR, CENTRAL_AUTH_DIR, CONFIG_DIR, NOWPLAYING_DIR, COVERS_DIR, PLAYLISTS_DIR, STATE_DIR, EXPORT_DIR, CERTS_DIR, YOUTUBE_DIR):
@@ -123,6 +160,29 @@ def _as_int(value: Any, default: int) -> int:
 def _safe_text(value: Any) -> str:
     return str(value or '').strip()
 
+
+def _normalize_default_text(value: Any) -> str:
+    return str(value or '').strip().replace('–', '-').replace('  ', ' ').strip()
+
+
+def _is_srb_default_text(key: str, value: Any) -> bool:
+    text = _normalize_default_text(value)
+    defaults = {
+        _normalize_default_text(SRB_TEXT_DEFAULTS_DE.get(key)),
+        _normalize_default_text(SRB_TEXT_DEFAULTS_EN.get(key)),
+    }
+    defaults.update(_normalize_default_text(item) for item in SRB_TEXT_DEFAULT_ALIASES.get(key, set()))
+    return text in defaults
+
+
+def _apply_language_default_texts(settings: dict[str, Any], language: str) -> dict[str, Any]:
+    target = SRB_TEXT_DEFAULTS_EN if str(language or '').lower().startswith('en') else SRB_TEXT_DEFAULTS_DE
+    for key, default_value in target.items():
+        if not str(settings.get(key) or '').strip() or _is_srb_default_text(key, settings.get(key)):
+            settings[key] = default_value
+    return settings
+
+
 def _spotify_expires_at(data: dict[str, Any]) -> float:
     try:
         explicit = float(data.get('expires_at') or 0)
@@ -167,15 +227,15 @@ def _extract_service_command(text: str) -> str:
     low = raw.lower().strip()
     if raw.lstrip().startswith('!'):
         return raw.strip()
-    for cmd in ('!srb', '!stop', '!sr+', '!sr', '!yt'):
+    for cmd in ('!srpoints', '!srb', '!stop', '!sr+', '!sr', '!yt'):
         if low == cmd or low.startswith(cmd + ' '):
             return raw.strip()
-    mention_match = re.search(r'(?i)(?:^|\s)@\S+\s+(!(?:srb|stop|sr\+?|yt)(?:\s+.+)?$)', raw.strip())
+    mention_match = re.search(r'(?i)(?:^|\s)@\S+\s+(!(?:srpoints|srb|stop|sr\+?|yt)(?:\s+.+)?$)', raw.strip())
     if mention_match:
         return mention_match.group(1).strip()
     # Accept old bridge text like "Name from TT: !sr song" but only keep the
     # actual command, never the bridge label.
-    match = re.search(r'(?i)(?:^|:\s)(!(?:srb|stop|sr\+?|yt)(?:\s+.+)?$)', raw.strip())
+    match = re.search(r'(?i)(?:^|:\s)(!(?:srpoints|srb|stop|sr\+?|yt)(?:\s+.+)?$)', raw.strip())
     return match.group(1).strip() if match else ''
 
 
@@ -386,8 +446,7 @@ class _DashboardWindow(QtWidgets.QWidget if QtWidgets is not None else object): 
             self.playlist_cover_combo.clear()
             names = _asset_image_names()
             if not names:
-                english = str(self.plugin._settings.get('_ui_language') or 'de').lower().startswith('en')
-                self.playlist_cover_combo.addItem('No .jpg/.jpeg files found in assets' if english else 'Keine .jpg/.jpeg-Dateien in Assets gefunden')
+                self.playlist_cover_combo.addItem('No .jpg/.jpeg files found in assets')
                 self.playlist_cover_combo.setEnabled(False)
             else:
                 self.playlist_cover_combo.setEnabled(True)
@@ -451,49 +510,50 @@ class Spotis3mptifyPlugin(ProviderPlugin):
 
     def settings_schema(self) -> list[dict[str, Any]]:
         return [
-            {'key': 'enabled', 'type': 'bool', 'label': 'Plugin aktiv', 'default': True, 'tab': 'Allgemein'},
-            {'key': 'autoconnect', 'type': 'bool', 'label': 'Beim App-Start automatisch verbinden', 'default': True, 'tab': 'Allgemein'},
-            {'key': 'button_open_dashboard', 'type': 'button', 'label': 'Dashboard', 'button_text': 'Dashboard mit Cover Ã¶ffnen', 'tab': 'Allgemein'},
-            {'key': 'button_open_overlay', 'type': 'button', 'label': 'Browseranzeige', 'button_text': 'Browseranzeige Ã¶ffnen', 'tab': 'Allgemein'},
+            {'key': 'enabled', 'type': 'bool', 'label': 'Plugin aktiv', 'label_en': 'Plugin enabled', 'default': True, 'tab': 'Allgemein', 'tab_en': 'General'},
+            {'key': 'autoconnect', 'type': 'bool', 'label': 'Beim App-Start automatisch verbinden', 'label_en': 'Connect automatically on app start', 'default': True, 'tab': 'Allgemein', 'tab_en': 'General'},
+            {'key': 'button_open_dashboard', 'type': 'button', 'label': 'Dashboard', 'button_text': 'Dashboard mit Cover oeffnen', 'button_text_en': 'Open dashboard with cover', 'tab': 'Allgemein', 'tab_en': 'General'},
+            {'key': 'button_open_overlay', 'type': 'button', 'label': 'Browseranzeige', 'label_en': 'Browser overlay', 'button_text': 'Browseranzeige oeffnen', 'button_text_en': 'Open browser overlay', 'tab': 'Allgemein', 'tab_en': 'General'},
             {'key': 'port', 'type': 'number', 'label': 'Browser/API Port', 'default': DEFAULT_API_PORT, 'min': 1024, 'max': 65535, 'tab': 'Browser'},
-            {'key': 'custom_overlay_url', 'label': 'Browseranzeige URL', 'readonly': True, 'tab': 'Browser'},
+            {'key': 'custom_overlay_url', 'label': 'Browseranzeige URL', 'label_en': 'Browser overlay URL', 'readonly': True, 'tab': 'Browser'},
             {'key': 'poll_ms', 'type': 'number', 'label': 'NowPlaying Poll ms', 'default': 2000, 'min': 500, 'max': 60000, 'tab': 'Browser'},
-            {'key': 'cover_image_size', 'type': 'number', 'label': 'CovergrÃ¶ÃŸe Datei', 'default': 640, 'min': 64, 'max': 640, 'tab': 'Browser'},
-            {'key': 'sr_command', 'label': 'Songrequest Befehl', 'default': '!sr', 'tab': 'Requests'},
-            {'key': 'srplus_command', 'label': 'SR+ Befehl', 'default': '!sr+', 'tab': 'Requests'},
-            {'key': 'reply_enabled', 'type': 'bool', 'label': 'Antwort in Ursprungsplattform senden', 'default': True, 'tab': 'Requests'},
-            {'key': 'broadcast_queue_reply', 'type': 'bool', 'label': 'Queue-Antwort auf andere Plattformen spiegeln', 'default': True, 'tab': 'Requests'},
-            {'key': 'allowed_platforms', 'label': 'Erlaubte Plattformen leer=alle', 'placeholder': 'twitch,tiktok,youtube,kick', 'tab': 'Requests'},
-            {'key': 'cooldown_minutes', 'type': 'number', 'label': 'Link Cooldown Minuten', 'default': 60, 'min': 0, 'max': 10080, 'tab': 'Requests'},
-            {'key': 'playlist_prefix', 'label': 'User-Playlist Prefix', 'default': 'Spotis3mptify - ', 'tab': 'Requests'},
-            {'key': 'playlist_cover_enabled', 'type': 'bool', 'label': 'Playlist-Cover setzen', 'default': True, 'tab': 'Requests'},
-            {'key': 'playlist_cover_image', 'label': 'Playlist-Cover Datei (.jpg aus assets)', 'default': 'pl_cover.jpg', 'placeholder': 'pl_cover.jpg', 'tab': 'Requests'},
-            {'key': 'playlist_cover_assets_hint', 'label': 'Gefundene Coverbilder', 'readonly': True, 'default': ', '.join(_asset_image_names()) or 'Keine .jpg/.jpeg in assets', 'tab': 'Requests'},
-            {'key': 'play_now', 'type': 'bool', 'label': 'Request sofort spielen', 'default': False, 'tab': 'Requests'},
-            {'key': 'queue_then_skip', 'type': 'bool', 'label': 'In Queue + direkt skippen', 'default': False, 'tab': 'Requests'},
-            {'key': 'repeat_guard', 'type': 'bool', 'label': 'Repeat Track automatisch ausschalten', 'default': True, 'tab': 'Requests'},
-            {'key': 'srb_enabled', 'type': 'bool', 'label': 'Song Request Battle aktiv', 'default': True, 'tab': 'SR Battle'},
-            {'key': 'srb_test_enabled', 'type': 'bool', 'label': 'Testablauf mit !srb @test erlauben', 'default': False, 'tab': 'SR Battle'},
-            {'key': 'srb_command', 'label': 'Battle-Befehl', 'default': '!srb', 'tab': 'SR Battle'},
-            {'key': 'srb_stop_command', 'label': 'Stop-Befehl', 'default': '!stop', 'tab': 'SR Battle'},
-            {'key': 'srb_required_points', 'type': 'number', 'label': 'Benötigte Punkte', 'default': 3, 'min': 0, 'max': 1000, 'tab': 'SR Battle'},
-            {'key': 'srb_start_cost', 'type': 'number', 'label': 'Kosten beim Start', 'default': 2, 'min': 0, 'max': 1000, 'tab': 'SR Battle'},
-            {'key': 'srb_win_points', 'type': 'number', 'label': 'Punkte für Gewinner', 'default': 3, 'min': 0, 'max': 1000, 'tab': 'SR Battle'},
-            {'key': 'srb_stop_seconds', 'type': 'number', 'label': 'Zeit bis Stop (Sek.)', 'default': 30, 'min': 5, 'max': 600, 'tab': 'SR Battle'},
-            {'key': 'srb_request_seconds', 'type': 'number', 'label': 'Zeit für Request (Sek.)', 'default': 60, 'min': 5, 'max': 1800, 'tab': 'SR Battle'},
-            {'key': 'srb_text_started', 'type': 'template', 'label': 'Text: Battle gestartet', 'default': '{challenger} fordert {opponent} heraus! {opponent}, schreibe {stop_command}. Du hast {seconds} Sekunden.', 'tokens': ['{user}', '{challenger}', '{opponent}', '{points}', '{cost}', '{seconds}', '{stop_command}', '{request_command}'], 'wide': True, 'tab': 'SR Battle Texte'},
-            {'key': 'srb_text_letter', 'type': 'template', 'label': 'Text: Buchstabe', 'default': '{opponent} hat gestoppt. Buchstabe: {letter}. Requeste jetzt mit {request_command} eine passende Band und einen Song!', 'tokens': ['{user}', '{challenger}', '{opponent}', '{letter}', '{seconds}', '{stop_command}', '{request_command}'], 'wide': True, 'tab': 'SR Battle Texte'},
-            {'key': 'srb_text_wrong', 'type': 'template', 'label': 'Text: falscher Künstler', 'default': '{opponent}: {artist} beginnt nicht mit {letter}. Versuche es erneut – noch {seconds} Sekunden.', 'tokens': ['{user}', '{challenger}', '{opponent}', '{letter}', '{artist}', '{song}', '{seconds}'], 'wide': True, 'tab': 'SR Battle Texte'},
-            {'key': 'srb_text_winner', 'type': 'template', 'label': 'Text: gewonnen', 'default': '{winner} gewinnt mit {artist} – {song} und erhält {reward} Requestpunkte!', 'tokens': ['{user}', '{challenger}', '{opponent}', '{winner}', '{loser}', '{letter}', '{artist}', '{song}', '{points}', '{reward}'], 'wide': True, 'tab': 'SR Battle Texte'},
-            {'key': 'srb_text_timeout', 'type': 'template', 'label': 'Text: Zeit abgelaufen', 'default': 'Zeit abgelaufen! {winner} gewinnt und erhält {reward} Requestpunkte.', 'tokens': ['{user}', '{challenger}', '{opponent}', '{winner}', '{loser}', '{letter}', '{points}', '{reward}'], 'wide': True, 'tab': 'SR Battle Texte'},
-            {'key': 'srb_text_points', 'type': 'template', 'label': 'Text: Punktestand', 'default': '{user} hat {points} Requestpunkte.', 'tokens': ['{user}', '{points}', '{required}', '{cost}', '{reward}'], 'wide': True, 'tab': 'SR Battle Texte'},
-            {'key': 'srb_text_not_enough_points', 'type': 'template', 'label': 'Text: nicht genug Punkte', 'default': '@{user}, du hast erst {points} von {required} benötigten Requestpunkten. Requeste zunächst normale Songs oder gewinne ein Battle, zu dem du herausgefordert wurdest.', 'tokens': ['{user}', '{points}', '{required}', '{cost}', '{reward}', '{request_command}'], 'wide': True, 'tab': 'SR Battle Texte'},
-            {'key': 'srplus_duration_min', 'type': 'number', 'label': 'SR+ Minuten', 'default': 15, 'min': 1, 'max': 240, 'tab': 'SR+'},
-            {'key': 'srplus_once_per_stream', 'type': 'bool', 'label': 'SR+ nur einmal pro Stream', 'default': True, 'tab': 'SR+'},
+            {'key': 'cover_image_size', 'type': 'number', 'label': 'Covergroesse Datei', 'label_en': 'Cover file size', 'default': 640, 'min': 64, 'max': 640, 'tab': 'Browser'},
+            {'key': 'sr_command', 'label': 'Songrequest Befehl', 'label_en': 'Song request command', 'default': '!sr', 'tab': 'Anfragen', 'tab_en': 'Requests'},
+            {'key': 'srplus_command', 'label': 'SR+ Befehl', 'label_en': 'SR+ command', 'default': '!sr+', 'tab': 'Anfragen', 'tab_en': 'Requests'},
+            {'key': 'reply_enabled', 'type': 'bool', 'label': 'Antwort in Ursprungsplattform senden', 'label_en': 'Reply on source platform', 'default': True, 'tab': 'Anfragen', 'tab_en': 'Requests'},
+            {'key': 'broadcast_queue_reply', 'type': 'bool', 'label': 'Queue-Antwort auf andere Plattformen spiegeln', 'label_en': 'Mirror queue reply to other platforms', 'default': True, 'tab': 'Anfragen', 'tab_en': 'Requests'},
+            {'key': 'allowed_platforms', 'label': 'Erlaubte Plattformen leer=alle', 'label_en': 'Allowed platforms empty=all', 'placeholder': 'twitch,tiktok,youtube,kick', 'tab': 'Anfragen', 'tab_en': 'Requests'},
+            {'key': 'cooldown_minutes', 'type': 'number', 'label': 'Link Cooldown Minuten', 'label_en': 'Link cooldown minutes', 'default': 60, 'min': 0, 'max': 10080, 'tab': 'Anfragen', 'tab_en': 'Requests'},
+            {'key': 'playlist_prefix', 'label': 'User-Playlist Prefix', 'label_en': 'User playlist prefix', 'default': 'Spotis3mptify - ', 'tab': 'Anfragen', 'tab_en': 'Requests'},
+            {'key': 'playlist_cover_enabled', 'type': 'bool', 'label': 'Playlist-Cover setzen', 'label_en': 'Set playlist cover', 'default': True, 'tab': 'Anfragen', 'tab_en': 'Requests'},
+            {'key': 'playlist_cover_image', 'label': 'Playlist-Cover Datei (.jpg aus assets)', 'label_en': 'Playlist cover file (.jpg from assets)', 'default': 'pl_cover.jpg', 'placeholder': 'pl_cover.jpg', 'tab': 'Anfragen', 'tab_en': 'Requests'},
+            {'key': 'playlist_cover_assets_hint', 'label': 'Gefundene Coverbilder', 'label_en': 'Found cover images', 'readonly': True, 'default': ', '.join(_asset_image_names()) or 'Keine .jpg/.jpeg in assets', 'default_en': ', '.join(_asset_image_names()) or 'No .jpg/.jpeg files in assets', 'tab': 'Anfragen', 'tab_en': 'Requests'},
+            {'key': 'play_now', 'type': 'bool', 'label': 'Request sofort spielen', 'label_en': 'Play request immediately', 'default': False, 'tab': 'Anfragen', 'tab_en': 'Requests'},
+            {'key': 'queue_then_skip', 'type': 'bool', 'label': 'In Queue + direkt skippen', 'label_en': 'Queue and skip immediately', 'default': False, 'tab': 'Anfragen', 'tab_en': 'Requests'},
+            {'key': 'repeat_guard', 'type': 'bool', 'label': 'Repeat Track automatisch ausschalten', 'label_en': 'Disable repeat track automatically', 'default': True, 'tab': 'Anfragen', 'tab_en': 'Requests'},
+            {'key': 'srb_enabled', 'type': 'bool', 'label': 'Song Request Battle aktiv', 'label_en': 'Song Request Battle enabled', 'default': True, 'tab': 'SR Battle'},
+            {'key': 'srb_test_enabled', 'type': 'bool', 'label': 'Testablauf mit !srb @testen erlauben', 'label_en': 'Allow test flow with !srb @testen', 'default': False, 'tab': 'SR Battle'},
+            {'key': 'srb_command', 'label': 'Battle-Befehl', 'label_en': 'Battle command', 'default': '!srb', 'tab': 'SR Battle'},
+            {'key': 'srb_stop_command', 'label': 'Stop-Befehl', 'label_en': 'Stop command', 'default': '!stop', 'tab': 'SR Battle'},
+            {'key': 'srb_points_command', 'label': 'Punkte-Befehl', 'label_en': 'Points command', 'default': '!srpoints', 'tab': 'SR Battle'},
+            {'key': 'srb_required_points', 'type': 'number', 'label': 'Benötigte Punkte', 'label_en': 'Required points', 'default': 3, 'min': 0, 'max': 1000, 'tab': 'SR Battle'},
+            {'key': 'srb_start_cost', 'type': 'number', 'label': 'Kosten beim Start', 'label_en': 'Start cost', 'default': 2, 'min': 0, 'max': 1000, 'tab': 'SR Battle'},
+            {'key': 'srb_win_points', 'type': 'number', 'label': 'Punkte für Gewinner', 'label_en': 'Winner points', 'default': 3, 'min': 0, 'max': 1000, 'tab': 'SR Battle'},
+            {'key': 'srb_stop_seconds', 'type': 'number', 'label': 'Zeit bis Stop (Sek.)', 'label_en': 'Stop time (sec.)', 'default': 30, 'min': 5, 'max': 600, 'tab': 'SR Battle'},
+            {'key': 'srb_request_seconds', 'type': 'number', 'label': 'Zeit für Request (Sek.)', 'label_en': 'Request time (sec.)', 'default': 60, 'min': 5, 'max': 1800, 'tab': 'SR Battle'},
+            {'key': 'srb_text_started', 'type': 'template', 'label': 'Text: Battle gestartet', 'label_en': 'Text: battle started', 'default': SRB_TEXT_DEFAULTS_DE['srb_text_started'], 'default_en': SRB_TEXT_DEFAULTS_EN['srb_text_started'], 'tokens': ['{user}', '{challenger}', '{opponent}', '{points}', '{cost}', '{seconds}', '{stop_command}', '{request_command}'], 'wide': True, 'tab': 'SR Battle Texte', 'tab_en': 'SR Battle Texts'},
+            {'key': 'srb_text_letter', 'type': 'template', 'label': 'Text: Buchstabe', 'label_en': 'Text: letter', 'default': SRB_TEXT_DEFAULTS_DE['srb_text_letter'], 'default_en': SRB_TEXT_DEFAULTS_EN['srb_text_letter'], 'tokens': ['{user}', '{challenger}', '{opponent}', '{letter}', '{seconds}', '{stop_command}', '{request_command}'], 'wide': True, 'tab': 'SR Battle Texte', 'tab_en': 'SR Battle Texts'},
+            {'key': 'srb_text_wrong', 'type': 'template', 'label': 'Text: falscher Kuenstler', 'label_en': 'Text: wrong artist', 'default': SRB_TEXT_DEFAULTS_DE['srb_text_wrong'], 'default_en': SRB_TEXT_DEFAULTS_EN['srb_text_wrong'], 'tokens': ['{user}', '{challenger}', '{opponent}', '{letter}', '{artist}', '{song}', '{seconds}'], 'wide': True, 'tab': 'SR Battle Texte', 'tab_en': 'SR Battle Texts'},
+            {'key': 'srb_text_winner', 'type': 'template', 'label': 'Text: gewonnen', 'label_en': 'Text: winner', 'default': SRB_TEXT_DEFAULTS_DE['srb_text_winner'], 'default_en': SRB_TEXT_DEFAULTS_EN['srb_text_winner'], 'tokens': ['{user}', '{challenger}', '{opponent}', '{winner}', '{loser}', '{letter}', '{artist}', '{song}', '{points}', '{reward}'], 'wide': True, 'tab': 'SR Battle Texte', 'tab_en': 'SR Battle Texts'},
+            {'key': 'srb_text_timeout', 'type': 'template', 'label': 'Text: Zeit abgelaufen', 'label_en': 'Text: timeout', 'default': SRB_TEXT_DEFAULTS_DE['srb_text_timeout'], 'default_en': SRB_TEXT_DEFAULTS_EN['srb_text_timeout'], 'tokens': ['{user}', '{challenger}', '{opponent}', '{winner}', '{loser}', '{letter}', '{points}', '{reward}'], 'wide': True, 'tab': 'SR Battle Texte', 'tab_en': 'SR Battle Texts'},
+            {'key': 'srb_text_points', 'type': 'template', 'label': 'Text: Punktestand', 'label_en': 'Text: points', 'default': SRB_TEXT_DEFAULTS_DE['srb_text_points'], 'default_en': SRB_TEXT_DEFAULTS_EN['srb_text_points'], 'tokens': ['{user}', '{points}', '{required}', '{cost}', '{reward}'], 'wide': True, 'tab': 'SR Battle Texte', 'tab_en': 'SR Battle Texts'},
+            {'key': 'srb_text_not_enough_points', 'type': 'template', 'label': 'Text: nicht genug Punkte', 'label_en': 'Text: not enough points', 'default': SRB_TEXT_DEFAULTS_DE['srb_text_not_enough_points'], 'default_en': SRB_TEXT_DEFAULTS_EN['srb_text_not_enough_points'], 'tokens': ['{user}', '{points}', '{required}', '{cost}', '{reward}', '{request_command}'], 'wide': True, 'tab': 'SR Battle Texte', 'tab_en': 'SR Battle Texts'},
+            {'key': 'srplus_duration_min', 'type': 'number', 'label': 'SR+ Minuten', 'label_en': 'SR+ minutes', 'default': 15, 'min': 1, 'max': 240, 'tab': 'SR+'},
+            {'key': 'srplus_once_per_stream', 'type': 'bool', 'label': 'SR+ nur einmal pro Stream', 'label_en': 'SR+ only once per stream', 'default': True, 'tab': 'SR+'},
             {'key': 'srplus_shuffle', 'type': 'bool', 'label': 'SR+ Shuffle', 'default': True, 'tab': 'SR+'},
-            {'key': 'srplus_allowed_platforms', 'label': 'SR+ Plattformen leer=alle', 'placeholder': 'twitch,tiktok,youtube,kick', 'tab': 'SR+'},
-            {'key': 'srplus_allowed_users', 'label': 'SR+ User leer=alle', 'placeholder': 'username1,username2', 'tab': 'SR+'},
-            {'key': 'log_verbose', 'type': 'bool', 'label': 'AusfÃ¼hrlich loggen', 'default': True, 'tab': 'Logs'},
+            {'key': 'srplus_allowed_platforms', 'label': 'SR+ Plattformen leer=alle', 'label_en': 'SR+ platforms empty=all', 'placeholder': 'twitch,tiktok,youtube,kick', 'tab': 'SR+'},
+            {'key': 'srplus_allowed_users', 'label': 'SR+ User leer=alle', 'label_en': 'SR+ users empty=all', 'placeholder': 'username1,username2', 'tab': 'SR+'},
+            {'key': 'log_verbose', 'type': 'bool', 'label': 'Ausfuehrlich loggen', 'label_en': 'Verbose logging', 'default': True, 'tab': 'Protokolle', 'tab_en': 'Logs'},
         ]
 
     def default_settings(self) -> dict[str, Any]:
@@ -524,18 +584,19 @@ class Spotis3mptifyPlugin(ProviderPlugin):
             'srb_test_enabled': False,
             'srb_command': '!srb',
             'srb_stop_command': '!stop',
+            'srb_points_command': '!srpoints',
             'srb_required_points': 3,
             'srb_start_cost': 2,
             'srb_win_points': 3,
             'srb_stop_seconds': 30,
             'srb_request_seconds': 60,
-            'srb_text_started': '{challenger} fordert {opponent} heraus! {opponent}, schreibe {stop_command}. Du hast {seconds} Sekunden.',
-            'srb_text_letter': '{opponent} hat gestoppt. Buchstabe: {letter}. Requeste jetzt mit {request_command} eine passende Band und einen Song!',
-            'srb_text_wrong': '{opponent}: {artist} beginnt nicht mit {letter}. Versuche es erneut – noch {seconds} Sekunden.',
-            'srb_text_winner': '{winner} gewinnt mit {artist} – {song} und erhält {reward} Requestpunkte!',
-            'srb_text_timeout': 'Zeit abgelaufen! {winner} gewinnt und erhält {reward} Requestpunkte.',
-            'srb_text_points': '{user} hat {points} Requestpunkte.',
-            'srb_text_not_enough_points': '@{user}, du hast erst {points} von {required} benötigten Requestpunkten. Requeste zunächst normale Songs oder gewinne ein Battle, zu dem du herausgefordert wurdest.',
+            'srb_text_started': SRB_TEXT_DEFAULTS_DE['srb_text_started'],
+            'srb_text_letter': SRB_TEXT_DEFAULTS_DE['srb_text_letter'],
+            'srb_text_wrong': SRB_TEXT_DEFAULTS_DE['srb_text_wrong'],
+            'srb_text_winner': SRB_TEXT_DEFAULTS_DE['srb_text_winner'],
+            'srb_text_timeout': SRB_TEXT_DEFAULTS_DE['srb_text_timeout'],
+            'srb_text_points': SRB_TEXT_DEFAULTS_DE['srb_text_points'],
+            'srb_text_not_enough_points': SRB_TEXT_DEFAULTS_DE['srb_text_not_enough_points'],
             'srplus_duration_min': 15,
             'srplus_once_per_stream': True,
             'srplus_shuffle': True,
@@ -581,7 +642,12 @@ class Spotis3mptifyPlugin(ProviderPlugin):
             merged['spotify_expires_at'] = _spotify_expires_at(spotify)
             merged['spotify_scope'] = _safe_text(spotify.get('scope') or spotify.get('scopes'))
             merged['autoconnect'] = _as_bool(spotify.get('autoconnect'), _as_bool(merged.get('autoconnect'), True))
-        return merged
+        return _apply_language_default_texts(merged, str(merged.get('_ui_language') or self._settings.get('_ui_language') or 'de'))
+
+    def normalize_settings(self, settings: dict[str, Any], language: str | None = None) -> dict[str, Any]:
+        merged = dict(settings or {})
+        lang = str(language or merged.get('_ui_language') or self._settings.get('_ui_language') or 'de')
+        return _apply_language_default_texts(merged, lang)
 
     def _host_platform_settings(self, platform: str) -> dict[str, Any]:
         host = self._host
@@ -676,6 +742,7 @@ class Spotis3mptifyPlugin(ProviderPlugin):
 
     def set_ui_language(self, language: str) -> None:
         self._settings['_ui_language'] = 'en' if str(language or '').lower().startswith('en') else 'de'
+        _apply_language_default_texts(self._settings, self._settings['_ui_language'])
         if self._core is not None:
             try:
                 self._core.apply_settings(self._merged_config(self._settings))
@@ -694,7 +761,7 @@ class Spotis3mptifyPlugin(ProviderPlugin):
             host.set_status(self.plugin_id, PluginStatus('disabled', 'Disabled'))
             return
         if not _as_bool(self._settings.get('autoconnect'), True):
-            host.set_status(self.plugin_id, PluginStatus('stopped', 'Autoconnect aus'))
+            host.set_status(self.plugin_id, PluginStatus('stopped', 'Autoconnect off'))
             return
         core = self._load_core()
         core.set_logger(lambda level, line: self._log(str(line)))
@@ -711,7 +778,7 @@ class Spotis3mptifyPlugin(ProviderPlugin):
         url = self.overlay_url()
         self._settings['custom_overlay_url'] = url
         host.set_status(self.plugin_id, PluginStatus('connected', f'Overlay {url}'))
-        self._log(f'Plugin gestartet Â· Spotify-only Â· Overlay {url}')
+        self._log(f'Plugin started - Spotify-only - Overlay {url}')
         self._srb_load()
         self._srb_stop.clear()
         if self._srb_thread is None or not self._srb_thread.is_alive():
@@ -747,9 +814,9 @@ class Spotis3mptifyPlugin(ProviderPlugin):
                 if scope_text:
                     missing = sorted(x for x in required if x not in set(scope_text.split()))
                     if missing:
-                        return False, 'Spotify verbunden, aber Token-Scope fehlt: ' + ', '.join(missing) + ' Â· bitte OAuth neu ausfÃ¼hren'
-                return True, f"Spotify verbunden Â· Overlay {self.overlay_url()}"
-            return False, "Spotify nicht verbunden"
+                        return False, 'Spotify connected, but token scope is missing: ' + ', '.join(missing) + ' - please run OAuth again'
+                return True, f"Spotify connected - Overlay {self.overlay_url()}"
+            return False, "Spotify not connected"
         except Exception as exc:
             return False, str(exc)
 
@@ -763,10 +830,10 @@ class Spotis3mptifyPlugin(ProviderPlugin):
         try:
             webbrowser.open(self.overlay_url())
         except Exception as exc:
-            self._log(f'Browseranzeige konnte nicht geÃ¶ffnet werden: {exc}')
+            self._log(f'Browser overlay could not be opened: {exc}')
 
     def open_login(self) -> None:
-        self._log('Spotify Login wird zentral im Haupttool unter Plattformen verwaltet.')
+        self._log('Spotify login is managed centrally in the main tool under Platforms.')
 
     def current_nowplaying(self) -> dict[str, Any]:
         try:
@@ -832,11 +899,14 @@ class Spotis3mptifyPlugin(ProviderPlugin):
         cmd_plus = str(self._settings.get('srplus_command') or '!sr+').strip() or '!sr+'
         cmd_srb = str(self._settings.get('srb_command') or '!srb').strip() or '!srb'
         cmd_stop = str(self._settings.get('srb_stop_command') or '!stop').strip() or '!stop'
+        cmd_points = str(self._settings.get('srb_points_command') or '!srpoints').strip() or '!srpoints'
         low = text.lower().strip()
         action = ''
         query = ''
         if low == cmd_stop.lower():
             action = 'srb_stop'
+        elif low == cmd_points.lower() or low.startswith(cmd_points.lower() + ' '):
+            action = 'srb_points'
         elif low == cmd_srb.lower() or low.startswith(cmd_srb.lower() + ' '):
             action = 'srb'
             query = text[len(cmd_srb):].strip()
@@ -859,6 +929,8 @@ class Spotis3mptifyPlugin(ProviderPlugin):
             self._recent_msg_keys[key] = now
         if action == 'srb_stop':
             self._handle_srb_stop(platform, username)
+        elif action == 'srb_points':
+            self._handle_srb_points(platform, username)
         elif action == 'srb':
             self._handle_srb_start(platform, username, query)
         elif action == 'srplus':
@@ -888,7 +960,7 @@ class Spotis3mptifyPlugin(ProviderPlugin):
             try:
                 data = json.loads(SRB_STATE_FILE.read_text(encoding='utf-8')) if SRB_STATE_FILE.exists() else {}
             except Exception as exc:
-                self._log(f'SR Battle Zustand konnte nicht geladen werden: {exc}')
+                self._log(f'SR Battle state could not be loaded: {exc}')
                 data = {}
             points = data.get('points') if isinstance(data.get('points'), dict) else {}
             battle = data.get('battle') if isinstance(data.get('battle'), dict) else None
@@ -904,7 +976,7 @@ class Spotis3mptifyPlugin(ProviderPlugin):
             tmp.write_text(json.dumps(self._srb_state, ensure_ascii=False, indent=2), encoding='utf-8')
             tmp.replace(SRB_STATE_FILE)
         except Exception as exc:
-            self._log(f'SR Battle Zustand konnte nicht gespeichert werden: {exc}')
+            self._log(f'SR Battle state could not be saved: {exc}')
 
     def _srb_points(self, username: str) -> int:
         with self._lock:
@@ -946,10 +1018,14 @@ class Spotis3mptifyPlugin(ProviderPlugin):
         try:
             message = template.format_map({k: str(v) for k, v in values.items()})
         except Exception as exc:
-            self._log(f'SR Battle Textvorlage {template_key} ungültig: {exc}')
+            self._log(f'SR Battle Textvorlage {template_key} ungueltig: {exc}')
             message = default.format_map({k: str(v) for k, v in values.items()})
         if message.strip():
             self._reply(platform, message.strip())
+
+    def _handle_srb_points(self, platform: str, username: str) -> None:
+        points = self._srb_points(username)
+        self._srb_reply(platform, 'srb_text_points', user=username, points=points)
 
     def _srb_active_for_request(self, username: str) -> dict[str, Any] | None:
         with self._lock:
@@ -1065,7 +1141,7 @@ class Spotis3mptifyPlugin(ProviderPlugin):
                         reward=0 if snapshot.get('test_mode') else reward)
         if snapshot.get('test_mode'):
             self._reply(platform or str(snapshot.get('platform') or ''),
-                        'SR-Battle-Test beendet – der Punktestand wurde nicht verändert.')
+                        'SR-Battle-Test beendet - der Punktestand wurde nicht veraendert.')
 
     def _srb_watch(self) -> None:
         while not self._srb_stop.wait(1.0):
@@ -1095,7 +1171,7 @@ class Spotis3mptifyPlugin(ProviderPlugin):
                     return
                 self._srb_resume_request(battle)
                 self._reply(platform, f'@{username} {_friendly_sr_error(err)}')
-                self._log(f'SR fehlgeschlagen: {username}@{platform} -> {query} Â· {err}')
+                self._log(f'SR failed: {username}@{platform} -> {query} - {err}')
                 return
             title = str(res.get('title') or '').strip()
             artist = str(res.get('artist') or '').strip()
@@ -1119,11 +1195,11 @@ class Spotis3mptifyPlugin(ProviderPlugin):
             else:
                 msg = body or f'HTTP {exc.code}'
             self._reply(platform, f'@{username} {msg}')
-            self._log(f'SR HTTP Fehler: {msg}')
+            self._log(f'SR HTTP error: {msg}')
         except Exception as exc:
             self._srb_resume_request(locals().get('battle'))
             self._reply(platform, f'@{username} Songrequest Fehler: {exc}')
-            self._log(f'SR Fehler: {exc}')
+            self._log(f'SR error: {exc}')
 
     def _srplus_allowed(self, platform: str, username: str) -> bool:
         platforms = {_clean_platform(x) for x in _split_list((self._settings or {}).get('srplus_allowed_platforms'))}
@@ -1136,8 +1212,8 @@ class Spotis3mptifyPlugin(ProviderPlugin):
 
     def _handle_srplus(self, platform: str, username: str) -> None:
         if not self._srplus_allowed(platform, username):
-            self._reply(platform, f'@{username} SR+ ist fÃ¼r dich oder diese Plattform nicht erlaubt.')
-            self._log(f'SR+ blockiert: {username}@{platform}')
+            self._reply(platform, f'@{username} SR+ ist fuer dich oder diese Plattform nicht erlaubt.')
+            self._log(f'SR+ blocked: {username}@{platform}')
             return
         try:
             res = self._post_json('/srplus/start', {'user': username})
@@ -1145,13 +1221,13 @@ class Spotis3mptifyPlugin(ProviderPlugin):
                 self._reply(platform, f'@{username} SR+ Fehler: {res.get("error") or "fehlgeschlagen"}')
                 return
             dur = int(res.get('duration_min') or self._settings.get('srplus_duration_min') or 15)
-            msg = f'@{username} SR+ gestartet fÃ¼r {dur} Minuten.'
+            msg = f'@{username} SR+ gestartet fuer {dur} Minuten.'
             self._reply(platform, msg)
             self._broadcast_queue_reply(platform, msg)
             self._log(f'SR+ OK: {username}@{platform}')
         except Exception as exc:
             self._reply(platform, f'@{username} SR+ Fehler: {exc}')
-            self._log(f'SR+ Fehler: {exc}')
+            self._log(f'SR+ error: {exc}')
 
     def _reply(self, platform: str, message: str) -> bool:
         if not _as_bool((self._settings or {}).get('reply_enabled'), True):
@@ -1164,10 +1240,10 @@ class Spotis3mptifyPlugin(ProviderPlugin):
             if hasattr(host, 'send_platform_message'):
                 ok = bool(host.send_platform_message(platform, message, sender=self.plugin_id))
                 if not ok:
-                    self._log(f'Chat-Antwort an {platform} fehlgeschlagen: {message}')
+                    self._log(f'Chat reply to {platform} failed: {message}')
                 return ok
         except Exception as exc:
-            self._log(f'Chat-Antwort an {platform} fehlgeschlagen: {exc}')
+            self._log(f'Chat reply to {platform} failed: {exc}')
         return False
 
     def _emit_dashboard_reply(self, platform: str, message: str) -> None:
@@ -1188,7 +1264,7 @@ class Spotis3mptifyPlugin(ProviderPlugin):
                 'show_in_obs': False,
             })
         except Exception as exc:
-            self._log(f'Dashboard-Antwort konnte nicht eingetragen werden: {exc}')
+            self._log(f'Dashboard reply could not be added: {exc}')
 
     def _broadcast_queue_reply(self, source_platform: str, message: str) -> None:
         if not _as_bool((self._settings or {}).get('broadcast_queue_reply'), True):
@@ -1203,9 +1279,9 @@ class Spotis3mptifyPlugin(ProviderPlugin):
             try:
                 ok = bool(host.send_platform_message(target, message, sender=self.plugin_id))
                 if ok:
-                    self._log(f'Queue-Antwort an {target} gespiegelt: {message}')
+                    self._log(f'Queue reply mirrored to {target}: {message}')
             except Exception as exc:
-                self._log(f'Queue-Antwort an {target} fehlgeschlagen: {exc}')
+                self._log(f'Queue reply to {target} failed: {exc}')
 
     def on_settings_button(self, key: str, host: PluginHost | None = None, parent: Any = None) -> bool:
         try:

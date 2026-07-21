@@ -1,7 +1,7 @@
 ﻿{
   "id": "spotis3mptify",
   "name": "spotis3mptify",
-  "version": "0.20",
+  "version": "0.25",
   "description": "Spotify songrequest plugin for godisalotachat with local browser dashboard/overlay. YouTube and standalone Twitch login are disabled.",
   "description_de": "Spotify-Songrequest-Plugin für godisalotachat mit lokalem Dashboard und Overlay.",
   "description_en": "Spotify song request plugin for godisalotachat with a local dashboard and overlay."
