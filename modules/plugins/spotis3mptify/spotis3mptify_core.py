@@ -3202,10 +3202,12 @@ render();refreshData();loadLayout(true);
     return html.replace('__STATE__', initial_state)
 
 def _with_main_i18n(html: str) -> str:
-    if not MAIN_UI_BASE or "i18n.js" in html or "</head>" not in html:
+    if "APP_LANGUAGE" in html or "</head>" not in html:
         return html
-    base = MAIN_UI_BASE.rstrip("/")
-    head = f'<script>window.APP_LANGUAGE={json.dumps(UI_LANGUAGE)};</script><script src="{base}/static/js/i18n.js"></script>'
+    # Keep browser-source pages self-contained. They run on the Spotify helper
+    # port, and Meld's embedded browser must not depend on the dashboard port
+    # being reachable before it can parse and render the overlay.
+    head = f'<script>window.APP_LANGUAGE={json.dumps(UI_LANGUAGE)};</script>'
     return html.replace("</head>", head + "</head>", 1)
 
 # ======================= HTTP SERVER =======================
