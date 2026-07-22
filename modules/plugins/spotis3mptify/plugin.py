@@ -507,6 +507,8 @@ class Spotis3mptifyPlugin(ProviderPlugin):
         self._srb_state: dict[str, Any] = {'points': {}, 'battle': None}
         self._srb_stop = threading.Event()
         self._srb_thread: threading.Thread | None = None
+        self._status_stop = threading.Event()
+        self._status_thread: threading.Thread | None = None
 
     def settings_schema(self) -> list[dict[str, Any]]:
         return [
@@ -781,7 +783,7 @@ class Spotis3mptifyPlugin(ProviderPlugin):
         self._running = True
         url = self.overlay_url()
         self._settings['custom_overlay_url'] = url
-        host.set_status(self.plugin_id, PluginStatus('connected', f'Overlay {url}'))
+        self._start_status_monitor(core, host, url)
         self._log(f'Plugin started - Spotify-only - Overlay {url}')
         self._srb_load()
         self._srb_stop.clear()
@@ -790,6 +792,7 @@ class Spotis3mptifyPlugin(ProviderPlugin):
             self._srb_thread.start()
 
     def stop(self) -> None:
+        self._status_stop.set()
         self._srb_stop.set()
         try:
             if self._core is not None:
@@ -799,6 +802,31 @@ class Spotis3mptifyPlugin(ProviderPlugin):
         self._running = False
         if self._host:
             self._host.set_status(self.plugin_id, PluginStatus('disconnected', 'Stopped'))
+
+    def _start_status_monitor(self, core: Any, host: PluginHost, url: str) -> None:
+        self._status_stop.set()
+        stop_event = threading.Event()
+        self._status_stop = stop_event
+
+        def update() -> None:
+            while not stop_event.is_set():
+                try:
+                    health = core.get_health() or {}
+                    if bool(health.get('spotify')):
+                        state = 'connected'
+                        detail = f'Spotify autorisiert · Overlay bereit · {url}'
+                    else:
+                        state = 'watching'
+                        detail = f'Overlay bereit · Spotify nicht autorisiert · {url}'
+                    host.set_status(self.plugin_id, PluginStatus(state, detail))
+                except Exception as exc:
+                    host.set_status(self.plugin_id, PluginStatus('watching', f'Overlay bereit · Spotify-Status unbekannt · {exc}'))
+                if stop_event.wait(10.0):
+                    return
+
+        thread = threading.Thread(target=update, name='spotis3mptify-status', daemon=True)
+        self._status_thread = thread
+        thread.start()
 
     def test_connection(self, settings: dict[str, Any]) -> tuple[bool, str]:
         try:

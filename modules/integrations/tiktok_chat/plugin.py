@@ -642,7 +642,7 @@ class _SimpleMeldWebSocket:
 class TikTokChatPlugin(ThreadedPlugin):
     plugin_id = 'tiktok_chat'
     display_name = 'TikTok Chat'
-    version = '1.7.8.test-channel-alerts'
+    version = '1.7.10.offline-watch-stability'
     description = 'TikTok chat read/write using central TikTok account data from core.'
 
     def __init__(self) -> None:
@@ -665,6 +665,8 @@ class TikTokChatPlugin(ThreadedPlugin):
         self._live_reload_generation = 0
         self._live_reload_attempts = 0
         self._live_window_title_monitors: set[int] = set()
+        self._live_window_dev_text = 'Bereit · warte auf Live-Erkennung'
+        self._live_window_dev_tone = 'waiting'
         self._gift_media_dir = app_root() / 'data' / 'tiktok_chat' / 'media'
         self._gift_catalog_path = app_root() / 'data' / 'tiktok_chat' / 'gift_catalog.json'
         self._gift_catalog: dict[str, dict[str, str]] = self._load_gift_catalog()
@@ -1166,7 +1168,75 @@ class TikTokChatPlugin(ThreadedPlugin):
         )
         # Install it for later navigations and apply it to the current document.
         self._cdp_call(ws_url, 'Page.addScriptToEvaluateOnNewDocument', {'source': script}, timeout=3.0)
+        self._cdp_call(
+            ws_url,
+            'Page.addScriptToEvaluateOnNewDocument',
+            {'source': self._live_window_dev_bootstrap_script()},
+            timeout=3.0,
+        )
         self._cdp_call(ws_url, 'Runtime.evaluate', {'expression': script}, timeout=3.0)
+        self._cdp_call(
+            ws_url,
+            'Runtime.evaluate',
+            {'expression': self._live_window_dev_bootstrap_script()},
+            timeout=3.0,
+        )
+        self._apply_live_window_dev_status(ws_url)
+
+    def _live_window_dev_bootstrap_script(self) -> str:
+        return (
+            "(()=>{if(window.__godisTikTokDevStatusInstalled)return;"
+            "window.__godisTikTokDevStatusInstalled=true;const key='__godisTikTokDevStatus';"
+            "const render=()=>{let state={text:'Status wird geladen …',tone:'waiting'};"
+            "try{state=JSON.parse(localStorage.getItem(key)||'null')||state}catch(e){}"
+            "if(!document.documentElement)return;const id='godis-tiktok-dev-status';let bar=document.getElementById(id);"
+            "if(!bar){bar=document.createElement('div');bar.id=id;"
+            "bar.style.cssText='position:fixed;inset:0 0 auto 0;height:28px;display:flex;align-items:center;"
+            "padding:0 12px;box-sizing:border-box;z-index:2147483647;font:600 12px/1.2 Segoe UI,Arial,sans-serif;"
+            "color:#fff;letter-spacing:.01em;box-shadow:0 1px 8px rgba(0,0,0,.45);pointer-events:none';"
+            "document.documentElement.appendChild(bar);}"
+            "const colors={ok:'#167d45',loading:'#8a5a00',waiting:'#34415e',error:'#a12632',offline:'#5b3340'};"
+            "bar.style.background=colors[state.tone]||colors.waiting;bar.textContent='TikTok · '+state.text};"
+            "addEventListener('DOMContentLoaded',render);render();setInterval(render,500)})()"
+        )
+
+    def _live_window_dev_script(self) -> str:
+        text = json.dumps(str(self._live_window_dev_text or ''), ensure_ascii=False)
+        tone = json.dumps(str(self._live_window_dev_tone or 'waiting'), ensure_ascii=False)
+        return (
+            "(()=>{const id='godis-tiktok-dev-status';const text=" + text + ";const tone=" + tone + ";"
+            "try{localStorage.setItem('__godisTikTokDevStatus',JSON.stringify({text:text,tone:tone}))}catch(e){}"
+            "let bar=document.getElementById(id);if(!bar){bar=document.createElement('div');bar.id=id;"
+            "bar.style.cssText='position:fixed;inset:0 0 auto 0;height:28px;display:flex;align-items:center;"
+            "padding:0 12px;box-sizing:border-box;z-index:2147483647;font:600 12px/1.2 Segoe UI,Arial,sans-serif;"
+            "color:#fff;letter-spacing:.01em;box-shadow:0 1px 8px rgba(0,0,0,.45);pointer-events:none';"
+            "document.documentElement.appendChild(bar);}"
+            "const colors={ok:'#167d45',loading:'#8a5a00',waiting:'#34415e',error:'#a12632',offline:'#5b3340'};"
+            "bar.style.background=colors[tone]||colors.waiting;bar.textContent='TikTok · '+text;})()"
+        )
+
+    def _apply_live_window_dev_status(self, ws_url: str) -> None:
+        if not ws_url:
+            return
+        self._cdp_call(
+            ws_url,
+            'Runtime.evaluate',
+            {'expression': self._live_window_dev_script()},
+            timeout=2.0,
+        )
+
+    def _set_live_window_dev_status(self, text: str, tone: str = 'waiting') -> None:
+        self._live_window_dev_text = str(text or '').strip()
+        self._live_window_dev_tone = str(tone or 'waiting').strip().lower()
+        settings = self._settings if isinstance(self._settings, dict) else {}
+        account = self._preferred_viewer_account(settings)
+        port = self._debug_port(settings, account)
+        channel = settings.get('unique_id') or settings.get('main_unique_id') or ''
+        tab = self._find_tiktok_browser_tab(port, str(channel or ''))
+        ws_url = str((tab or {}).get('webSocketDebuggerUrl') or '').strip()
+        if ws_url:
+            with contextlib.suppress(Exception):
+                self._apply_live_window_dev_status(ws_url)
 
     def _monitor_live_window_title(
         self,
@@ -1196,6 +1266,7 @@ class TikTokChatPlugin(ThreadedPlugin):
                                 {'expression': f'document.title={wanted}'},
                                 timeout=2.0,
                             )
+                            self._apply_live_window_dev_status(ws_url)
                     except Exception:
                         current_target = ''
                 elif time.time() - missing_since > 30.0:
@@ -1331,7 +1402,7 @@ class TikTokChatPlugin(ThreadedPlugin):
         browser = self._find_browser_exe(settings)
         try:
             port = self._debug_port(settings, viewer_account)
-            if self._wait_for_debugger(port, timeout_seconds=2.0 if reason == 'live detected' else 0.6):
+            if self._wait_for_debugger(port, timeout_seconds=2.0 if reason == 'viewer detected' else 0.6):
                 tab = self._find_tiktok_browser_tab(port, channel or settings.get('unique_id') or '')
                 if tab is not None:
                     ws_url = str(tab.get('webSocketDebuggerUrl') or '').strip()
@@ -1343,23 +1414,22 @@ class TikTokChatPlugin(ThreadedPlugin):
                         )
                         if reason in {'plugin active', 'start'}:
                             self._start_live_window_minimize_monitor(port, channel or settings.get('unique_id') or '')
-                        # Reusing a browser target is not enough: it may still
-                        # contain the previous creator's offline page. Always
-                        # navigate it to the currently resolved live URL. This
-                        # also rebuilds TikTok's chat composer for main/bot send.
-                        self._cdp_call(ws_url, 'Page.navigate', {'url': url}, timeout=6.0)
-                        if reason in {'live detected', 'connected'}:
-                            time.sleep(0.8)
-                            with contextlib.suppress(Exception):
-                                self._cdp_call(ws_url, 'Page.reload', {'ignoreCache': True}, timeout=4.0)
-                        if reason not in {'plugin active', 'start', 'live detected', 'connected'}:
+                        if reason == 'viewer detected':
+                            # The existing offline page has already changed to
+                            # live. Exactly one reload is enough to rebuild its
+                            # player/chat after the first viewer metric arrives.
+                            self._cdp_call(ws_url, 'Page.reload', {'ignoreCache': True}, timeout=4.0)
+                        else:
+                            # Initial reuse may still point at another creator.
+                            self._cdp_call(ws_url, 'Page.navigate', {'url': url}, timeout=6.0)
+                        if reason not in {'plugin active', 'start', 'live detected', 'connected', 'viewer detected'}:
                             self._cdp_call(ws_url, 'Page.bringToFront', {}, timeout=3.0)
                         self._live_window_opened = True
                         self._live_window_last_url = url
                         if hasattr(host, 'log'):
                             host.log(self.plugin_id, f'TikTok chat window reused as {viewer_account} ({reason}): {url}')
                         return True
-            if reason in {'live detected', 'connected'} and self._live_window_opened:
+            if reason == 'viewer detected' and self._live_window_opened:
                 if hasattr(host, 'log'):
                     host.log(self.plugin_id, f'TikTok chat window reload skipped; existing {viewer_account} window not reachable via debug port: {url}')
                 return False
@@ -1418,25 +1488,37 @@ class TikTokChatPlugin(ThreadedPlugin):
         self._live_reload_generation += 1
         generation = self._live_reload_generation
 
-        def delayed_reload() -> None:
-            # TikTok's /live page often changes from the offline shell to the
-            # real player several seconds after the API first reports live.
-            # Reload more than once so the embedded chat is rebuilt without a
-            # manual refresh, even on a slow live transition.
-            for delay in (5.0, 8.0, 12.0):
-                if self._stop.wait(delay):
-                    return
-                if generation != self._live_reload_generation or self._last_is_live is not True:
-                    return
-                current_settings = self._settings if isinstance(self._settings, dict) else settings
-                ok = self._open_main_live_window(host, current_settings, channel, reason='connected')
-                self._live_reload_attempts += 1
-                with contextlib.suppress(Exception):
-                    host.log(self.plugin_id, f'TikTok live window reinit after live start: attempt={self._live_reload_attempts} ok={bool(ok)}')
-            if generation == self._live_reload_generation:
-                self._live_reload_done = True
+        def reload_once() -> None:
+            if generation != self._live_reload_generation or self._last_is_live is not True:
+                return
+            self._set_live_window_dev_status('Viewerzahl erkannt · lade genau einmal neu …', 'loading')
+            current_settings = self._settings if isinstance(self._settings, dict) else settings
+            ok = self._open_main_live_window(host, current_settings, channel, reason='viewer detected')
+            self._live_reload_attempts = 1
+            if generation != self._live_reload_generation:
+                return
+            if ok:
+                self._set_live_window_dev_status('Neu geladen · alles bereit', 'ok')
+            else:
+                self._set_live_window_dev_status('Reload fehlgeschlagen · Fenster nicht erreichbar', 'error')
+            final_text = self._live_window_dev_text
+            final_tone = self._live_window_dev_tone
+            def sync_final_status() -> None:
+                for _ in range(12):
+                    if self._stop.wait(0.5):
+                        return
+                    if generation != self._live_reload_generation:
+                        return
+                    self._set_live_window_dev_status(final_text, final_tone)
+            threading.Thread(
+                target=sync_final_status,
+                daemon=True,
+                name='tiktok-live-window-status-sync',
+            ).start()
+            with contextlib.suppress(Exception):
+                host.log(self.plugin_id, f'TikTok live window single reload after viewer detection: ok={bool(ok)}')
 
-        threading.Thread(target=delayed_reload, daemon=True, name='tiktok-live-window-reinit').start()
+        threading.Thread(target=reload_once, daemon=True, name='tiktok-live-window-reload-once').start()
 
     def _reload_main_live_window_when_viewers_ready(self, host: PluginHost, channel: str) -> None:
         if self._last_is_live is not True:
@@ -2716,6 +2798,7 @@ class TikTokChatPlugin(ThreadedPlugin):
 
     def _emit_viewer_count(self, host: PluginHost, channel: str, viewer_count: int, *, force: bool = False) -> None:
         viewer_count = max(0, int(viewer_count))
+        first_live_viewer_metric = self._last_is_live is True and self._last_viewer_count is None
         self._last_viewer_count = viewer_count
         if viewer_count > 0:
             self._last_valid_live_viewers = viewer_count
@@ -2732,7 +2815,14 @@ class TikTokChatPlugin(ThreadedPlugin):
                 'viewer_count': viewer_count,
             },
         )
-        self._reload_main_live_window_when_viewers_ready(host, channel)
+        with contextlib.suppress(Exception):
+            host.set_status(
+                self.plugin_id,
+                PluginStatus('connected', f'Live · @{channel} · {viewer_count} Viewer'),
+            )
+        if first_live_viewer_metric:
+            self._set_live_window_dev_status(f'Live · {viewer_count} Viewer erkannt', 'ok')
+            self._reload_main_live_window_when_viewers_ready(host, channel)
 
     def _emit_is_live(self, host: PluginHost, channel: str, is_live: bool, *, force: bool = False) -> None:
         # Live status is a metric for the shared viewer display. Keep it out
@@ -2758,8 +2848,16 @@ class TikTokChatPlugin(ThreadedPlugin):
             self._live_reload_generation += 1
             self._last_viewer_count = None
             self._last_valid_live_viewers = None
+            self._set_live_window_dev_status('Offline · warte auf Live-Erkennung', 'offline')
+            with contextlib.suppress(Exception):
+                host.set_status(self.plugin_id, PluginStatus('watching', f'@{channel} · warte auf Live-Start'))
         else:
-            self._reload_main_live_window_on_live(host, channel)
+            # The viewer metric is the reliable transition used by the shared
+            # viewer display (no-entry icon -> numeric value). Wait for that
+            # exact signal and reload only once from _emit_viewer_count().
+            self._set_live_window_dev_status('Live erkannt · warte auf Viewerzahl', 'waiting')
+            with contextlib.suppress(Exception):
+                host.set_status(self.plugin_id, PluginStatus('connecting', f'@{channel} live · warte auf Viewerzahl'))
 
         # Nicht ueber host.emit_message senden: das Main-Tool macht daraus eine
         # ChatMessage mit leerem Text. Genau dadurch entstehen die leeren TikTok-
@@ -3096,6 +3194,11 @@ class TikTokChatPlugin(ThreadedPlugin):
     def _is_offline_error(self, exc: Exception | None) -> bool:
         if exc is None:
             return False
+        class_name = type(exc).__name__.strip().lower()
+        if class_name in {'userofflineerror', 'userisofflineerror', 'liveuserofflineerror'}:
+            return True
+        if 'offline' in class_name and ('user' in class_name or 'live' in class_name):
+            return True
         text = str(exc or '').strip().lower()
         if not text:
             return False
@@ -4071,6 +4174,9 @@ class TikTokChatPlugin(ThreadedPlugin):
                 try:
                     is_live = await asyncio.wait_for(client.is_live(), timeout=8.0)
                 except Exception as exc:
+                    if self._is_offline_error(exc):
+                        self._emit_is_live(host, resolved_unique_id, False, force=True)
+                        return self._offline_status_text(resolved_unique_id, exc), True
                     if autoconnect and not self._stop.is_set():
                         self._emit_is_live(host, resolved_unique_id, False, force=True)
                         return f'Connection check failed for @{resolved_unique_id}: {exc}', True
@@ -4078,9 +4184,7 @@ class TikTokChatPlugin(ThreadedPlugin):
 
                 if not is_live:
                     self._emit_is_live(host, resolved_unique_id, False, force=True)
-                    if autoconnect and not self._stop.is_set():
-                        return f'@{resolved_unique_id} is currently offline.', True
-                    return f'@{resolved_unique_id} is currently offline.', False
+                    return f'@{resolved_unique_id} is currently offline.', not self._stop.is_set()
 
                 task = asyncio.create_task(client.connect(fetch_gift_info=True))
 
@@ -4120,7 +4224,7 @@ class TikTokChatPlugin(ThreadedPlugin):
                         if exc is not None:
                             if self._is_offline_error(exc):
                                 self._emit_is_live(host, resolved_unique_id, False, force=True)
-                                if autoconnect and not self._stop.is_set():
+                                if not self._stop.is_set():
                                     should_watch_again = True
                                     final_status_text = self._offline_status_text(resolved_unique_id, exc)
                                     break
@@ -4185,11 +4289,16 @@ class TikTokChatPlugin(ThreadedPlugin):
                         raise RuntimeError(str(last_error or 'Unable to initialize TikTok chat client.'))
 
                 final_status_text, should_watch_again = await _run_session(resolved_unique_id)
-                if not autoconnect or not should_watch_again:
+                if not should_watch_again:
                     return final_status_text
 
                 host.set_status(self.plugin_id, PluginStatus('watching', final_status_text or 'Watching for live start'))
                 self._emit_is_live(host, resolved_unique_id, False, force=True)
+                if not autoconnect:
+                    # A manually started plugin should remain stable while the
+                    # creator is offline. Poll at the configured interval
+                    # instead of exiting red or spinning in a tight loop.
+                    await asyncio.sleep(viewer_check_interval)
 
             return final_status_text
 
@@ -4197,6 +4306,11 @@ class TikTokChatPlugin(ThreadedPlugin):
             final_status_text = asyncio.run(_main())
             host.set_status(self.plugin_id, PluginStatus('disconnected', final_status_text or 'Stopped'))
         except Exception as exc:
+            if self._is_offline_error(exc):
+                message = self._offline_status_text(candidates[0] if candidates else 'unknown', exc)
+                self._emit_is_live(host, candidates[0] if candidates else '', False, force=True)
+                host.set_status(self.plugin_id, PluginStatus('watching', message))
+                return
             if self._is_transient_tiktok_chat_error(exc):
                 message = self._transient_status_text(candidates[0] if candidates else 'unknown', exc)
                 if hasattr(host, 'log'):

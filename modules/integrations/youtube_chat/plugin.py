@@ -1317,7 +1317,7 @@ class YouTubeChatPlugin(ThreadedPlugin):
         text = 'YouTube OAuth OK · waiting for active livestream chat'
         if detail:
             text += f' · {detail}'
-        host.set_status(self.plugin_id, PluginStatus('connected', text))
+        host.set_status(self.plugin_id, PluginStatus('watching', text))
 
     def _emit_live_state(self, host: PluginHost, channel: str, is_live: bool) -> None:
         payload = {

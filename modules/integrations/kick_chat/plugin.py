@@ -1840,7 +1840,7 @@ class KickChatPlugin(ThreadedPlugin):
                     if self._write_ready:
                         self._status_short(host, 'connected', f'Kick write ready for #{channel}; realtime chatroom pending, retrying in {int(reconnect_delay)}s')
                     else:
-                        self._status_short(host, 'warning', f'Kick chatroom not ready for #{channel}; retrying in {int(reconnect_delay)}s')
+                        self._status_short(host, 'watching', f'Kick chatroom not ready for #{channel}; retrying in {int(reconnect_delay)}s')
                     self._append_diag(f'WAIT no chatroom_id channel={channel} broadcaster_user_id={broadcaster_user_id} channel_id={channel_id} source={source}')
                     time.sleep(reconnect_delay)
                     reconnect_delay = min(reconnect_delay * 1.5, 30.0)
@@ -1857,7 +1857,7 @@ class KickChatPlugin(ThreadedPlugin):
             except Exception as exc:
                 self._connected = False
                 self._append_diag(f'ws_error={exc}')
-                self._status_short(host, 'error', f'Kick reconnect in {int(reconnect_delay)}s | {exc}')
+                self._status_short(host, 'connecting', f'Kick reconnect in {int(reconnect_delay)}s | {exc}')
                 time.sleep(reconnect_delay)
                 reconnect_delay = min(reconnect_delay * 1.5, 30.0)
             else:

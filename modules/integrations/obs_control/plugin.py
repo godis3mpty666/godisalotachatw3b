@@ -55,7 +55,7 @@ class OBSControlPlugin(ThreadedPlugin):
 
     def run(self, settings: dict[str, Any], host: PluginHost) -> None:
         settings = self._effective_settings(settings)
-        host.set_status(self.plugin_id, PluginStatus("connected", "Waiting for main OBS connection"))
+        host.set_status(self.plugin_id, PluginStatus("connecting", "Waiting for main OBS connection"))
 
         did_start_hide = False
         while not self._stop.wait(0.25):

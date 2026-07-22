@@ -1,7 +1,7 @@
-{
+﻿{
   "id": "obs_control",
   "name": "OBS Control",
-  "version": "0.05",
+  "version": "0.07",
   "description": "OBS control plugin that uses only the main tool OBS connection. No own OBS login or second websocket.",
   "description_de": "Steuert OBS ausschließlich über die zentrale Verbindung des Hauptprogramms – ohne eigene Anmeldung oder zweiten WebSocket.",
   "description_en": "Controls OBS using only the main tool connection, without a separate login or second WebSocket."
