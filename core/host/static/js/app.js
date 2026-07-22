@@ -84,7 +84,7 @@ const TESTER_CREDITS = [
 function dashboardNavItems(){
   return [
     ["dashboard","Dashboard","/"],["platforms","Plattformen","/plattformen"],["chat","Chat","/chat"],["obs_meld","OBS/Meld Integration","/obs-meld-integration"],
-    ["info3ditor","Info3ditor","/info3ditor"],["gam3pick3r","gam3pick3r","/gam3pick3r"],["chattim3r","Chattim3r","/chattim3r"],["commands","commands","/commands"],["plugins","Plugins","/plugins"],["modalot","Modalot","/modalot"],["easyslider","3asyslid3r","/3asyslid3r"],["settings",L("Einstellungen","Settings"),"/einstellungen"],["tutorials","Tutorials","/tutorials"],["dev","DEV","/dev"]
+    ["info3ditor","Info3ditor","/info3ditor"],["gam3pick3r","gam3pick3r","/gam3pick3r"],["chattim3r","Chattim3r","/chattim3r"],["commands","commands","/commands"],["plugins","Plugins","/plugins"],["modalot","Modalot","/modalot"],["easyslider","3asyslid3r","/3asyslid3r"],["endstream","3ndstr3am","/3ndstr3am"],["settings",L("Einstellungen","Settings"),"/einstellungen"],["tutorials","Tutorials","/tutorials"],["dev","DEV","/dev"]
   ];
 }
 
@@ -1710,6 +1710,36 @@ async function renderEasyslider(){
     location.href="/";
   };
 }
+async function renderEndstream(){
+  const initial=await api("/api/3ndstr3am");
+  const cfg={message:"",platforms:["twitch","tiktok","youtube","kick"],tools:["obs"],delay_seconds:60,...(initial.settings||{})};
+  const platformLabels={twitch:"Twitch",tiktok:"TikTok",youtube:"YouTube",kick:"Kick"};
+  shell("endstream","3ndstr3am",L("Stream kontrolliert beenden und Zuschauer verabschieden.","End the stream in a controlled way and say goodbye to viewers."),`
+    <section class="card endstreamHero">
+      <div><h3>${L("Stream-Abschluss","Stream ending")}</h3><p class="hint">${L("Die Nachricht wird beim Start sofort gesendet. Nach dem Countdown wird das ausgewählte Streamingtool gestoppt.","The message is sent immediately. The selected streaming tool stops after the countdown.")}</p></div>
+      <div id="endstreamClock" class="endstreamClock">--:--</div>
+    </section>
+    <section class="card">
+      <form id="endstreamForm" class="platformForm">
+        <label class="endstreamWide"><div>${L("Abschiedsnachricht","Goodbye message")}</div><textarea name="message" rows="5" maxlength="1000" placeholder="${L("Danke fürs Zuschauen! Bis zum nächsten Stream.","Thanks for watching! See you next stream.")}">${esc(cfg.message||"")}</textarea></label>
+        <fieldset class="endstreamWide"><legend>${L("Chatnachricht senden an","Send chat message to")}</legend><div class="endstreamChoices">${Object.entries(platformLabels).map(([id,label])=>`<label class="checkLine"><input type="checkbox" name="endPlatform" value="${id}" ${(cfg.platforms||[]).includes(id)?"checked":""}><span>${label}</span></label>`).join("")}</div></fieldset>
+        <fieldset class="endstreamWide"><legend>${L("Streamingtool beenden","Stop streaming tool")}</legend><div class="endstreamChoices"><label class="checkLine"><input type="checkbox" name="endTool" value="obs" ${(cfg.tools||[]).includes("obs")?"checked":""}><span>OBS</span></label><label class="checkLine"><input type="checkbox" name="endTool" value="meld" ${(cfg.tools||[]).includes("meld")?"checked":""}><span>Meld</span></label></div></fieldset>
+        <label><div>${L("Countdown bis Streamende (Sekunden)","Countdown until stream end (seconds)")}</div><input name="delay_seconds" type="number" min="0" max="86400" step="1" value="${esc(cfg.delay_seconds)}"></label>
+      </form>
+      <div class="btnLine"><button id="endstreamStart" type="button" class="danger">${L("Streamende starten","Start stream ending")}</button><button id="endstreamCancel" type="button" class="secondary">${L("Abbrechen","Cancel")}</button><button id="endstreamSave" type="button" class="secondary">${L("Einstellungen speichern","Save settings")}</button></div>
+      <div id="endstreamResult" class="small"></div>
+    </section>`);
+  const form=$("#endstreamForm"),result=$("#endstreamResult"),clock=$("#endstreamClock");
+  let status=initial.status||{state:"idle",ends_at:0};
+  const payload=()=>({message:form.elements.message.value.trim(),platforms:$$('[name="endPlatform"]:checked',form).map(x=>x.value),tools:$$('[name="endTool"]:checked',form).map(x=>x.value),delay_seconds:Math.max(0,Number(form.elements.delay_seconds.value)||0)});
+  const paint=()=>{const active=status.state==="countdown";const left=active?Math.max(0,Math.ceil(Number(status.ends_at||0)-Date.now()/1000)):0;clock.textContent=active?`${String(Math.floor(left/60)).padStart(2,"0")}:${String(left%60).padStart(2,"0")}`:"--:--";clock.classList.toggle("active",active);$("#endstreamStart").disabled=active;$("#endstreamCancel").disabled=!active;if(status.message)result.textContent=status.message;};
+  const save=async()=>{const out=await api("/api/3ndstr3am/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload())});result.textContent=out.ok?L("Einstellungen gespeichert.","Settings saved."):out.error||L("Speichern fehlgeschlagen.","Save failed.");return out;};
+  $("#endstreamSave").onclick=save;
+  $("#endstreamStart").onclick=async()=>{if(!confirm(L("Streamende wirklich starten? Die Chatnachricht wird sofort gesendet.","Really start ending the stream? The chat message is sent immediately.")))return;const out=await api("/api/3ndstr3am/start",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(payload())});if(!out.ok){alert(out.error||L("Start fehlgeschlagen.","Start failed."));return;}status=out.status;paint();};
+  $("#endstreamCancel").onclick=async()=>{const out=await api("/api/3ndstr3am/cancel",{method:"POST",headers:{"Content-Type":"application/json"},body:"{}"});if(out.ok)status=out.status;else alert(out.error||L("Abbrechen fehlgeschlagen.","Cancel failed."));paint();};
+  const poll=async()=>{try{const out=await api("/api/3ndstr3am",{timeoutMs:2000});if(out.ok)status=out.status||status;paint();}catch(_){ }if(document.body.contains(clock))setTimeout(poll,1000);};
+  paint();setTimeout(poll,1000);
+}
 async function renderPlugins(){
   const s=await api("/api/plugins");
   const plugins=s.plugins||[];
@@ -2132,7 +2162,7 @@ async function pollVisibleChatSounds(){
 }
 async function bootPage(){
   try{
-    await (({dashboard:renderDashboard,platforms:renderPlatforms,chat:renderChat,obs_meld:renderObsMeld,spotify:renderSpotify,easyslider:renderEasyslider,overlays:renderOverlays,tutorials:renderTutorials,plugins:renderPlugins,settings:renderSettings,chattim3r:renderChattim3r,commands:()=>renderDedicatedPlugin("commands","commands",L("Eigene Chat-Commands, Antworten und OBS/Meld-Aktionen verwalten.","Manage custom chat commands, replies and OBS/Meld actions.")),modalot:()=>renderDedicatedPlugin("modalot","Modalot",L("Moderation und Regeln zentral verwalten.","Manage moderation and rules centrally.")),info3ditor:()=>renderDedicatedPlugin("info3ditor","Info3ditor",L("Streaminformationen und Vorlagen verwalten.","Manage stream information and presets.")),gam3pick3r:()=>renderDedicatedPlugin("gam3pick3r","gam3pick3r",L("Spielauswahl, Voting und Picker verwalten.","Manage game selection, voting and picker.")),dev:renderDev}[page]||renderDashboard)());
+    await (({dashboard:renderDashboard,platforms:renderPlatforms,chat:renderChat,obs_meld:renderObsMeld,spotify:renderSpotify,easyslider:renderEasyslider,endstream:renderEndstream,overlays:renderOverlays,tutorials:renderTutorials,plugins:renderPlugins,settings:renderSettings,chattim3r:renderChattim3r,commands:()=>renderDedicatedPlugin("commands","commands",L("Eigene Chat-Commands, Antworten und OBS/Meld-Aktionen verwalten.","Manage custom chat commands, replies and OBS/Meld actions.")),modalot:()=>renderDedicatedPlugin("modalot","Modalot",L("Moderation und Regeln zentral verwalten.","Manage moderation and rules centrally.")),info3ditor:()=>renderDedicatedPlugin("info3ditor","Info3ditor",L("Streaminformationen und Vorlagen verwalten.","Manage stream information and presets.")),gam3pick3r:()=>renderDedicatedPlugin("gam3pick3r","gam3pick3r",L("Spielauswahl, Voting und Picker verwalten.","Manage game selection, voting and picker.")),dev:renderDev}[page]||renderDashboard)());
   }catch(e){
     try{
       await api("/api/client-error",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({level:"error",message:String(e&&e.stack||e)})});

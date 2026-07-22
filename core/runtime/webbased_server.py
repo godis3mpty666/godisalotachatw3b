@@ -519,6 +519,7 @@ def default_easyslider_settings() -> dict:
             {"id": "plugins", "label": "Plugins", "path": "/plugins", "enabled": True},
             {"id": "modalot", "label": "Modalot", "path": "/modalot", "enabled": True},
             {"id": "easyslider", "label": "3asyslid3r", "path": "/3asyslid3r", "enabled": True},
+            {"id": "endstream", "label": "3ndstr3am", "path": "/3ndstr3am", "enabled": True},
             {"id": "settings", "label": "Einstellungen", "path": "/einstellungen", "enabled": True},
             {"id": "tutorials", "label": "Tutorials", "path": "/tutorials", "enabled": True},
             {"id": "dev", "label": "DEV", "path": "/dev", "enabled": True},
@@ -1047,7 +1048,7 @@ class WebbasedPluginHost:
         ])
 
     def _mark_outbound_echo(self, sender: str, platform: str, message: str, ttl: float = 45.0) -> None:
-        if str(sender or "").strip().lower() not in {"bridg3alot", "spotis3mptify", "botalot", "gam3pick3r", "chattim3r", "bot"}:
+        if str(sender or "").strip().lower() not in {"bridg3alot", "spotis3mptify", "botalot", "gam3pick3r", "chattim3r", "3ndstr3am", "bot"}:
             return
         key = self._outbound_echo_key(platform, message)
         if not key.strip("|"):
@@ -1369,6 +1370,10 @@ class AppState:
         self.easyslider_pids = set()
         self.easyslider_process = None
         self._easyslider_lock = threading.RLock()
+        self._endstream_lock = threading.RLock()
+        self._endstream_cancel = threading.Event()
+        self._endstream_run_id = 0
+        self._endstream_status = {"state": "idle", "message": "Bereit", "ends_at": 0.0, "results": {}}
         # Errors can be emitted by more than one poller/plugin at once. Keep
         # one instance of an identical error per runtime session in the DEV log.
         self._log_lock = threading.RLock()
@@ -4740,6 +4745,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._page("index.html")
         if path == "/3asyslid3r":
             return self._page("3asyslid3r.html")
+        if path == "/3ndstr3am":
+            return self._page("endstream.html")
         if path in ("/plattformen", "/platforms"):
             return self._page("platforms.html")
         if path == "/chat":
@@ -5049,6 +5056,11 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/chattim3r":
             return self._json({"ok": True, "entries": st.chattim3r_entries()})
+        if path == "/api/3ndstr3am":
+            cfg = st.settings().get("ui", {}).get("3ndstr3am", {})
+            with st._endstream_lock:
+                status = dict(st._endstream_status)
+            return self._json({"ok": True, "settings": cfg if isinstance(cfg, dict) else {}, "status": status})
         if path == "/api/desktop-chat/layout":
             stored = _json_load(st.data / "plugins" / "chat_desktop" / "layout.json", {})
             self._json(normalize_desktop_chat_layout(stored))
@@ -5239,6 +5251,96 @@ class Handler(BaseHTTPRequestHandler):
                         st.log(getattr(plugin, "plugin_id", "plugin"), "language update failed", exc)
             st.log("ui", "Sprache geändert" if language == "de" else "language changed", language)
             return self._json({"ok": True, "language": language})
+
+        if path == "/api/3ndstr3am/settings":
+            allowed_platforms = {"twitch", "tiktok", "youtube", "kick"}
+            allowed_tools = {"obs", "meld"}
+            try:
+                delay_seconds = max(0, min(86400, int(data.get("delay_seconds") or 0)))
+            except (TypeError, ValueError):
+                delay_seconds = 0
+            clean = {
+                "message": str(data.get("message") or "").strip()[:1000],
+                "platforms": [p for p in data.get("platforms", []) if p in allowed_platforms],
+                "tools": [tool for tool in data.get("tools", []) if tool in allowed_tools],
+                "delay_seconds": delay_seconds,
+            }
+            current = st.settings()
+            current.setdefault("ui", {})["3ndstr3am"] = clean
+            st.save_settings(current)
+            return self._json({"ok": True, "settings": clean})
+
+        if path == "/api/3ndstr3am/cancel":
+            with st._endstream_lock:
+                if st._endstream_status.get("state") != "countdown":
+                    return self._json({"ok": False, "error": "Kein aktiver Countdown."}, 409)
+                st._endstream_cancel.set()
+                st._endstream_status = {"state": "cancelled", "message": "Streamende abgebrochen", "ends_at": 0.0, "results": {}}
+            return self._json({"ok": True, "status": dict(st._endstream_status)})
+
+        if path == "/api/3ndstr3am/start":
+            allowed_platforms = {"twitch", "tiktok", "youtube", "kick"}
+            allowed_tools = {"obs", "meld"}
+            message = str(data.get("message") or "").strip()[:1000]
+            platforms = [p for p in data.get("platforms", []) if p in allowed_platforms]
+            tools = [tool for tool in data.get("tools", []) if tool in allowed_tools]
+            try:
+                delay_seconds = max(0, min(86400, int(data.get("delay_seconds") or 0)))
+            except (TypeError, ValueError):
+                delay_seconds = 0
+            if not tools:
+                return self._json({"ok": False, "error": "Bitte OBS und/oder Meld auswählen."}, 400)
+            if platforms and not message:
+                return self._json({"ok": False, "error": "Für ausgewählte Plattformen wird eine Chatnachricht benötigt."}, 400)
+            with st._endstream_lock:
+                if st._endstream_status.get("state") == "countdown":
+                    return self._json({"ok": False, "error": "Es läuft bereits ein Countdown."}, 409)
+                st._endstream_run_id += 1
+                run_id = st._endstream_run_id
+                st._endstream_cancel = threading.Event()
+                cancel_event = st._endstream_cancel
+                ends_at = time.time() + delay_seconds
+                chat_results = {p: st.plugin_manager.host.send_platform_message(p, message, sender="3ndstr3am") for p in platforms}
+                st._endstream_status = {
+                    "state": "countdown", "message": "Countdown läuft", "ends_at": ends_at,
+                    "results": {"chat": chat_results},
+                }
+                current = st.settings()
+                current.setdefault("ui", {})["3ndstr3am"] = {
+                    "message": message, "platforms": platforms, "tools": tools, "delay_seconds": delay_seconds,
+                }
+                st.save_settings(current)
+
+            def finish_stream() -> None:
+                if cancel_event.wait(delay_seconds):
+                    return
+                results = {}
+                for tool in tools:
+                    try:
+                        plugin = st.plugin_instances.get(f"{tool}_control")
+                        if plugin is None:
+                            results[tool] = {"ok": False, "detail": f"{tool.upper()}-Control ist nicht geladen"}
+                        elif tool == "obs":
+                            ok, detail = plugin.request("StopStream", {}, timeout=5.0)
+                            results[tool] = {"ok": bool(ok), "detail": str(detail)}
+                        else:
+                            ok, detail = plugin.send_command("meld.stopStreamingAction", timeout=5.0)
+                            results[tool] = {"ok": bool(ok), "detail": str(detail)}
+                    except Exception as exc:
+                        results[tool] = {"ok": False, "detail": str(exc)}
+                success = bool(results) and all(item.get("ok") for item in results.values())
+                with st._endstream_lock:
+                    if run_id != st._endstream_run_id or cancel_event.is_set():
+                        return
+                    st._endstream_status = {
+                        "state": "completed" if success else "error",
+                        "message": "Stream wurde beendet" if success else "Streamende konnte nicht vollständig ausgeführt werden",
+                        "ends_at": 0.0, "results": {"chat": chat_results, "tools": results},
+                    }
+                st.log("3ndstr3am", "Streamende ausgeführt", json.dumps(results, ensure_ascii=False))
+
+            threading.Thread(target=finish_stream, daemon=True, name=f"3ndstr3am-{run_id}").start()
+            return self._json({"ok": True, "status": dict(st._endstream_status)})
 
         if path == "/api/chattim3r/delete":
             entry_id = str(data.get("id") or "")
