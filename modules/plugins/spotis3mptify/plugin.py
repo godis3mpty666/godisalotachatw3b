@@ -532,12 +532,14 @@ class Spotis3mptifyPlugin(ProviderPlugin):
             {'key': 'queue_then_skip', 'type': 'bool', 'label': 'In Queue + direkt skippen', 'label_en': 'Queue and skip immediately', 'default': False, 'tab': 'Anfragen', 'tab_en': 'Requests'},
             {'key': 'repeat_guard', 'type': 'bool', 'label': 'Repeat Track automatisch ausschalten', 'label_en': 'Disable repeat track automatically', 'default': True, 'tab': 'Anfragen', 'tab_en': 'Requests'},
             {'key': 'srb_enabled', 'type': 'bool', 'label': 'Song Request Battle aktiv', 'label_en': 'Song Request Battle enabled', 'default': True, 'tab': 'SR Battle'},
+            {'key': 'srb_broadcast_enabled', 'type': 'bool', 'label': 'Battle-Nachrichten auf allen Plattformen senden', 'label_en': 'Send battle messages to all platforms', 'default': True, 'tab': 'SR Battle'},
             {'key': 'srb_test_enabled', 'type': 'bool', 'label': 'Testablauf mit !srb @testen erlauben', 'label_en': 'Allow test flow with !srb @testen', 'default': False, 'tab': 'SR Battle'},
             {'key': 'srb_command', 'label': 'Battle-Befehl', 'label_en': 'Battle command', 'default': '!srb', 'tab': 'SR Battle'},
             {'key': 'srb_stop_command', 'label': 'Stop-Befehl', 'label_en': 'Stop command', 'default': '!stop', 'tab': 'SR Battle'},
             {'key': 'srb_points_command', 'label': 'Punkte-Befehl', 'label_en': 'Points command', 'default': '!srpoints', 'tab': 'SR Battle'},
             {'key': 'srb_required_points', 'type': 'number', 'label': 'Benötigte Punkte', 'label_en': 'Required points', 'default': 3, 'min': 0, 'max': 1000, 'tab': 'SR Battle'},
             {'key': 'srb_start_cost', 'type': 'number', 'label': 'Kosten beim Start', 'label_en': 'Start cost', 'default': 2, 'min': 0, 'max': 1000, 'tab': 'SR Battle'},
+            {'key': 'srb_request_points', 'type': 'number', 'label': 'Punkte pro normalem Request', 'label_en': 'Points per normal request', 'default': 1, 'min': 0, 'max': 1000, 'tab': 'SR Battle'},
             {'key': 'srb_win_points', 'type': 'number', 'label': 'Punkte für Gewinner', 'label_en': 'Winner points', 'default': 3, 'min': 0, 'max': 1000, 'tab': 'SR Battle'},
             {'key': 'srb_stop_seconds', 'type': 'number', 'label': 'Zeit bis Stop (Sek.)', 'label_en': 'Stop time (sec.)', 'default': 30, 'min': 5, 'max': 600, 'tab': 'SR Battle'},
             {'key': 'srb_request_seconds', 'type': 'number', 'label': 'Zeit für Request (Sek.)', 'label_en': 'Request time (sec.)', 'default': 60, 'min': 5, 'max': 1800, 'tab': 'SR Battle'},
@@ -581,12 +583,14 @@ class Spotis3mptifyPlugin(ProviderPlugin):
             'queue_then_skip': False,
             'repeat_guard': True,
             'srb_enabled': True,
+            'srb_broadcast_enabled': True,
             'srb_test_enabled': False,
             'srb_command': '!srb',
             'srb_stop_command': '!stop',
             'srb_points_command': '!srpoints',
             'srb_required_points': 3,
             'srb_start_cost': 2,
+            'srb_request_points': 1,
             'srb_win_points': 3,
             'srb_stop_seconds': 30,
             'srb_request_seconds': 60,
@@ -1021,7 +1025,9 @@ class Spotis3mptifyPlugin(ProviderPlugin):
             self._log(f'SR Battle Textvorlage {template_key} ungueltig: {exc}')
             message = default.format_map({k: str(v) for k, v in values.items()})
         if message.strip():
-            self._reply(platform, message.strip())
+            message = message.strip()
+            self._reply(platform, message)
+            self._broadcast_srb_reply(platform, message)
 
     def _handle_srb_points(self, platform: str, username: str) -> None:
         points = self._srb_points(username)
@@ -1182,7 +1188,8 @@ class Spotis3mptifyPlugin(ProviderPlugin):
             if battle:
                 self._srb_finish(platform, winner=username, artist=artist, song=title, timeout=False)
             else:
-                self._srb_add_points(username, 1)
+                request_points = max(0, _as_int(self._settings.get('srb_request_points'), 1))
+                self._srb_add_points(username, request_points)
         except urllib.error.HTTPError as exc:
             self._srb_resume_request(locals().get('battle'))
             body = ''
@@ -1282,6 +1289,24 @@ class Spotis3mptifyPlugin(ProviderPlugin):
                     self._log(f'Queue reply mirrored to {target}: {message}')
             except Exception as exc:
                 self._log(f'Queue reply to {target} failed: {exc}')
+
+    def _broadcast_srb_reply(self, source_platform: str, message: str) -> None:
+        if not _as_bool((self._settings or {}).get('srb_broadcast_enabled'), True):
+            return
+        host = self._host
+        if host is None or not hasattr(host, 'send_platform_message'):
+            return
+        source = _clean_platform(source_platform)
+        allowed = self._allowed_platforms()
+        for target in ('twitch', 'tiktok', 'youtube', 'kick'):
+            if target == source or (allowed and target not in allowed):
+                continue
+            try:
+                ok = bool(host.send_platform_message(target, message, sender=self.plugin_id))
+                if ok:
+                    self._log(f'SR Battle reply mirrored to {target}: {message}')
+            except Exception as exc:
+                self._log(f'SR Battle reply to {target} failed: {exc}')
 
     def on_settings_button(self, key: str, host: PluginHost | None = None, parent: Any = None) -> bool:
         try:

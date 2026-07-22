@@ -34,7 +34,7 @@ def _write_automation_text_file(data_root: Path, raw: dict, text: str) -> Path:
 def _sanitize_automation_rules(value):
     if not isinstance(value, list):
         return []
-    allowed_platforms = {"tiktok", "twitch", "youtube", "kick"}
+    allowed_platforms = {"tiktok", "twitch", "youtube", "kick", "timer"}
     allowed_targets = {"obs", "meld"}
     allowed_actions = {"text", "text_show", "show", "hide", "play", "scene", "filter_on", "filter_off"}
     allowed_startup = {"keep", "placeholder"}
@@ -72,6 +72,16 @@ def _sanitize_automation_rules(value):
             item["hideSeconds"] = max(0.0, min(3600.0, float(str(seconds_raw).replace(",", "."))))
         except Exception:
             item["hideSeconds"] = 4.0
+        if platform == "timer":
+            item["value"] = "interval"
+            try:
+                interval_raw = raw.get("intervalMinutes") if raw.get("intervalMinutes") is not None else raw.get("interval_minutes")
+                if interval_raw is None:
+                    legacy_seconds = raw.get("delaySeconds") if raw.get("delaySeconds") is not None else raw.get("delay_seconds")
+                    interval_raw = float(str(legacy_seconds or 60).replace(",", ".")) / 60.0
+                item["intervalMinutes"] = max(0.1, min(1440.0, float(str(interval_raw or 1).replace(",", "."))))
+            except Exception:
+                item["intervalMinutes"] = 1.0
         if platform == "tiktok" and item["value"] == "like_total":
             item["likeUser"] = str(raw.get("likeUser") or raw.get("like_user") or "").strip().lstrip("@")[:120]
             try:

@@ -43,6 +43,9 @@ class Al3rtalotPlugin(ProviderPlugin):
         self._scene_restore_timers: dict[str, threading.Timer] = {}
         self._startup_automation_attempt = 0
         self._startup_automation_done: set[str] = set()
+        self._timer_rule_state: dict[str, tuple[str, float]] = {}
+        self._timer_rule_stop = threading.Event()
+        self._timer_rule_thread: threading.Thread | None = None
         self._platforms = {
             'twitch': TwitchAlerts(self),
             'tiktok': TikTokAlerts(self),
@@ -168,11 +171,61 @@ class Al3rtalotPlugin(ProviderPlugin):
         host.log(self.plugin_id, f'{PLUGIN_NAME} gestartet. Plattform-Alerts: Twitch/TikTok/YouTube/Kick.')
         if self._enabled:
             self._schedule_startup_automation()
+            self._start_timer_rules()
 
     def stop(self, *args, **kwargs) -> None:
         self._enabled = False
+        self._timer_rule_stop.set()
         if self._host is not None:
             self._host.set_status(self.plugin_id, PluginStatus('stopped', 'Stopped'))
+
+    def _start_timer_rules(self) -> None:
+        self._timer_rule_stop.set()
+        self._timer_rule_stop = threading.Event()
+        self._timer_rule_state = {}
+        stop_event = self._timer_rule_stop
+        thread = threading.Thread(target=self._timer_rule_loop, args=(stop_event,), name='Al3rtalotAutomationTimers', daemon=True)
+        self._timer_rule_thread = thread
+        thread.start()
+
+    def _timer_rule_loop(self, stop_event: threading.Event) -> None:
+        while self._enabled and not stop_event.wait(0.25):
+            try:
+                rules = self._global_settings().get('automation_rules')
+                if not isinstance(rules, list):
+                    continue
+                now = time.monotonic()
+                active_ids: set[str] = set()
+                for rule in rules:
+                    if not isinstance(rule, dict) or str(rule.get('platform') or '').strip().lower() != 'timer':
+                        continue
+                    if str(rule.get('parentTrigger') or rule.get('parent_trigger') or '').strip():
+                        continue
+                    rule_id = str(rule.get('id') or '').strip()
+                    if not rule_id:
+                        continue
+                    active_ids.add(rule_id)
+                    try:
+                        interval_minutes = max(0.1, min(1440.0, float(str(rule.get('intervalMinutes') or rule.get('interval_minutes') or 1).replace(',', '.'))))
+                    except Exception:
+                        interval_minutes = 1.0
+                    interval_seconds = interval_minutes * 60.0
+                    signature = '|'.join(str(rule.get(key) or '') for key in ('intervalMinutes', 'interval_minutes', 'target', 'scene', 'source', 'filter', 'action'))
+                    state = self._timer_rule_state.get(rule_id)
+                    if state is None or state[0] != signature:
+                        self._timer_rule_state[rule_id] = (signature, now + interval_seconds)
+                        continue
+                    if now < state[1]:
+                        continue
+                    self._timer_rule_state[rule_id] = (signature, now + interval_seconds)
+                    self._log(f'Automation-Timer ausgelöst: {rule.get("name") or rule_id}; Intervall {interval_minutes:g} Minuten')
+                    self._run_automation_rule(rule, '', force=True)
+                    for child in rules:
+                        if isinstance(child, dict) and str(child.get('parentTrigger') or child.get('parent_trigger') or '').strip() == rule_id:
+                            self._run_automation_rule(child, '', force=True)
+                self._timer_rule_state = {key: value for key, value in self._timer_rule_state.items() if key in active_ids}
+            except Exception as exc:
+                self._log(f'Automation-Timer fehlgeschlagen: {exc}')
 
     def test_connection(self, settings: dict[str, Any]) -> tuple[bool, str]:
         cfg = self._merged_settings(settings)
@@ -209,7 +262,13 @@ class Al3rtalotPlugin(ProviderPlugin):
             direct_bridge = as_bool(msg.get('direct_bridge'), False)
             if event.get('platform') == 'tiktok' and direct_bridge:
                 self._update_live_values(event)
-                return
+                # Likes and gifts use the direct bridge only to update their
+                # counters immediately; the aggregated event later creates the
+                # visible alert. One-shot events (follow/share/join), however,
+                # must continue through the normal alert path here. Their later
+                # aggregated copy is suppressed by the regular alert dedupe.
+                if event.get('event_type') in {'like', 'gift'}:
+                    return
             if not (event.get('platform') == 'tiktok' and event.get('event_type') in {'like', 'gift'}):
                 self._update_live_values(event)
             if not handler.should_alert(event, settings):
@@ -335,6 +394,8 @@ class Al3rtalotPlugin(ProviderPlugin):
         pending = 0
         for rule in rules:
             if not isinstance(rule, dict):
+                continue
+            if str(rule.get('platform') or '').strip().lower() == 'timer':
                 continue
             if str(rule.get('action') or 'text').strip().lower() != 'text':
                 continue
